@@ -1,0 +1,286 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+
+from .assets import build_asset_index
+from .config import config_summary, ensure_output_dirs, load_config
+from .excel_reader import load_sheet_records
+from .input_builder import build_input_artifacts
+from .interaction_analysis import run_interaction_analysis
+from .io_utils import read_records, write_json, write_jsonl
+from .preprocess import build_benchmark_dataset
+
+
+def _env_or_arg(args: argparse.Namespace, attr: str, env_var: str) -> str | None:
+    return getattr(args, attr, None) or os.environ.get(env_var)
+
+
+def _path(value: str, repo_root: Path) -> Path:
+    candidate = Path(value)
+    return candidate if candidate.is_absolute() else repo_root / candidate
+
+
+def prepare_command(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    ensure_output_dirs(config)
+    raw_records = load_sheet_records(config.research_workbook)
+    asset_index, asset_manifest = build_asset_index(config.raw_video_dir, config.raw_sales_dir)
+    processed_records, _, _, profile = build_benchmark_dataset(
+        raw_records=raw_records,
+        asset_index=asset_index,
+        asset_manifest=asset_manifest,
+        config=config,
+    )
+    write_json(config.asset_manifest, asset_manifest)
+    write_jsonl(config.processed_main, processed_records)
+    write_json(config.data_profile, profile)
+    print(json.dumps({"config": config_summary(config), "record_count": len(processed_records)}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def build_inputs_command(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    ensure_output_dirs(config)
+    print(json.dumps(build_input_artifacts(config), ensure_ascii=False, indent=2))
+    return 0
+
+
+def select_evidence_cohort_command(args: argparse.Namespace) -> int:
+    from .goldbank.cohort import select_goldbank_cohort
+
+    config = load_config(args.config)
+    cohort = select_goldbank_cohort(
+        read_records(config.processed_main),
+        total=args.total,
+        seed=args.seed,
+        require_video_asset=not args.allow_missing_video_asset,
+    )
+    cohort["version"] = "evidence-cohort-v2"
+    cohort["prompt_version"] = "evidence-prompt-v2"
+    cohort["schema_version"] = "evidence-dataset-schema-v2"
+    output = _path(args.output, config.repo_root)
+    write_json(output, cohort)
+    print(json.dumps({"output": str(output), "video_count": len(cohort["video_ids"])}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def build_evidence_dataset_command(args: argparse.Namespace) -> int:
+    from .goldbank.runner import build_gold_bank_dataset
+
+    config = load_config(args.config)
+    ensure_output_dirs(config)
+    default_key = _env_or_arg(args, "api_key", "OPENAI_API_KEY")
+    vision_key = args.vision_api_key or os.environ.get("VISION_API_KEY") or default_key
+    text_key = args.text_api_key or os.environ.get("DEEPSEEK_API_KEY") or default_key
+    if not vision_key or not text_key:
+        raise ValueError("Evidence generation requires vision and text provider API keys")
+    summary = build_gold_bank_dataset(
+        config=config,
+        pilot_config_path=_path(args.cohort_config, config.repo_root),
+        output_dir=_path(args.output_dir, config.repo_root),
+        api_key=default_key or vision_key,
+        model=args.model,
+        base_url=_env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
+        max_workers=args.max_workers,
+        resume=args.resume,
+        vision_api_key=vision_key,
+        vision_model=args.vision_model or os.environ.get("VISION_MODEL") or args.model,
+        vision_base_url=args.vision_base_url or os.environ.get("VISION_BASE_URL"),
+        text_api_key=text_key,
+        text_model=args.text_model or os.environ.get("DEEPSEEK_MODEL") or args.model,
+        text_base_url=args.text_base_url or os.environ.get("DEEPSEEK_BASE_URL"),
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
+
+
+def apply_evidence_reviews_command(args: argparse.Namespace) -> int:
+    from .goldbank.review_io import apply_human_reviews
+
+    evidence_dir = Path(args.evidence_dir)
+    reviewed = apply_human_reviews(
+        read_records(evidence_dir / "video_evidence_dataset.jsonl"),
+        read_records(evidence_dir / "human_review_queue.jsonl"),
+        read_records(Path(args.decisions)),
+    )
+    write_jsonl(Path(args.output), reviewed)
+    print(json.dumps({"output": args.output, "record_count": len(reviewed)}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def compile_vqa_command(args: argparse.Namespace) -> int:
+    from .vqa.compiler import CompilePolicy, compile_vqa_from_gold
+
+    summary = compile_vqa_from_gold(
+        gold_bank_dir=Path(args.evidence_dir),
+        output_dir=Path(args.output_dir),
+        policy=CompilePolicy(
+            max_questions_per_video=args.max_questions_per_video,
+            max_per_task=args.max_per_task,
+            require_all_tasks=not args.allow_missing_tasks,
+        ),
+        bank_filename=args.dataset_file,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
+
+
+def run_vqa_benchmark_command(args: argparse.Namespace) -> int:
+    from .vqa_baseline.runner import run_salesbench_qa_baseline
+
+    config = load_config(args.config)
+    api_key = _env_or_arg(args, "api_key", "OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OpenAI-compatible runner requires --api-key or OPENAI_API_KEY")
+    summary = run_salesbench_qa_baseline(
+        config=config,
+        vqa_path=_path(args.vqa, config.repo_root),
+        output_dir=_path(args.output_dir, config.repo_root),
+        api_key=api_key,
+        model=args.model,
+        base_url=_env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
+        max_samples=args.max_samples,
+        max_workers=args.max_workers,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
+
+
+def evaluate_vqa_benchmark_command(args: argparse.Namespace) -> int:
+    from .vqa_evaluate.runner import evaluate_salesbench_qa_files
+
+    config = load_config(args.config)
+    api_key = _env_or_arg(args, "api_key", "OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("LLM-as-Judge requires --api-key or OPENAI_API_KEY")
+    report = evaluate_salesbench_qa_files(
+        gold_path=_path(args.gold, config.repo_root),
+        answers_path=_path(args.predictions, config.repo_root),
+        output_dir=_path(args.output_dir, config.repo_root),
+        api_key=api_key,
+        judge_model=args.judge_model,
+        base_url=_env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
+        max_workers=args.max_workers,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+def audit_evidence_dataset_command(args: argparse.Namespace) -> int:
+    from .goldbank.audit import audit_gold_bank
+
+    report = audit_gold_bank(read_records(Path(args.dataset)), read_records(Path(args.evidence)))
+    if args.output:
+        write_json(Path(args.output), report)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+def analyze_interactions_command(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    report = run_interaction_analysis(
+        records_path=_path(args.records, config.repo_root) if args.records else config.processed_main,
+        output_dir=_path(args.output_dir, config.repo_root),
+        judge_details_path=_path(args.judge_details, config.repo_root) if args.judge_details else None,
+        bootstrap_samples=args.bootstrap_samples,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="SalesBench Evidence-First multimodal VQA benchmark")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    prepare = sub.add_parser("prepare", help="构建内部数据资产")
+    prepare.add_argument("--config", default=None)
+    prepare.set_defaults(func=prepare_command)
+
+    inputs = sub.add_parser("build-inputs", help="构建 C1-C6 内部上下文资产")
+    inputs.add_argument("--config", default=None)
+    inputs.set_defaults(func=build_inputs_command)
+
+    cohort = sub.add_parser("select-evidence-cohort", help="选择 EvidenceDataset cohort")
+    cohort.add_argument("--config", default=None)
+    cohort.add_argument("--total", type=int, default=128)
+    cohort.add_argument("--seed", type=int, default=42)
+    cohort.add_argument("--output", default="configs/evidence_alpha_128videos.json")
+    cohort.add_argument("--allow-missing-video-asset", action="store_true")
+    cohort.set_defaults(func=select_evidence_cohort_command)
+
+    evidence = sub.add_parser("build-evidence-dataset", help="运行 Evidence-First 生成流程")
+    evidence.add_argument("--config", default=None)
+    evidence.add_argument("--cohort-config", default="configs/evidence_alpha_128videos.json")
+    evidence.add_argument("--output-dir", default="outputs/evidence/v2")
+    evidence.add_argument("--api-key", default=None)
+    evidence.add_argument("--base-url", default=None)
+    evidence.add_argument("--model", default="gpt-4o")
+    evidence.add_argument("--vision-api-key", default=None)
+    evidence.add_argument("--vision-base-url", default=None)
+    evidence.add_argument("--vision-model", default=None)
+    evidence.add_argument("--text-api-key", default=None)
+    evidence.add_argument("--text-base-url", default=None)
+    evidence.add_argument("--text-model", default=None)
+    evidence.add_argument("--max-workers", type=int, default=1)
+    evidence.add_argument("--no-resume", action="store_false", dest="resume")
+    evidence.set_defaults(func=build_evidence_dataset_command, resume=True)
+
+    reviews = sub.add_parser("apply-evidence-reviews", help="应用人工 Evidence 复核")
+    reviews.add_argument("--evidence-dir", required=True)
+    reviews.add_argument("--decisions", required=True)
+    reviews.add_argument("--output", required=True)
+    reviews.set_defaults(func=apply_evidence_reviews_command)
+
+    compile_parser = sub.add_parser("compile-vqa", help="从 EvidenceDataset 编译 BP/CM/SS/AE")
+    compile_parser.add_argument("--evidence-dir", required=True)
+    compile_parser.add_argument("--dataset-file", default="video_evidence_dataset_reviewed.jsonl")
+    compile_parser.add_argument("--output-dir", required=True)
+    compile_parser.add_argument("--max-questions-per-video", type=int, default=8)
+    compile_parser.add_argument("--max-per-task", type=int, default=2)
+    compile_parser.add_argument("--allow-missing-tasks", action="store_true", help="仅限 pilot 调试")
+    compile_parser.set_defaults(func=compile_vqa_command)
+
+    run_parser = sub.add_parser("run-vqa-benchmark", help="OpenAI-compatible 便利 runner，输出 predictions.jsonl")
+    run_parser.add_argument("--config", default=None)
+    run_parser.add_argument("--vqa", required=True)
+    run_parser.add_argument("--output-dir", default="outputs/vqa/v2/run")
+    run_parser.add_argument("--api-key", default=None)
+    run_parser.add_argument("--base-url", default=None)
+    run_parser.add_argument("--model", default="gpt-4o")
+    run_parser.add_argument("--max-samples", type=int, default=None)
+    run_parser.add_argument("--max-workers", type=int, default=2)
+    run_parser.set_defaults(func=run_vqa_benchmark_command)
+
+    evaluate = sub.add_parser("evaluate-vqa-benchmark", help="四任务 LLM-as-Judge 评测")
+    evaluate.add_argument("--config", default=None)
+    evaluate.add_argument("--gold", required=True)
+    evaluate.add_argument("--predictions", required=True)
+    evaluate.add_argument("--output-dir", default="outputs/vqa/v2/evaluation")
+    evaluate.add_argument("--api-key", default=None)
+    evaluate.add_argument("--base-url", default=None)
+    evaluate.add_argument("--judge-model", default="gpt-4o")
+    evaluate.add_argument("--max-workers", type=int, default=4)
+    evaluate.set_defaults(func=evaluate_vqa_benchmark_command)
+
+    audit = sub.add_parser("audit-evidence-dataset", help="审计 EvidenceDataset")
+    audit.add_argument("--dataset", required=True)
+    audit.add_argument("--evidence", required=True)
+    audit.add_argument("--output", default=None)
+    audit.set_defaults(func=audit_evidence_dataset_command)
+
+    interaction = sub.add_parser("analyze-interactions", help="独立私有互动关联与诊断分析")
+    interaction.add_argument("--config", default=None)
+    interaction.add_argument("--records", default=None)
+    interaction.add_argument("--judge-details", default=None)
+    interaction.add_argument("--output-dir", default="outputs/analysis/interactions")
+    interaction.add_argument("--bootstrap-samples", type=int, default=1000)
+    interaction.set_defaults(func=analyze_interactions_command)
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    return int(args.func(args))

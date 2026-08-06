@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, "src")
+
+from salesbench.goldbank.pipeline import GoldBankResult  # noqa: E402
+from salesbench.goldbank.runner import GOLD_BANK_OUTPUT_FILES, run_gold_bank_records  # noqa: E402
+
+
+class FakePipeline:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def run_video(self, bundle, frames_b64=None):
+        self.calls.append(bundle.video_id)
+        return GoldBankResult(
+            video_id=bundle.video_id,
+            evidence_units=[
+                {
+                    "evidence_id": f"{bundle.video_id}_visual_000_abc",
+                    "video_id": bundle.video_id,
+                    "modality": "visual",
+                    "subject": "product",
+                }
+            ],
+            gold_proposals=[{"proposal_id": f"p_{bundle.video_id}", "video_id": bundle.video_id}],
+            gold_reviews=[{"review_id": f"r_{bundle.video_id}", "video_id": bundle.video_id}],
+            video_gold_record={
+                "video_id": bundle.video_id,
+                "schema_version": "evidence-dataset-schema-v2",
+                "evidence_unit_ids": [f"{bundle.video_id}_visual_000_abc"],
+                "grounded_annotations": [],
+                "coverage": {},
+                "quality_summary": {},
+                "observation_scope": {},
+            },
+            human_review_queue=[],
+            agent_traces=[{"stage": "evidence_extraction", "video_id": bundle.video_id}],
+            status="ok",
+        )
+
+
+class GoldBankRunnerTest(unittest.TestCase):
+    def records(self):
+        return [
+            {"video_id": "v2", "douyin_handle": "b"},
+            {"video_id": "v1", "douyin_handle": "a"},
+        ]
+
+    def pilot_config(self):
+        return {
+            "version": "test",
+            "video_ids": ["v2", "v1"],
+            "frame_strategy": "hook_plus_uniform",
+            "frames_per_video": 16,
+            "prompt_version": "evidence-prompt-v2",
+            "schema_version": "evidence-dataset-schema-v2",
+            "min_confidence": 0.7,
+        }
+
+    def test_explicit_video_ids_preserve_requested_cohort(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = run_gold_bank_records(self.records(), self.pilot_config(), Path(tmp), FakePipeline())
+
+        self.assertEqual(summary["video_ids"], ["v2", "v1"])
+
+    def test_runner_writes_all_contract_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            run_gold_bank_records(self.records(), self.pilot_config(), output_dir, FakePipeline())
+
+            visible = {path.name for path in output_dir.iterdir() if path.is_file()}
+
+        self.assertEqual(visible, set(GOLD_BANK_OUTPUT_FILES))
+
+    def test_records_are_deterministically_sorted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            run_gold_bank_records(self.records(), self.pilot_config(), output_dir, FakePipeline())
+            lines = (output_dir / "evidence_units.jsonl").read_text(encoding="utf-8").splitlines()
+
+        self.assertIn('"video_id": "v1"', lines[0])
+        self.assertIn('"video_id": "v2"', lines[1])
+
+    def test_resume_skips_completed_video_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            first = FakePipeline()
+            run_gold_bank_records(self.records(), self.pilot_config(), output_dir, first)
+            second = FakePipeline()
+            run_gold_bank_records(self.records(), self.pilot_config(), output_dir, second)
+
+        self.assertEqual(first.calls, ["v2", "v1"])
+        self.assertEqual(second.calls, [])
+
+    def test_generation_meta_records_prompt_and_schema_versions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            run_gold_bank_records(self.records(), self.pilot_config(), output_dir, FakePipeline())
+            meta = (output_dir / "generation_meta.json").read_text(encoding="utf-8")
+
+        self.assertIn("evidence-prompt-v2", meta)
+        self.assertIn("evidence-dataset-schema-v2", meta)
+
+
+if __name__ == "__main__":
+    unittest.main()

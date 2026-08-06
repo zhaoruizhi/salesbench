@@ -1,0 +1,18 @@
+{
+  "dataset_name": "salesbench_multimodal_vqa_v2",
+  "research_workbook": "videos/研究数据.xlsx",
+  "raw_video_dir": "videos/raw_data/video",
+  "raw_sales_dir": "videos/raw_data/sales",
+  "output_dir": "outputs",
+  "input_dir": "input",
+  "processed_main": "processed/videos_v1.jsonl",
+  "asset_manifest": "manifests/assets_v1.json",
+  "data_profile": "reports/data_profile_v1.json",
+  "input_raw_video": "raw_video/video_index.jsonl",
+  "input_visual_features": "visual_features/visual_features.jsonl",
+  "input_audio_speech_features": "audio_speech/audio_speech_features.jsonl",
+  "input_text_language_features": "text_language/text_language_features.jsonl",
+  "input_publish_context_features": "publish_context/publish_context_features.jsonl",
+  "input_cross_modal_consistency_features": "cross_modal_consistency/cross_modal_consistency_features.jsonl",
+  "input_summary": "input_summary.json"
+}

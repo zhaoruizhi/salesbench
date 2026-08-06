@@ -1,0 +1,16 @@
+{
+  "version": "evidence-pilot-v2",
+  "video_ids": [
+    "7362856271365606683",
+    "7360594186715909416",
+    "7360565413341613348",
+    "7359538830657064192",
+    "7365054535036849420"
+  ],
+  "frame_strategy": "hook_plus_uniform",
+  "frames_per_video": 16,
+  "prompt_version": "evidence-prompt-v2",
+  "schema_version": "evidence-dataset-schema-v2",
+  "min_confidence": 0.70,
+  "seed": 42
+}

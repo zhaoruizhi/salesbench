@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "salesbench"
+version = "0.1.0"
+description = "V1 benchmark scaffold for short-form marketing video analysis"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.optional-dependencies]
+providers = [
+  "openai>=2.0",
+]
+data = [
+  "openpyxl>=3.1",
+]
+
+[project.scripts]
+salesbench = "salesbench.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
