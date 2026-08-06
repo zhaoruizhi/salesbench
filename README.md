@@ -37,6 +37,8 @@ C1-C6 内部资产
 
 核心质量状态是 `DIRECT`、`INFERRED`、`NEEDS_REVIEW`、`REJECTED`。BP/CM 的合格项由直接证据支撑；SS/AE 是受控推理，必须保留证据引用。低置信度、证据冲突和语义歧义进入人工复核，不能自动编译成 VQA。
 
+64 视频小样本全流程、模型配置、逐步产物与验收标准见 [64 视频 Pilot 完整执行方案](docs/Pilot_64_Video_Execution_Guide.md)。
+
 ## 快速开始
 
 项目要求 Python 3.13+。核心流程只使用标准库；调用 OpenAI-compatible 模型时安装 provider 依赖：
