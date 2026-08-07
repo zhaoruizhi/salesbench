@@ -186,8 +186,8 @@ def validate_gold_item(item: GoldItem, evidence: dict[str, EvidenceUnit]) -> lis
 
 def find_duplicate_and_conflicting_items(items: list[GoldItem]) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
-    by_semantics: dict[tuple[str, str, str, str], GoldItem] = {}
-    by_target: dict[tuple[str, str, str], GoldItem] = {}
+    by_semantics: dict[tuple[str, str, str, str, str], GoldItem] = {}
+    by_target: dict[tuple[str, str, str, str], GoldItem] = {}
     for item in items:
         key = semantic_key(item)
         if key in by_semantics:

@@ -204,12 +204,13 @@ def normalize_proposals(video_id: str, proposer: str, raw: list[dict[str, object
     return proposals
 
 
-def semantic_key(item: GoldProposal | GoldItem) -> tuple[str, str, str, str]:
+def semantic_key(item: GoldProposal | GoldItem) -> tuple[str, str, str, str, str]:
     if isinstance(item, GoldProposal):
         value: Any = item.proposed_gold
     else:
         value = item.gold_value
     return (
+        normalize_text(item.video_id),
         item.task_type.value,
         normalize_text(item.task_subtype).upper(),
         stable_digest(item.target),
@@ -217,8 +218,9 @@ def semantic_key(item: GoldProposal | GoldItem) -> tuple[str, str, str, str]:
     )
 
 
-def semantic_target_key(item: GoldProposal | GoldItem) -> tuple[str, str, str]:
+def semantic_target_key(item: GoldProposal | GoldItem) -> tuple[str, str, str, str]:
     return (
+        normalize_text(item.video_id),
         item.task_type.value,
         normalize_text(item.task_subtype).upper(),
         stable_digest(item.target),

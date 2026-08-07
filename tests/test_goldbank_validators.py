@@ -41,10 +41,11 @@ def gold_item(
     value: dict[str, object] | None = None,
     evidence_ids: tuple[str, ...] = ("v1_visual_000_abc",),
     tier: GoldTier = GoldTier.GOLD_A,
+    video_id: str = "v1",
 ) -> GoldItem:
     return GoldItem(
         gold_id=gold_id,
-        video_id="v1",
+        video_id=video_id,
         task_type=task_type,
         task_subtype=subtype,
         target={"subject": "product"},
@@ -127,6 +128,14 @@ class GoldBankValidatorTest(unittest.TestCase):
         issues = find_duplicate_and_conflicting_items([first, second])
 
         self.assertIn("CONFLICTING_VALUE", {issue.code for issue in issues})
+
+    def test_same_target_in_different_videos_is_not_a_conflict(self):
+        first = gold_item(gold_id="g1", video_id="v1", value={"count": 1})
+        second = gold_item(gold_id="g2", video_id="v2", value={"count": 2})
+
+        issues = find_duplicate_and_conflicting_items([first, second])
+
+        self.assertFalse(issues)
 
 
 if __name__ == "__main__":

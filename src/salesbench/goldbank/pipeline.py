@@ -469,7 +469,7 @@ class GoldBankPipeline:
                 validated_items.append(item)
 
         unique_items: list[GoldItem] = []
-        seen_semantics: set[tuple[str, str, str, str]] = set()
+        seen_semantics: set[tuple[str, str, str, str, str]] = set()
         for item in validated_items:
             key = semantic_key(item)
             if key in seen_semantics:
