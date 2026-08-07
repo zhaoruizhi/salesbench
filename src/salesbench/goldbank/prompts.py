@@ -9,7 +9,7 @@ from typing import Any
 from .validators import PRIVATE_KEYS
 
 
-PROMPT_VERSION = "evidence-prompt-v5"
+PROMPT_VERSION = "evidence-prompt-v6"
 
 
 def _strip_private(payload: object) -> object:
@@ -38,9 +38,10 @@ def build_evidence_extractor_prompt(video_id: str, content_context: dict[str, ob
         "ASR units require an exact text_span from the supplied ASR/subtitles. confidence must be a JSON number from 0 to 1, never high/medium/low. "
         "evidence_id is optional and may only be a source locator such as frame_006 or asr_subtitles; local code assigns canonical IDs. "
         "Every unit must include subject, predicate, and value. Omit inferred, ambiguous, or unlocalized claims. "
+        "When the source content is primarily Chinese, write subject, predicate, value, and attributes in Chinese while preserving exact OCR/ASR text_span. "
         "Return JSON matching this shape: "
-        '{"evidence_units":[{"modality":"visual","frame_indices":[0],"text_span":"","subject":"product",'
-        '"predicate":"color","value":"red","confidence":0.9}]}'
+        '{"evidence_units":[{"modality":"visual","frame_indices":[0],"text_span":"","subject":"产品",'
+        '"predicate":"颜色","value":"红色","confidence":0.9}]}'
     )
     user_text = _json({"video_id": video_id, "content_context": content_context})
     return system, [{"type": "text", "text": user_text}]
@@ -69,24 +70,26 @@ def build_proposer_prompt(
     examples = {
         "consumer": (
             '{"proposal_id":"optional","task_type":"AE","task_subtype":"USAGE_CONTEXT",'
-            '"target":{"scenario":"home storage"},"proposed_gold":{"usage_context":"The content presents use in a kitchen and bathroom."},'
+            '"target":{"scenario":"家庭收纳"},"proposed_gold":{"usage_context":"厨房和卫生间收纳",'
+            '"answer":"内容通过展示置物架并在口播中列出厨房和卫生间用途，对应家庭收纳场景。"},'
             '"evidence_ids":["existing_id_1","existing_id_2"],'
             '"reasoning_edges":[["existing_id_1","shows kitchen use","SUPPORTED"],'
-            '["existing_id_2","mentions bathroom use","SUPPORTED"]],"proposal_confidence":0.85}'
+            '["existing_id_2","口播提到卫生间用途","SUPPORTED"]],"proposal_confidence":0.85}'
         ),
         "operator": (
             '{"proposal_id":"optional","task_type":"CM","task_subtype":"CLAIM_EVIDENCE_RELATION",'
-            '"target":{"claim":"the cable is braided"},"proposed_gold":{"relation":"SUPPORTED","answer":"The visual evidence supports the claim."},'
+            '"target":{"claim":"充电线采用编织材质"},"proposed_gold":{"relation":"SUPPORTED","answer":"画面中的编织外层支持该说法。"},'
             '"evidence_ids":["existing_id_1","existing_id_2"],'
             '"reasoning_edges":[["existing_id_1","states the claim","SUPPORTED"],'
-            '["existing_id_2","visually shows braiding","SUPPORTED"]],"proposal_confidence":0.85}'
+            '["existing_id_2","画面显示编织外层","SUPPORTED"]],"proposal_confidence":0.85}'
         ),
         "strategist": (
             '{"proposal_id":"optional","task_type":"SS","task_subtype":"HOOK_MECHANISM",'
-            '"target":{"segment":"opening"},"proposed_gold":{"label":"result-first hook supported by the opening claim and product display"},'
+            '"target":{"segment":"开场"},"proposed_gold":{"label":"结果前置",'
+            '"answer":"开场先给出预期结果，再展示对应产品，以结果前置方式吸引注意。"},'
             '"evidence_ids":["existing_id_1","existing_id_2"],'
             '"reasoning_edges":[["existing_id_1","states a result in the opening","SUPPORTED"],'
-            '["existing_id_2","shows the referenced product","SUPPORTED"]],"proposal_confidence":0.85}'
+            '["existing_id_2","画面展示对应产品","SUPPORTED"]],"proposal_confidence":0.85}'
         ),
     }
     scope = contracts.get(perspective, contracts["consumer"])
@@ -98,11 +101,13 @@ def build_proposer_prompt(
         f"Return zero to three high-quality proposals. A valid proposal for this role looks exactly like this: {example}. "
         "task_type and task_subtype are required and must use the exact uppercase controlled values above. "
         "target and proposed_gold must be non-empty JSON objects, not strings or wrapper objects. "
+        "When the evidence is primarily Chinese, all free-text values in target, proposed_gold, and reasoning_edges must be Chinese; keep JSON keys and controlled enum values unchanged. "
         "For CM, target must contain claim and proposed_gold must contain relation using exactly SUPPORTED, PARTIALLY_SUPPORTED, "
         "CONTRADICTED, NOT_SHOWN, or TEMPORALLY_MISALIGNED; it may also contain answer. "
-        "For SS, target should identify the content segment or mechanism and proposed_gold must contain label or answer describing the strategy with observable support. "
+        "For SS, target should identify the content segment or mechanism and proposed_gold must contain both a concise label and a complete answer sentence describing the strategy with observable support. "
         "For AE, target should identify the need, scenario, or decision barrier and proposed_gold must contain the subtype-specific field "
-        "audience_need, usage_context, decision_state, or answer. Treat AE as a bounded content interpretation, never a claim about actual viewers or conversion. "
+        "audience_need, usage_context, decision_state, or content_motivation, plus a complete answer sentence connecting the interpretation to observable evidence. "
+        "Treat AE as a bounded content interpretation, never a claim about actual viewers or conversion. "
         "Each proposal must cite at least two distinct evidence_ids copied exactly from the input. Each reasoning edge must start with one of those IDs. "
         "proposal_confidence must be a JSON number from 0 to 1, never high/medium/low. "
         "Do not return informal annotation, proposal_type, hook, value, trust, strategy, content_structure, or other wrapper formats. "

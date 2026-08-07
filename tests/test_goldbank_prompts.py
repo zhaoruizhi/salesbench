@@ -21,6 +21,7 @@ class GoldBankPromptTest(unittest.TestCase):
 
         self.assertIn("Evidence Units", text)
         self.assertNotIn("generate questions", text.lower())
+        self.assertIn("primarily Chinese", system)
 
     def test_all_proposers_must_reference_existing_evidence_ids(self):
         system, user = build_proposer_prompt(
@@ -51,6 +52,9 @@ class GoldBankPromptTest(unittest.TestCase):
             self.assertIn('"target"', prompt)
             self.assertIn('"proposed_gold"', prompt)
             self.assertIn("Do not return informal", prompt)
+            self.assertIn("free-text values", prompt)
+        self.assertIn("complete answer sentence", consumer)
+        self.assertIn("complete answer sentence", strategist)
 
     def test_challenger_can_request_human_review_and_cannot_default_pass(self):
         system, user = build_challenger_prompt("v1", [], [])

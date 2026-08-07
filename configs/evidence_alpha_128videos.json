@@ -132,7 +132,7 @@
   ],
   "frame_strategy": "hook_plus_uniform",
   "frames_per_video": 16,
-  "prompt_version": "evidence-prompt-v5",
+  "prompt_version": "evidence-prompt-v6",
   "schema_version": "evidence-dataset-schema-v2",
   "min_confidence": 0.7,
   "seed": 42,

@@ -14,9 +14,9 @@ class UnsupportedQuestionProgramError(ValueError):
 QUESTION_PROGRAMS = {
     ("BP", "COUNT_SPATIAL", "direct_question"): "视频中出现了多少个{subject}？",
     ("BP", "ACTION", "direct_question"): "视频中人物或画面对{subject}做了什么？",
-    ("BP", "ENTITY_ATTRIBUTE", "direct_question"): "视频中{subject}呈现出什么可观察特征？",
-    ("BP", "OCR_FACT", "direct_question"): "视频画面文字显示了关于{subject}的什么信息？",
-    ("BP", "ASR_FACT", "direct_question"): "视频口播提到了关于{subject}的什么信息？",
+    ("BP", "ENTITY_ATTRIBUTE", "direct_question"): "视频中{subject}的{predicate}是什么？",
+    ("BP", "OCR_FACT", "direct_question"): "视频画面文字显示，{subject}的{predicate}是什么？",
+    ("BP", "ASR_FACT", "direct_question"): "视频口播提到，{subject}的{predicate}是什么？",
     ("BP", "STATE_CHANGE", "direct_question"): "视频中{subject}发生了什么可观察的状态变化？",
     ("BP", "TEMPORAL_ORDER", "direct_question"): "视频中与{subject}有关的事件按什么顺序发生？",
     ("CM", "CLAIM_EVIDENCE_RELATION", "relation_choice"): "画面或文本证据与口播/文案中关于{claim}的说法是什么关系？",
@@ -57,8 +57,27 @@ def _format_context(item: GoldItem) -> dict[str, object]:
     context = dict(item.target)
     context.update(item.gold_value)
     context.setdefault("subject", item.target.get("subject") or item.gold_value.get("subject") or "目标对象")
+    context.setdefault("predicate", item.target.get("predicate") or item.gold_value.get("predicate") or "可观察信息")
     context.setdefault("claim", item.target.get("claim") or item.gold_value.get("claim") or "该说法")
     context.setdefault("mechanism", item.target.get("mechanism") or item.gold_value.get("label") or "该机制")
+    label_map = {
+        "product": "产品",
+        "video": "视频",
+        "brand": "品牌",
+        "method": "方法",
+        "platform": "平台",
+        "color": "颜色",
+        "type": "类型",
+        "feature": "特征",
+        "price": "价格",
+        "title": "标题",
+        "name": "名称",
+        "count": "数量",
+        "action": "动作",
+    }
+    for key in ("subject", "predicate"):
+        value = str(context.get(key) or "")
+        context[key] = label_map.get(value.lower(), value)
     return context
 
 
@@ -68,8 +87,8 @@ def derive_answer(item: GoldItem) -> str:
     if item.task_type.value == "BP":
         return _first_value(item.gold_value, ("action", "count", "value", "answer"))
     if item.task_type.value == "SS":
-        return _first_value(item.gold_value, ("label", "strategy", "mechanism", "answer"))
-    return _first_value(item.gold_value, ("audience_need", "usage_context", "decision_state", "answer"))
+        return _first_value(item.gold_value, ("answer", "label", "strategy", "mechanism"))
+    return _first_value(item.gold_value, ("answer", "audience_need", "usage_context", "decision_state", "content_motivation"))
 
 
 def render_question(item: GoldItem, question_format: str) -> RenderedQuestion:

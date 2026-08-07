@@ -81,6 +81,32 @@ class GoldBankQACompilerTest(unittest.TestCase):
 
         self.assertEqual(qa[0]["gold_answer"], "opened")
 
+    def test_bp_fact_question_includes_subject_and_predicate(self):
+        record = gold_record()
+        bp = record["grounded_annotations"][0]
+        bp["task_subtype"] = "OCR_FACT"
+        bp["target"] = {"subject": "product", "predicate": "name"}
+        bp["gold_value"] = {"value": "测试产品"}
+
+        qa, _ = compile_qa_records(load_compilable_gold_from_records([record]), CompilePolicy())
+
+        self.assertIn("产品的名称", qa[0]["question"])
+
+    def test_ss_answer_prefers_complete_answer_over_short_label(self):
+        record = gold_record()
+        ss = record["grounded_annotations"][1]
+        ss["quality_status"] = "INFERRED"
+        ss["review_status"] = "verified"
+        ss["gold_value"] = {
+            "label": "结果前置",
+            "answer": "开场先给出预期结果，再展示对应产品，以结果前置方式吸引注意。",
+        }
+
+        qa, _ = compile_qa_records(load_compilable_gold_from_records([record]), CompilePolicy())
+        ss_qa = next(item for item in qa if item["task_type"] == "SS")
+
+        self.assertEqual(ss_qa["gold_answer"], ss["gold_value"]["answer"])
+
     def test_public_qa_contains_no_private_interaction_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             gold_dir = Path(tmp) / "gold"

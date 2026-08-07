@@ -116,7 +116,7 @@ def compile_qa_records(
                 "question_program_id": compiled.question_program_id,
                 "quality_status": item.quality_status.value,
                 "review_status": item.review_status,
-                "compiler_version": "evidence-qa-compiler-v2",
+                "compiler_version": "evidence-qa-compiler-v3",
             }
             if _contains_private(record):
                 validation.append({"gold_id": item.gold_id, "status": "rejected", "reason": "private_field_leak"})
@@ -182,7 +182,7 @@ def compile_vqa_from_gold(
             [record for record in public_records if record.get("task_type") == task],
         )
     meta = {
-        "compiler_version": "evidence-qa-compiler-v2",
+        "compiler_version": "evidence-qa-compiler-v3",
         "public_tasks": list(policy.task_priority),
         "bank_file": str(bank_path),
         "counts": {
