@@ -378,6 +378,17 @@ class GoldBankPipelineTest(unittest.TestCase):
         self.assertNotIn("likes", prompt_text)
         self.assertNotIn("performance_data", prompt_text)
 
+    def test_adjudicator_receives_only_non_bp_passed_proposals(self):
+        responses = successful_responses_with_two_evidence()
+        vlm = FakeGoldClient(responses[:1])
+        llm = FakeGoldClient(responses[1:])
+
+        GoldBankPipeline(vlm, llm).run_video(bundle())
+
+        adjudicator_payload = llm.calls[-1]["user_text"]
+        self.assertIn('"task_type": "CM"', adjudicator_payload)
+        self.assertNotIn('"task_type": "BP"', adjudicator_payload)
+
 
 if __name__ == "__main__":
     unittest.main()

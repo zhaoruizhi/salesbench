@@ -96,6 +96,26 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 ],
             )
 
+    def test_placeholder_proposal_id_is_replaced_locally(self):
+        proposal = normalize_proposals(
+            "v1",
+            "strategist",
+            [
+                {
+                    "proposal_id": "optional",
+                    "task_type": "SS",
+                    "task_subtype": "HOOK_MECHANISM",
+                    "target": {"segment": "opening"},
+                    "proposed_gold": {"label": "result-first hook"},
+                    "evidence_ids": ["e1", "e2"],
+                    "reasoning_edges": [],
+                    "proposal_confidence": 0.9,
+                }
+            ],
+        )[0]
+
+        self.assertTrue(proposal.proposal_id.startswith("v1_strategist_ss_000_"))
+
 
 if __name__ == "__main__":
     unittest.main()

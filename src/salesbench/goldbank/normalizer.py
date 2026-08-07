@@ -193,7 +193,10 @@ def normalize_proposals(video_id: str, proposer: str, raw: list[dict[str, object
         payload["task_subtype"] = subtype
         payload["video_id"] = video_id
         payload["source_agent"] = proposer
-        payload["proposal_id"] = normalize_text(payload.get("proposal_id")) or (
+        proposal_id = normalize_text(payload.get("proposal_id"))
+        if proposal_id.lower() in {"optional", "optional string", "none", "null", "n/a"}:
+            proposal_id = ""
+        payload["proposal_id"] = proposal_id or (
             f"{video_id}_{payload['source_agent']}_{task_type.value.lower()}_{idx:03d}_"
             f"{stable_digest(payload.get('target', {}))}"
         )

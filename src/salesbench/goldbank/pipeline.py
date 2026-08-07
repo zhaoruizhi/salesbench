@@ -365,6 +365,7 @@ class GoldBankPipeline:
                 proposal
                 for proposal in eligible_proposal_dicts
                 if clean_text(proposal.get("proposal_id")) in passed_proposal_ids
+                and clean_text(proposal.get("task_type")).upper() != GoldTaskType.BP.value
             ],
             [review.to_dict() for review in reviews],
             [unit.to_dict() for unit in evidence_units],
