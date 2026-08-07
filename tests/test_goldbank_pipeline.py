@@ -299,9 +299,7 @@ class GoldBankPipelineTest(unittest.TestCase):
 
         result = GoldBankPipeline(vlm, llm).run_video(bundle())
 
-        cm_item = next(
-            item for item in result.video_gold_record["grounded_annotations"] if item["annotation_id"] == "g_cm"
-        )
+        cm_item = next(item for item in result.video_gold_record["grounded_annotations"] if item["task_type"] == "CM")
         self.assertEqual(cm_item["quality_status"], "DIRECT")
 
     def test_semantic_duplicates_are_removed(self):
@@ -333,8 +331,33 @@ class GoldBankPipelineTest(unittest.TestCase):
         cm_items = [
             item for item in result.video_gold_record["grounded_annotations"] if item["task_type"] == "CM"
         ]
-        self.assertEqual([item["annotation_id"] for item in cm_items], ["g_cm"])
+        self.assertEqual(len(cm_items), 1)
         self.assertTrue(any(item["reason"] == "semantic_duplicate" for item in result.human_review_queue))
+
+    def test_invalid_proposal_is_isolated_instead_of_dropping_agent_batch(self):
+        responses = successful_responses_with_two_evidence()
+        responses[1]["proposals"] = [
+            {
+                "proposal_id": "bad_consumer",
+                "task_type": "CM",
+                "task_subtype": "CONTENT_MOTIVATION",
+                "target": {"claim": "claim"},
+                "proposed_gold": {"answer": "bad task pairing"},
+                "evidence_ids": ["v1_visual_000_abc", "v1_visual_001_def"],
+                "reasoning_edges": [],
+                "proposal_confidence": 0.9,
+            }
+        ]
+        vlm = FakeGoldClient(responses[:1])
+        llm = FakeGoldClient(responses[1:])
+
+        result = GoldBankPipeline(vlm, llm).run_video(bundle())
+
+        self.assertEqual(result.status, "partial")
+        self.assertTrue(any(item["task_type"] == "CM" for item in result.video_gold_record["grounded_annotations"]))
+        self.assertTrue(
+            any("consumer_proposal_parse_error" in item["reason"] for item in result.human_review_queue)
+        )
 
     def test_parse_failure_is_visible_and_not_passed(self):
         vlm = FakeGoldClient(["not json"])

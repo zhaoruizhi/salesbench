@@ -54,7 +54,7 @@ class GoldBankCohortTest(unittest.TestCase):
         config = select_goldbank_cohort(self.records(), total=5, anchor_ids=[], seed=1)
 
         self.assertEqual(config["version"], "evidence-alpha-v2")
-        self.assertEqual(config["prompt_version"], "evidence-prompt-v4")
+        self.assertEqual(config["prompt_version"], "evidence-prompt-v5")
         self.assertEqual(config["schema_version"], "evidence-dataset-schema-v2")
         self.assertEqual(config["frames_per_video"], 16)
         self.assertEqual(len(config["video_ids"]), 5)

@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, "src")
 
-from salesbench.goldbank.normalizer import normalize_evidence_units  # noqa: E402
+from salesbench.goldbank.normalizer import normalize_evidence_units, normalize_proposals  # noqa: E402
 from salesbench.goldbank.schema import EvidenceModality  # noqa: E402
 from salesbench.goldbank.validators import validate_evidence_unit  # noqa: E402
 
@@ -77,6 +77,24 @@ class EvidenceNormalizerTest(unittest.TestCase):
 
         self.assertEqual(unit.modality, EvidenceModality.METADATA)
         self.assertTrue(any(issue.code == "NON_DIRECT_EVIDENCE" for issue in validate_evidence_unit(unit)))
+
+    def test_proposer_cannot_emit_another_perspectives_task_subtype(self):
+        with self.assertRaisesRegex(ValueError, "consumer proposer cannot emit"):
+            normalize_proposals(
+                "v1",
+                "consumer",
+                [
+                    {
+                        "task_type": "CM",
+                        "task_subtype": "CLAIM_EVIDENCE_RELATION",
+                        "target": {"claim": "claim"},
+                        "proposed_gold": {"relation": "SUPPORTED"},
+                        "evidence_ids": ["e1", "e2"],
+                        "reasoning_edges": [],
+                        "proposal_confidence": 0.9,
+                    }
+                ],
+            )
 
 
 if __name__ == "__main__":

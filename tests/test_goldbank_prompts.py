@@ -44,8 +44,10 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn("AUDIENCE_NEED_FIT", consumer)
         self.assertIn("CLAIM_EVIDENCE_RELATION", operator)
         self.assertIn("HOOK_MECHANISM", strategist)
+        self.assertIn('"task_type":"AE"', consumer)
+        self.assertIn('"task_type":"CM"', operator)
+        self.assertIn('"task_type":"SS"', strategist)
         for prompt in (consumer, operator, strategist):
-            self.assertIn('"task_type":"CM|SS|AE"', prompt)
             self.assertIn('"target"', prompt)
             self.assertIn('"proposed_gold"', prompt)
             self.assertIn("Do not return informal", prompt)
@@ -55,12 +57,16 @@ class GoldBankPromptTest(unittest.TestCase):
 
         self.assertIn("HUMAN_REVIEW", system + user)
         self.assertIn("must not default", (system + user).lower())
+        self.assertIn("exactly one review", system)
+        self.assertIn("suggested_revision", system)
 
     def test_adjudicator_returns_items_and_review_queue(self):
         system, user = build_adjudicator_prompt("v1", [], [], [])
 
         self.assertIn("grounded_annotations", system + user)
         self.assertIn("human_review_queue", system + user)
+        self.assertIn("source_proposal_ids", system)
+        self.assertIn("gold_value", system)
 
     def test_prompt_payload_never_contains_performance_data(self):
         _, user_blocks = build_evidence_extractor_prompt(

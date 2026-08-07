@@ -31,6 +31,32 @@ _CONFIDENCE_LABELS = {
     "very_low": 0.25,
     "very low": 0.25,
 }
+_PROPOSER_ALLOWED_SUBTYPES = {
+    "consumer": {
+        (GoldTaskType.AE, "AUDIENCE_NEED_FIT"),
+        (GoldTaskType.AE, "USAGE_CONTEXT"),
+        (GoldTaskType.AE, "DECISION_STATE"),
+        (GoldTaskType.AE, "CONTENT_MOTIVATION"),
+        (GoldTaskType.SS, "VALUE_PROPOSITION"),
+        (GoldTaskType.SS, "OBJECTION_HANDLING"),
+    },
+    "operator": {
+        (GoldTaskType.CM, "CLAIM_EVIDENCE_RELATION"),
+        (GoldTaskType.CM, "CLAIM_PARTIAL_SUPPORT"),
+        (GoldTaskType.CM, "TEXT_VISUAL_CONSISTENCY"),
+        (GoldTaskType.SS, "HOOK_MECHANISM"),
+        (GoldTaskType.SS, "URGENCY_CTA"),
+        (GoldTaskType.SS, "FUNNEL_ROLE"),
+    },
+    "strategist": {
+        (GoldTaskType.SS, "HOOK_MECHANISM"),
+        (GoldTaskType.SS, "VALUE_PROPOSITION"),
+        (GoldTaskType.SS, "TRUST_MECHANISM"),
+        (GoldTaskType.SS, "OBJECTION_HANDLING"),
+        (GoldTaskType.SS, "URGENCY_CTA"),
+        (GoldTaskType.SS, "FUNNEL_ROLE"),
+    },
+}
 
 
 def normalize_text(value: object) -> str:
@@ -151,13 +177,22 @@ def normalize_evidence_units(video_id: str, raw_units: list[dict[str, object]]) 
 
 def normalize_proposals(video_id: str, proposer: str, raw: list[dict[str, object]]) -> list[GoldProposal]:
     proposals: list[GoldProposal] = []
+    proposer = normalize_text(proposer).lower()
     for idx, record in enumerate(raw):
         payload = dict(record)
         task_type = GoldTaskType(normalize_text(payload.get("task_type")).upper())
         subtype = normalize_task_subtype(task_type, payload.get("task_subtype"))
+        if (task_type, subtype) not in _PROPOSER_ALLOWED_SUBTYPES.get(proposer, set()):
+            raise ValueError(f"{proposer} proposer cannot emit {task_type.value}/{subtype}")
+        target = payload.get("target")
+        proposed_gold = payload.get("proposed_gold")
+        if not isinstance(target, dict) or not target:
+            raise ValueError("Proposal target must be a non-empty object")
+        if not isinstance(proposed_gold, dict) or not proposed_gold:
+            raise ValueError("Proposal proposed_gold must be a non-empty object")
         payload["task_subtype"] = subtype
         payload["video_id"] = video_id
-        payload["source_agent"] = normalize_text(payload.get("source_agent") or proposer)
+        payload["source_agent"] = proposer
         payload["proposal_id"] = normalize_text(payload.get("proposal_id")) or (
             f"{video_id}_{payload['source_agent']}_{task_type.value.lower()}_{idx:03d}_"
             f"{stable_digest(payload.get('target', {}))}"

@@ -9,7 +9,7 @@ from ..multiagent.context import public_observation_context
 from ..multiagent.schema import VideoContextBundle
 from ..utils import clean_text
 from ..vlm.api_client import APICallResult, VLMClient
-from .normalizer import normalize_evidence_units, normalize_proposals
+from .normalizer import normalize_evidence_units, normalize_proposals, semantic_key
 from .ontology import eligible_question_formats
 from .parsing import (
     ModelOutputError,
@@ -36,6 +36,7 @@ from .schema import (
     make_gold_id,
     parse_gold_item,
     parse_gold_review,
+    stable_digest,
 )
 from .validators import (
     ValidationIssue,
@@ -262,6 +263,7 @@ class GoldBankPipeline:
         evidence_dict = {unit.evidence_id: unit for unit in evidence_units}
         bp_proposals = build_bp_proposals_from_evidence(video_id, evidence_units)
         all_proposals = list(bp_proposals)
+        used_proposal_ids = {proposal.proposal_id for proposal in bp_proposals}
         human_review_queue: list[dict[str, object]] = []
         status = "ok"
 
@@ -278,7 +280,26 @@ class GoldBankPipeline:
                 continue
             try:
                 proposals_raw, abstentions = parse_proposal_response(call.raw_response)
-                proposals = normalize_proposals(video_id, perspective, proposals_raw)
+                proposals: list[GoldProposal] = []
+                for ordinal, raw_proposal in enumerate(proposals_raw):
+                    try:
+                        proposal = normalize_proposals(video_id, perspective, [raw_proposal])[0]
+                    except (ValueError, IndexError) as exc:
+                        status = "partial"
+                        human_review_queue.append(
+                            _review_queue_item(video_id, f"{perspective}_proposal_parse_error: {exc}", raw_proposal)
+                        )
+                        continue
+                    if proposal.proposal_id in used_proposal_ids:
+                        proposal = replace(
+                            proposal,
+                            proposal_id=(
+                                f"{video_id}_{perspective}_{proposal.task_type.value.lower()}_{ordinal:03d}_"
+                                f"{stable_digest({'target': proposal.target, 'gold': proposal.proposed_gold})}"
+                            ),
+                        )
+                    used_proposal_ids.add(proposal.proposal_id)
+                    proposals.append(proposal)
                 all_proposals.extend(proposals)
                 for abstention in abstentions:
                     human_review_queue.append(
@@ -291,7 +312,7 @@ class GoldBankPipeline:
                         }
                     )
                 traces.append(_trace(stage, perspective, call, {"proposals": proposals_raw, "abstentions": abstentions}))
-            except (ModelOutputError, ValueError) as exc:
+            except ModelOutputError as exc:
                 status = "partial"
                 traces.append(_trace(stage, perspective, call, error=str(exc)))
 
@@ -332,6 +353,11 @@ class GoldBankPipeline:
             if review.proposal_id in eligible_proposal_ids
             and review.verdict == ReviewVerdict.PASS
         }
+        passed_proposals_by_id = {
+            proposal.proposal_id: proposal
+            for proposal in all_proposals
+            if proposal.proposal_id in passed_proposal_ids
+        }
 
         system, user = build_adjudicator_prompt(
             video_id,
@@ -357,11 +383,47 @@ class GoldBankPipeline:
         accepted_items = _bp_items_from_proposals(
             [proposal for proposal in bp_proposals if proposal.proposal_id in passed_proposal_ids]
         )
+        adjudicated_source_ids: set[str] = set()
         for raw_item in gold_raw:
             try:
                 local_payload = dict(raw_item)
                 local_payload.pop("gold_tier", None)
                 local_payload.pop("quality_status", None)
+                source_ids = {
+                    clean_text(value)
+                    for value in local_payload.get("source_proposal_ids", []) or []
+                    if clean_text(value)
+                }
+                annotation_id = clean_text(local_payload.get("annotation_id") or local_payload.get("gold_id"))
+                if not source_ids and annotation_id in passed_proposal_ids:
+                    source_ids = {annotation_id}
+                adjudicated_source_ids.update(source_ids)
+                source_proposals = [passed_proposals_by_id[source_id] for source_id in source_ids if source_id in passed_proposals_by_id]
+                if source_proposals and all(proposal.task_type == GoldTaskType.BP for proposal in source_proposals):
+                    continue
+                if len(source_proposals) == 1:
+                    source = source_proposals[0]
+                    local_payload.update(
+                        {
+                            "video_id": video_id,
+                            "task_type": source.task_type.value,
+                            "task_subtype": source.task_subtype,
+                            "target": dict(source.target),
+                            "gold_value": dict(source.proposed_gold),
+                            "evidence_refs": list(source.evidence_ids),
+                            "reasoning_edges": [list(edge) for edge in source.reasoning_edges],
+                            "eligible_question_formats": list(eligible_question_formats(source.task_type, source.task_subtype)),
+                            "source_proposal_ids": [source.proposal_id],
+                            "confidence": source.proposal_confidence,
+                            "annotation_id": make_gold_id(
+                                video_id,
+                                source.task_type,
+                                source.task_subtype,
+                                source.target,
+                                source.proposed_gold,
+                            ),
+                        }
+                    )
                 task_type = GoldTaskType(clean_text(local_payload.get("task_type")).upper())
                 local_payload["quality_status"] = "DIRECT" if task_type in {GoldTaskType.BP, GoldTaskType.CM} else "INFERRED"
                 local_payload.setdefault("review_status", "verified")
@@ -378,9 +440,19 @@ class GoldBankPipeline:
         for queue_item in adjudicator_queue:
             if isinstance(queue_item, dict):
                 queue_payload = dict(queue_item)
+                adjudicated_source_ids.update(
+                    clean_text(value)
+                    for value in queue_payload.get("source_proposal_ids", []) or []
+                    if clean_text(value)
+                )
                 queue_payload.setdefault("review_item_id", f"hr_{video_id}_adjudicator_{len(human_review_queue):03d}")
                 queue_payload.setdefault("video_id", video_id)
                 human_review_queue.append(queue_payload)
+
+        for proposal_id in sorted(passed_proposal_ids - adjudicated_source_ids):
+            proposal = passed_proposals_by_id[proposal_id]
+            if proposal.task_type != GoldTaskType.BP:
+                human_review_queue.append(_review_queue_item(video_id, "adjudicator_omitted", proposal.to_dict()))
 
         validated_items: list[GoldItem] = []
         for item in accepted_items:
@@ -394,6 +466,17 @@ class GoldBankPipeline:
                 human_review_queue.append(_review_queue_item(video_id, "validation_failed", item.to_dict(), issues))
             else:
                 validated_items.append(item)
+
+        unique_items: list[GoldItem] = []
+        seen_semantics: set[tuple[str, str, str, str]] = set()
+        for item in validated_items:
+            key = semantic_key(item)
+            if key in seen_semantics:
+                human_review_queue.append(_review_queue_item(video_id, "semantic_duplicate", item.to_dict()))
+                continue
+            seen_semantics.add(key)
+            unique_items.append(item)
+        validated_items = unique_items
 
         duplicate_issues = find_duplicate_and_conflicting_items(validated_items)
         if duplicate_issues:

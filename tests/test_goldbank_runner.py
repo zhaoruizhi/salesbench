@@ -57,7 +57,7 @@ class GoldBankRunnerTest(unittest.TestCase):
             "video_ids": ["v2", "v1"],
             "frame_strategy": "hook_plus_uniform",
             "frames_per_video": 16,
-            "prompt_version": "evidence-prompt-v4",
+            "prompt_version": "evidence-prompt-v5",
             "schema_version": "evidence-dataset-schema-v2",
             "min_confidence": 0.7,
         }
@@ -103,7 +103,7 @@ class GoldBankRunnerTest(unittest.TestCase):
             run_gold_bank_records(self.records(), self.pilot_config(), output_dir, FakePipeline())
             meta = (output_dir / "generation_meta.json").read_text(encoding="utf-8")
 
-        self.assertIn("evidence-prompt-v4", meta)
+        self.assertIn("evidence-prompt-v5", meta)
         self.assertIn("evidence-dataset-schema-v2", meta)
 
 
