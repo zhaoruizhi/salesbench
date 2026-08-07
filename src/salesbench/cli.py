@@ -50,6 +50,7 @@ def build_inputs_command(args: argparse.Namespace) -> int:
 
 def select_evidence_cohort_command(args: argparse.Namespace) -> int:
     from .goldbank.cohort import select_goldbank_cohort
+    from .goldbank.prompts import PROMPT_VERSION
 
     config = load_config(args.config)
     cohort = select_goldbank_cohort(
@@ -59,7 +60,7 @@ def select_evidence_cohort_command(args: argparse.Namespace) -> int:
         require_video_asset=not args.allow_missing_video_asset,
     )
     cohort["version"] = "evidence-cohort-v2"
-    cohort["prompt_version"] = "evidence-prompt-v2"
+    cohort["prompt_version"] = PROMPT_VERSION
     cohort["schema_version"] = "evidence-dataset-schema-v2"
     output = _path(args.output, config.repo_root)
     write_json(output, cohort)

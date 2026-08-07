@@ -159,6 +159,26 @@ def successful_responses_with_two_evidence() -> list[dict[str, object]]:
 
 
 class GoldBankPipelineTest(unittest.TestCase):
+    def test_evidence_images_keep_frame_labels_and_order(self):
+        vlm = FakeGoldClient(successful_responses()[:1])
+        llm = FakeGoldClient(successful_responses()[1:])
+        frame_bundle = build_context_bundle(
+            "v1",
+            raw_video={"video_id": "v1", "video_text": "claim"},
+            frames=[
+                {"frame_index": 4, "timestamp_s": 1.5, "path": "/tmp/f4.jpg"},
+                {"frame_index": 9, "timestamp_s": 4.0, "path": "/tmp/f9.jpg"},
+            ],
+        )
+
+        GoldBankPipeline(vlm, llm).run_video(frame_bundle, frames_b64=["AAA", "BBB"])
+
+        content = vlm.calls[0]["user_content"]
+        self.assertEqual(content[0]["text"], "[FRAME frame_index=4 timestamp_s=1.5]")
+        self.assertTrue(content[1]["image_url"]["url"].endswith("AAA"))
+        self.assertEqual(content[2]["text"], "[FRAME frame_index=9 timestamp_s=4.0]")
+        self.assertTrue(content[3]["image_url"]["url"].endswith("BBB"))
+
     def test_pipeline_builds_evidence_before_proposals(self):
         vlm = FakeGoldClient(successful_responses()[:1])
         llm = FakeGoldClient(successful_responses()[1:])

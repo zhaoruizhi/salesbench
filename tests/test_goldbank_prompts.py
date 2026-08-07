@@ -32,6 +32,23 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn("evidence_id", system + user)
         self.assertIn("e1", user)
         self.assertIn("abstentions", system + user)
+        self.assertIn("at least two distinct evidence_ids", system)
+        self.assertIn("proposal_confidence", system)
+        self.assertIn("reasoning_edges", system)
+
+    def test_proposer_contract_has_controlled_tasks_subtypes_and_exact_schema(self):
+        consumer, _ = build_proposer_prompt("consumer", "v1", [])
+        operator, _ = build_proposer_prompt("operator", "v1", [])
+        strategist, _ = build_proposer_prompt("strategist", "v1", [])
+
+        self.assertIn("AUDIENCE_NEED_FIT", consumer)
+        self.assertIn("CLAIM_EVIDENCE_RELATION", operator)
+        self.assertIn("HOOK_MECHANISM", strategist)
+        for prompt in (consumer, operator, strategist):
+            self.assertIn('"task_type":"CM|SS|AE"', prompt)
+            self.assertIn('"target"', prompt)
+            self.assertIn('"proposed_gold"', prompt)
+            self.assertIn("Do not return informal", prompt)
 
     def test_challenger_can_request_human_review_and_cannot_default_pass(self):
         system, user = build_challenger_prompt("v1", [], [])

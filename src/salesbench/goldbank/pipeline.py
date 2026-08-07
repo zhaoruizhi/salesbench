@@ -224,8 +224,19 @@ class GoldBankPipeline:
         content_context = public_observation_context(bundle)
 
         system, user_blocks = build_evidence_extractor_prompt(video_id, content_context)
-        for image_b64 in frames_b64 or []:
-            user_blocks.insert(0, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}})
+        frame_metadata = list(content_context.get("sampled_frames") or [])
+        image_blocks: list[dict[str, object]] = []
+        for position, image_b64 in enumerate(frames_b64 or []):
+            metadata = frame_metadata[position] if position < len(frame_metadata) else {}
+            frame_index = metadata.get("frame_index", position)
+            timestamp_s = metadata.get("timestamp_s")
+            image_blocks.extend(
+                [
+                    {"type": "text", "text": f"[FRAME frame_index={frame_index} timestamp_s={timestamp_s}]"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                ]
+            )
+        user_blocks = [*image_blocks, *user_blocks]
         evidence_call = self.vlm_client.call(system, user_blocks, response_format="json_object")
         if not evidence_call.success:
             traces.append(_trace("evidence_extraction", "objective_evidence_extractor", evidence_call, error=evidence_call.error))

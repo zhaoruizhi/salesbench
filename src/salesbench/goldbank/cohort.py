@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from ..utils import clean_text
+from .prompts import PROMPT_VERSION
 
 
 DEFAULT_ALPHA_ANCHOR_IDS = (
@@ -129,7 +130,7 @@ def select_goldbank_cohort(
         "video_ids": selected,
         "frame_strategy": "hook_plus_uniform",
         "frames_per_video": 16,
-        "prompt_version": "evidence-prompt-v2",
+        "prompt_version": PROMPT_VERSION,
         "schema_version": "evidence-dataset-schema-v2",
         "min_confidence": 0.70,
         "seed": seed,

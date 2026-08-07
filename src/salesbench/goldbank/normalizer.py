@@ -20,6 +20,17 @@ from .schema import (
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
+_FRAME_REFERENCE_RE = re.compile(r"frame[_-]?(\d+)", re.IGNORECASE)
+_CONFIDENCE_LABELS = {
+    "very_high": 0.95,
+    "very high": 0.95,
+    "high": 0.90,
+    "medium": 0.75,
+    "moderate": 0.75,
+    "low": 0.50,
+    "very_low": 0.25,
+    "very low": 0.25,
+}
 
 
 def normalize_text(value: object) -> str:
@@ -33,10 +44,62 @@ def normalize_task_subtype(task_type: GoldTaskType, value: object) -> str:
     return subtype
 
 
+def _normalize_confidence(value: object) -> float:
+    text = normalize_text(value).lower()
+    if text in _CONFIDENCE_LABELS:
+        return _CONFIDENCE_LABELS[text]
+    try:
+        confidence = float(text)
+    except ValueError:
+        return 0.0
+    if 1.0 < confidence <= 100.0:
+        confidence /= 100.0
+    return confidence if 0.0 <= confidence <= 1.0 else 0.0
+
+
+def _normalize_modality(raw: dict[str, object]) -> EvidenceModality:
+    value = normalize_text(raw.get("modality") or EvidenceModality.METADATA.value).lower()
+    try:
+        return EvidenceModality(value)
+    except ValueError:
+        pass
+
+    if value in {"image", "frame", "photo", "video"}:
+        return EvidenceModality.VISUAL
+    if value in {"speech", "audio", "subtitle", "subtitles", "voice"}:
+        return EvidenceModality.ASR
+    if value in {"on_screen_text", "on-screen text", "screen_text"}:
+        return EvidenceModality.OCR
+    if value != "text":
+        return EvidenceModality.METADATA
+
+    source_blob = " ".join(
+        [
+            normalize_text(raw.get("evidence_id")),
+            normalize_text(raw.get("text_span")),
+            " ".join(normalize_text(item) for item in raw.get("source_domains", []) or []),
+        ]
+    ).lower()
+    if any(marker in source_blob for marker in ("asr", "subtitle", "speech", "audio", "口播", "字幕")):
+        return EvidenceModality.ASR
+    if any(marker in source_blob for marker in ("ocr", "on-screen", "screen_text", "画面文字")):
+        return EvidenceModality.OCR
+    return EvidenceModality.METADATA
+
+
+def _frame_indices(raw: dict[str, object], source_locator: str) -> tuple[int, ...]:
+    supplied = raw.get("frame_indices", []) or []
+    if supplied:
+        return tuple(int(value) for value in supplied)
+    match = _FRAME_REFERENCE_RE.search(source_locator)
+    return (int(match.group(1)),) if match else ()
+
+
 def normalize_evidence_units(video_id: str, raw_units: list[dict[str, object]]) -> list[EvidenceUnit]:
     units: list[EvidenceUnit] = []
+    used_ids: set[str] = set()
     for idx, raw in enumerate(raw_units):
-        modality = EvidenceModality(normalize_text(raw.get("modality") or EvidenceModality.METADATA.value))
+        modality = _normalize_modality(raw)
         subject = normalize_text(raw.get("subject"))
         predicate = normalize_text(raw.get("predicate"))
         if not subject or not predicate or raw.get("value") in (None, ""):
@@ -45,7 +108,25 @@ def normalize_evidence_units(video_id: str, raw_units: list[dict[str, object]]) 
         end_s = raw.get("end_s")
         if start_s is not None and end_s is not None and float(start_s) > float(end_s):
             raise ValueError("Evidence start_s cannot exceed end_s")
-        evidence_id = normalize_text(raw.get("evidence_id")) or make_evidence_id(video_id, modality, idx)
+        source_locator = normalize_text(raw.get("evidence_id"))
+        expected_prefix = f"{normalize_text(video_id)}_{modality.value}_"
+        evidence_id = source_locator if source_locator.startswith(expected_prefix) else ""
+        if not evidence_id or evidence_id in used_ids:
+            evidence_id = make_evidence_id(video_id, modality, idx)
+        used_ids.add(evidence_id)
+        attributes = dict(raw.get("attributes") or {})
+        if source_locator and source_locator != evidence_id:
+            attributes.setdefault("source_locator", source_locator)
+        text_span = normalize_text(raw.get("text_span"))
+        if not text_span and modality in {EvidenceModality.ASR, EvidenceModality.OCR}:
+            text_span = normalize_text(raw.get("value"))
+        source_domains = tuple(normalize_text(value) for value in raw.get("source_domains", []) or [])
+        if not source_domains:
+            source_domains = {
+                EvidenceModality.ASR: ("C2_audio_speech",),
+                EvidenceModality.OCR: ("C6_raw_video",),
+                EvidenceModality.VISUAL: ("C6_raw_video",),
+            }.get(modality, ())
         units.append(
             EvidenceUnit(
                 evidence_id=evidence_id,
@@ -53,15 +134,15 @@ def normalize_evidence_units(video_id: str, raw_units: list[dict[str, object]]) 
                 modality=modality,
                 start_s=None if start_s is None else float(start_s),
                 end_s=None if end_s is None else float(end_s),
-                frame_indices=tuple(int(value) for value in raw.get("frame_indices", []) or []),
-                text_span=normalize_text(raw.get("text_span")),
+                frame_indices=_frame_indices(raw, source_locator),
+                text_span=text_span,
                 subject=subject,
                 predicate=predicate,
                 value=raw.get("value"),
-                attributes=dict(raw.get("attributes") or {}),
-                source_domains=tuple(normalize_text(value) for value in raw.get("source_domains", []) or []),
+                attributes=attributes,
+                source_domains=source_domains,
                 extractor=normalize_text(raw.get("extractor") or "objective_evidence_extractor"),
-                confidence=float(raw.get("confidence", 0.0)),
+                confidence=_normalize_confidence(raw.get("confidence", 0.0)),
                 timestamp_status=normalize_text(raw.get("timestamp_status") or "unavailable"),
             )
         )

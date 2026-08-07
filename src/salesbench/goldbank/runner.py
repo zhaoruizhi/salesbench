@@ -19,7 +19,7 @@ from .pipeline import GoldBankPipeline, GoldBankResult
 from .schema import stable_digest
 
 
-PIPELINE_VERSION = "evidence-first-pipeline-v2"
+PIPELINE_VERSION = "evidence-first-pipeline-v3"
 
 
 GOLD_BANK_OUTPUT_FILES = (
