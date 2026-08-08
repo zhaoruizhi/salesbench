@@ -89,6 +89,8 @@ def _load_completed(
             payload = json.loads(path.read_text(encoding="utf-8"))
             if clean_text(payload.get("pipeline_fingerprint")) != fingerprints.get(video_id):
                 continue
+            if clean_text(payload.get("status")) != "ok":
+                continue
             completed[video_id] = _payload_to_result(payload)
         except (json.JSONDecodeError, OSError, ValueError):
             continue

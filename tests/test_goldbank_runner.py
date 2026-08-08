@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -96,6 +97,20 @@ class GoldBankRunnerTest(unittest.TestCase):
 
         self.assertEqual(first.calls, ["v2", "v1"])
         self.assertEqual(second.calls, [])
+
+    def test_resume_retries_non_ok_video_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            run_gold_bank_records(self.records(), self.pilot_config(), output_dir, FakePipeline())
+            part_path = output_dir / ".parts" / "v2" / "result.json"
+            payload = json.loads(part_path.read_text(encoding="utf-8"))
+            payload["status"] = "partial"
+            part_path.write_text(json.dumps(payload), encoding="utf-8")
+            retry = FakePipeline()
+
+            run_gold_bank_records(self.records(), self.pilot_config(), output_dir, retry)
+
+        self.assertEqual(retry.calls, ["v2"])
 
     def test_generation_meta_records_prompt_and_schema_versions(self):
         with tempfile.TemporaryDirectory() as tmp:
