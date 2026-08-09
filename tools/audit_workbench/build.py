@@ -25,6 +25,8 @@ from salesbench.goldbank.prompts import (
 from salesbench.goldbank.validators import PRIVATE_KEYS
 from salesbench.vqa_evaluate.prompts import JUDGE_SYSTEM_PROMPT, build_judge_user_prompt
 
+from .evidence_assets import enrich_evidence_refs, load_frame_manifests
+
 
 RISK_LABELS = {
     "AE_SCHEMA_MISMATCH": "AE 字段结构越界",
@@ -318,6 +320,10 @@ def build_workbench_data(
     evidence_by_id = {str(row.get("evidence_id")): row for row in units}
     video_records = _read_jsonl(evidence_dir / "video_evidence_dataset.jsonl")
     annotations = [item for row in video_records for item in row.get("grounded_annotations") or []]
+    annotation_by_id = {str(item.get("annotation_id")): item for item in annotations}
+    video_ids = {str(row.get("video_id")) for row in video_records if row.get("video_id")}
+    frame_cache_root = (repo_root / manifest.get("frame_cache_root", "outputs/cache/frames")).resolve()
+    frame_manifests = load_frame_manifests(frame_cache_root, video_ids, repo_root=repo_root)
     proposals = _read_jsonl(evidence_dir / "gold_proposals.jsonl")
     proposal_index = {
         (str(row.get("video_id")), str(row.get("proposal_id"))): row for row in proposals
@@ -329,6 +335,13 @@ def build_workbench_data(
             proposal_index.get((str(row.get("video_id")), proposal_id), {}) for proposal_id in proposal_ids
         ]
         linked = [item for item in linked if item]
+        linked_evidence_ids = list(
+            dict.fromkeys(
+                str(evidence_id)
+                for proposal in linked
+                for evidence_id in proposal.get("evidence_ids") or []
+            )
+        )
         queue_rows.append(
             {
                 "id": str(row.get("review_item_id") or ""),
@@ -346,14 +359,26 @@ def build_workbench_data(
                     }
                     for item in linked
                 ],
+                "evidence_items": enrich_evidence_refs(
+                    str(row.get("video_id") or ""),
+                    linked_evidence_ids,
+                    evidence_by_id,
+                    frame_manifests,
+                ),
             }
         )
     audit = _read_json(evidence_dir / "audit_before_review.json", {})
     evidence_meta = _read_json(evidence_dir / "generation_meta.json", {})
     qa_rows = _read_jsonl(qa_dir / "vqa_gold_private.jsonl")
-    annotation_risk_index = {
-        row["id"]: row["risk_codes"] for row in detect_annotation_risks(annotations, evidence_by_id)
-    }
+    annotation_risks = detect_annotation_risks(annotations, evidence_by_id)
+    for risk in annotation_risks:
+        risk["evidence_items"] = enrich_evidence_refs(
+            str(risk.get("video_id") or ""),
+            [str(item) for item in risk.get("evidence_refs") or []],
+            evidence_by_id,
+            frame_manifests,
+        )
+    annotation_risk_index = {row["id"]: row["risk_codes"] for row in annotation_risks}
     question_counts = Counter(str(row.get("question") or "") for row in qa_rows)
     compact_qa: list[dict[str, Any]] = []
     for row in qa_rows:
@@ -374,13 +399,28 @@ def build_workbench_data(
                 "source_annotation_ids": row.get("source_annotation_ids") or [],
                 "risk_codes": sorted(risk_codes),
                 "risk_labels": [RISK_LABELS[code] for code in sorted(risk_codes)],
+                "source_annotations": [
+                    annotation_by_id[str(source_id)]
+                    for source_id in row.get("source_annotation_ids") or []
+                    if str(source_id) in annotation_by_id
+                ],
+                "evidence_items": enrich_evidence_refs(
+                    str(row.get("video_id") or ""),
+                    [str(item) for item in row.get("evidence_refs") or []],
+                    evidence_by_id,
+                    frame_manifests,
+                ),
             }
         )
     judge_report_files = sorted(evaluation_dir.glob("*_salesbench_qa_eval.json"))
     judge_detail_files = sorted(evaluation_dir.glob("*_judge_details.jsonl"))
     judge_report = _read_json(judge_report_files[0], {}) if judge_report_files else {}
-    compact_judge = [
-        {
+    qa_by_id = {str(row.get("vqa_id")): row for row in compact_qa}
+    compact_judge = []
+    for row in (_read_jsonl(judge_detail_files[0]) if judge_detail_files else []):
+        qa_item = qa_by_id.get(str(row.get("vqa_id")), {})
+        compact_judge.append(
+            {
             "vqa_id": row.get("vqa_id"),
             "video_id": row.get("video_id"),
             "task_type": row.get("task_type"),
@@ -391,9 +431,9 @@ def build_workbench_data(
             "reason": row.get("reason"),
             "evidence_alignment": row.get("evidence_alignment"),
             "judge_success": row.get("judge_success"),
-        }
-        for row in (_read_jsonl(judge_detail_files[0]) if judge_detail_files else [])
-    ]
+            "evidence_items": deepcopy(qa_item.get("evidence_items") or []),
+            }
+        )
     return _strip_private(
         {
             "release": {
@@ -417,7 +457,7 @@ def build_workbench_data(
             "quality_counts": audit.get("item_count_by_quality") or {},
             "evidence": {
                 "queue": queue_rows,
-                "risks": detect_annotation_risks(annotations, evidence_by_id),
+                "risks": annotation_risks,
                 "missing_task_videos": audit.get("videos_missing_required_tasks") or [],
                 "audit": audit,
             },

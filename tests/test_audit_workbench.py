@@ -9,12 +9,14 @@ sys.path.insert(0, "src")
 sys.path.insert(1, ".")
 
 from tools.audit_workbench.build import (
+    build_workbench_data,
     collect_prompt_snapshot,
     compact_workbench_data,
     detect_annotation_risks,
     organize_delivery,
     render_workbench,
 )
+from tools.audit_workbench.evidence_assets import enrich_evidence_refs, load_frame_manifests
 
 
 def test_module_cli_resolves_src_package_despite_salesbench_script_shadowing() -> None:
@@ -209,3 +211,233 @@ def test_compact_preview_prioritizes_structural_risks_over_systemic_missing_time
     compact = compact_workbench_data(data, limit=1)
 
     assert compact["evidence"]["risks"][0]["id"] == "schema"
+
+
+def test_evidence_content_links_visual_unit_to_exact_cached_frame(tmp_path: Path) -> None:
+    _write(tmp_path / "frames/v1/frame_000.jpg", "zero")
+    _write(tmp_path / "frames/v1/frame_001.jpg", "one")
+    _write(
+        tmp_path / "frames/v1/manifest.json",
+        json.dumps(
+            {
+                "video_id": "v1",
+                "frames": [
+                    {"frame_index": 0, "timestamp_s": 0.5, "path": "frames/v1/frame_000.jpg"},
+                    {"frame_index": 1, "timestamp_s": 1.5, "path": "frames/v1/frame_001.jpg"},
+                ],
+            }
+        ),
+    )
+    evidence = {
+        "e_visual": {
+            "evidence_id": "e_visual",
+            "video_id": "v1",
+            "modality": "visual",
+            "frame_indices": [1],
+            "subject": "产品",
+            "predicate": "颜色",
+            "value": "红色",
+            "text_span": "",
+            "confidence": 0.9,
+        }
+    }
+
+    manifests = load_frame_manifests(tmp_path / "frames", {"v1"}, repo_root=tmp_path)
+    items = enrich_evidence_refs("v1", ["e_visual"], evidence, manifests)
+
+    assert items[0]["semantic_text"] == "产品｜颜色｜红色"
+    assert items[0]["frames"] == [
+        {
+            "frame_index": 1,
+            "timestamp_s": 1.5,
+            "source_path": str(tmp_path / "frames/v1/frame_001.jpg"),
+            "relation": "direct",
+        }
+    ]
+
+
+def test_representative_frames_make_unlocalized_asr_auditable(tmp_path: Path) -> None:
+    frames = []
+    for index, timestamp in enumerate((0.5, 1.5, 2.5, 3.5, 4.5)):
+        _write(tmp_path / f"frames/v1/frame_{index:03d}.jpg", str(index))
+        frames.append(
+            {
+                "frame_index": index,
+                "timestamp_s": timestamp,
+                "path": f"frames/v1/frame_{index:03d}.jpg",
+            }
+        )
+    _write(tmp_path / "frames/v1/manifest.json", json.dumps({"video_id": "v1", "frames": frames}))
+    evidence = {
+        "e_asr": {
+            "evidence_id": "e_asr",
+            "video_id": "v1",
+            "modality": "asr",
+            "frame_indices": [],
+            "text_span": "现在下单",
+            "subject": "主播",
+            "predicate": "行动提示",
+            "value": "下单",
+            "start_s": None,
+            "end_s": None,
+            "confidence": 0.9,
+        }
+    }
+
+    manifests = load_frame_manifests(tmp_path / "frames", {"v1"}, repo_root=tmp_path)
+    items = enrich_evidence_refs("v1", ["e_asr"], evidence, manifests)
+
+    assert [frame["frame_index"] for frame in items[0]["frames"]] == [0, 2, 4]
+    assert {frame["relation"] for frame in items[0]["frames"]} == {"representative"}
+    assert items[0]["localization_note"] == "ASR 缺少时间戳，以下为视频代表帧，不能精确定位到该语音片段。"
+    assert items[0]["text_span"] == "现在下单"
+
+
+def test_missing_evidence_ref_is_visible_instead_of_silently_dropped() -> None:
+    items = enrich_evidence_refs("v1", ["missing"], {}, {})
+
+    assert items == [
+        {
+            "evidence_id": "missing",
+            "missing": True,
+            "semantic_text": "EvidenceUnit 不存在",
+            "localization_note": "无法解析该 evidence_ref。",
+            "frames": [],
+        }
+    ]
+
+
+def test_queue_without_evidence_refs_still_shows_representative_context() -> None:
+    manifests = {
+        "v1": {
+            0: {"frame_index": 0, "timestamp_s": 0.5, "source_path": "/frames/0.jpg"},
+            4: {"frame_index": 4, "timestamp_s": 4.5, "source_path": "/frames/4.jpg"},
+        }
+    }
+
+    items = enrich_evidence_refs("v1", [], {}, manifests)
+
+    assert items[0]["modality"] == "context"
+    assert items[0]["localization_note"] == "该审计项没有直接 Evidence 引用，以下为视频代表帧。"
+    assert [frame["frame_index"] for frame in items[0]["frames"]] == [0, 4]
+
+
+def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    qa_dir = tmp_path / "qa"
+    evaluation_dir = tmp_path / "evaluation"
+    _write(tmp_path / "frames/v1/frame_001.jpg", "frame")
+    _write(
+        tmp_path / "frames/v1/manifest.json",
+        json.dumps(
+            {
+                "video_id": "v1",
+                "frames": [{"frame_index": 1, "timestamp_s": 1.5, "path": "frames/v1/frame_001.jpg"}],
+            }
+        ),
+    )
+    unit = {
+        "evidence_id": "e1",
+        "video_id": "v1",
+        "modality": "ocr",
+        "frame_indices": [1],
+        "text_span": "国家专利",
+        "subject": "产品",
+        "predicate": "认证",
+        "value": "国家专利",
+        "confidence": 0.9,
+    }
+    annotation = {
+        "annotation_id": "a1",
+        "video_id": "v1",
+        "task_type": "BP",
+        "task_subtype": "OCR_FACT",
+        "target": {"subject": "产品", "predicate": "认证"},
+        "gold_value": {"value": "国家专利"},
+        "evidence_refs": ["e1"],
+        "source_proposal_ids": ["p1"],
+    }
+    proposal = {
+        "proposal_id": "p1",
+        "video_id": "v1",
+        "task_type": "BP",
+        "task_subtype": "OCR_FACT",
+        "target": annotation["target"],
+        "proposed_gold": annotation["gold_value"],
+        "evidence_ids": ["e1"],
+        "proposal_confidence": 0.9,
+    }
+    _write(evidence_dir / "evidence_units.jsonl", json.dumps(unit, ensure_ascii=False) + "\n")
+    _write(
+        evidence_dir / "video_evidence_dataset.jsonl",
+        json.dumps({"video_id": "v1", "grounded_annotations": [annotation]}, ensure_ascii=False) + "\n",
+    )
+    _write(evidence_dir / "gold_proposals.jsonl", json.dumps(proposal, ensure_ascii=False) + "\n")
+    _write(
+        evidence_dir / "human_review_queue.jsonl",
+        json.dumps(
+            {"review_item_id": "r1", "video_id": "v1", "source_proposal_ids": ["p1"], "reason": "复核"},
+            ensure_ascii=False,
+        )
+        + "\n",
+    )
+    _write(
+        evidence_dir / "audit_before_review.json",
+        json.dumps({"video_count": 1, "videos_missing_required_tasks": []}),
+    )
+    _write(evidence_dir / "generation_meta.json", json.dumps({"prompt_version": "evidence-prompt-v6"}))
+    qa = {
+        "vqa_id": "q1",
+        "video_id": "v1",
+        "task_type": "BP",
+        "task_subtype": "OCR_FACT",
+        "question": "画面展示了什么认证？",
+        "gold_answer": "国家专利",
+        "evidence_refs": ["e1"],
+        "source_annotation_ids": ["a1"],
+    }
+    _write(qa_dir / "vqa_gold_private.jsonl", json.dumps(qa, ensure_ascii=False) + "\n")
+    _write(qa_dir / "generation_meta.json", json.dumps({"compiler_version": "test"}))
+    _write(
+        evaluation_dir / "predictions_judge_details.jsonl",
+        json.dumps(
+            {
+                "vqa_id": "q1",
+                "video_id": "v1",
+                "task_type": "BP",
+                "question": qa["question"],
+                "reference_answer": "国家专利",
+                "model_output": "国家专利",
+                "score": 1,
+                "reason": "正确",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+    )
+    _write(
+        evaluation_dir / "predictions_salesbench_qa_eval.json",
+        json.dumps({"summary": {}, "metrics": {}, "judge_model": "judge"}),
+    )
+    manifest = {
+        "tested_model": "model",
+        "frame_cache_root": "frames",
+        "formal": {
+            "artifacts": {
+                "evidence": {"source": "evidence"},
+                "qa": {"source": "qa"},
+                "evaluation": {"source": "evaluation"},
+            }
+        },
+    }
+
+    data = build_workbench_data(
+        manifest,
+        tmp_path,
+        {"formal_root": "/formal", "smoke_root": "/smoke"},
+    )
+
+    assert data["evidence"]["queue"][0]["evidence_items"][0]["text_span"] == "国家专利"
+    assert data["qa"][0]["evidence_items"][0]["semantic_text"] == "产品｜认证｜国家专利"
+    assert data["qa"][0]["evidence_items"][0]["frames"][0]["frame_index"] == 1
+    assert data["judge"]["rows"][0]["evidence_items"] == data["qa"][0]["evidence_items"]
