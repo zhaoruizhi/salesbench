@@ -525,3 +525,55 @@ def test_rendered_evidence_uses_lazy_images_and_readable_content() -> None:
     assert "国家专利" in html
     assert "frame_001.jpg" in html
     assert "openLightbox" in html
+
+
+def test_qa_and_judge_cards_render_semantic_evidence_not_only_ids() -> None:
+    prompts = collect_prompt_snapshot()
+    evidence_item = {
+        "evidence_id": "e1",
+        "modality": "asr",
+        "semantic_text": "主播｜行动提示｜立即下单",
+        "text_span": "现在下单",
+        "localization_note": "ASR 缺少时间戳",
+        "frames": [],
+    }
+    data = {
+        "release": {"status": "pilot", "prompt_version": "v6"},
+        "counts": {"videos": 1, "evidence_units": 1, "annotations": 1, "review_queue": 0, "qa": 1},
+        "delivery": {},
+        "evidence": {"queue": [], "risks": [], "missing_task_videos": []},
+        "qa": [
+            {
+                "vqa_id": "q1",
+                "video_id": "v1",
+                "task_type": "BP",
+                "task_subtype": "ASR_FACT",
+                "question": "口播给出了什么提示？",
+                "gold_answer": "立即下单",
+                "source_annotations": [{"annotation_id": "a1", "target": {"subject": "主播"}}],
+                "evidence_items": [evidence_item],
+            }
+        ],
+        "judge": {
+            "summary": {},
+            "metrics": {},
+            "rows": [
+                {
+                    "vqa_id": "q1",
+                    "video_id": "v1",
+                    "task_type": "BP",
+                    "question": "口播给出了什么提示？",
+                    "reference_answer": "立即下单",
+                    "model_output": "立即下单",
+                    "score": 1,
+                    "reason": "回答正确",
+                    "evidence_items": [evidence_item],
+                }
+            ],
+        },
+    }
+
+    html = render_workbench(data, prompts, fragment=True)
+
+    assert html.count("renderEvidenceItems(x.evidence_items)") >= 3
+    assert "来源 Annotation" in html
