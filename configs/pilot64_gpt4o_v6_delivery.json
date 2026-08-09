@@ -1,0 +1,45 @@
+{
+  "version": "pilot64-gpt4o-v6",
+  "tested_model": "gpt-4o",
+  "formal": {
+    "root": "outputs/formal/pilot64_gpt4o_v6",
+    "artifacts": {
+      "evidence": {
+        "source": "outputs/evidence/v6_pilot64_gpt4o_yunwu"
+      },
+      "qa": {
+        "source": "outputs/vqa/v6_pilot64_gpt4o_yunwu",
+        "exclude": [
+          "run_*",
+          "evaluation_*"
+        ]
+      },
+      "model_run": {
+        "source": "outputs/vqa/v6_pilot64_gpt4o_yunwu/run_gpt4o"
+      },
+      "evaluation": {
+        "source": "outputs/vqa/v6_pilot64_gpt4o_yunwu/evaluation_gpt4o"
+      },
+      "private_analysis": {
+        "source": "outputs/analysis/interactions_v6_pilot64_gpt4o"
+      }
+    }
+  },
+  "smoke": {
+    "root": "outputs/smoke/gpt4o_v6",
+    "artifacts": {
+      "evidence": {
+        "source": "outputs/evidence/v6_smoke5_gpt4o_yunwu"
+      },
+      "qa": {
+        "source": "outputs/vqa/v6_smoke5_gpt4o_yunwu"
+      },
+      "model_run": {
+        "source": "outputs/vqa/v6_pilot64_gpt4o_yunwu/run_smoke_gpt4o"
+      },
+      "evaluation": {
+        "source": "outputs/vqa/v6_pilot64_gpt4o_yunwu/evaluation_smoke_gpt4o"
+      }
+    }
+  }
+}
