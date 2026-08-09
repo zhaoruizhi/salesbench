@@ -191,8 +191,11 @@ def test_render_workbench_has_interaction_contract_without_private_fields() -> N
     assert "localStorage" in html
     assert "exportDecisions" in html
     assert "evidence-prompt-v6" in html
+    assert "evidence-prompt-v7" in html
+    assert "v6 运行快照" in html
+    assert "v7 当前代码" in html
     assert "Gold Challenger" in html
-    assert "E-commerce Content Analyst" in html
+    assert "资深多模态评测员" in html
     assert "自动风险概览" in html
     assert "\"likes\"" not in html
     assert "\"followers\"" not in html
@@ -445,6 +448,8 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     assert data["qa"][0]["evidence_items"][0]["semantic_text"] == "产品｜认证｜国家专利"
     assert data["qa"][0]["evidence_items"][0]["frames"][0]["frame_index"] == 1
     assert data["judge"]["rows"][0]["evidence_items"] == data["qa"][0]["evidence_items"]
+    assert data["release"]["runtime_prompt_version"] == "evidence-prompt-v6"
+    assert data["release"]["current_prompt_version"] == "evidence-prompt-v7"
 
 
 def test_thumbnail_materialization_deduplicates_and_uses_relative_paths(tmp_path: Path) -> None:
