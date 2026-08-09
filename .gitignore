@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .mypy_cache/
+.worktrees/
 temp_docx/
 temp_format/
 input/
