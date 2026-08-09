@@ -1,6 +1,7 @@
 {
   "version": "pilot64-gpt4o-v6",
   "tested_model": "gpt-4o",
+  "frame_cache_root": "outputs/cache/frames",
   "formal": {
     "root": "outputs/formal/pilot64_gpt4o_v6",
     "artifacts": {

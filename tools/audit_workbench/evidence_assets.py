@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 def _resolve_frame_path(raw_path: object, repo_root: Path, manifest_dir: Path) -> Path:
@@ -146,3 +149,88 @@ def enrich_evidence_refs(
             }
         )
     return items
+
+
+def _safe_segment(value: object) -> str:
+    cleaned = "".join(character for character in str(value or "") if character.isalnum() or character in {"-", "_"})
+    return cleaned or "unknown"
+
+
+def _default_thumbnail_converter(source: Path, destination: Path) -> None:
+    try:
+        subprocess.run(
+            [
+                "sips",
+                "-Z",
+                "360",
+                "-s",
+                "format",
+                "jpeg",
+                "-s",
+                "formatOptions",
+                "60",
+                str(source),
+                "--out",
+                str(destination),
+            ],
+            check=True,
+            capture_output=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        shutil.copy2(source, destination)
+
+
+def _collect_frame_records(payload: Any, inherited_video_id: str = "") -> list[tuple[str, dict[str, Any]]]:
+    records: list[tuple[str, dict[str, Any]]] = []
+    if isinstance(payload, dict):
+        video_id = str(payload.get("video_id") or inherited_video_id)
+        frames = payload.get("frames")
+        if isinstance(frames, list):
+            records.extend((video_id, frame) for frame in frames if isinstance(frame, dict))
+        for key, value in payload.items():
+            if key != "frames":
+                records.extend(_collect_frame_records(value, video_id))
+    elif isinstance(payload, list):
+        for value in payload:
+            records.extend(_collect_frame_records(value, inherited_video_id))
+    return records
+
+
+def materialize_thumbnails(
+    data: dict[str, Any],
+    *,
+    asset_root: Path,
+    html_parent: Path,
+    converter: Callable[[Path, Path], None] | None = None,
+) -> dict[str, int]:
+    convert = converter or _default_thumbnail_converter
+    grouped: dict[tuple[str, int, str], list[dict[str, Any]]] = {}
+    for inherited_video_id, frame in _collect_frame_records(data):
+        source_path = str(frame.get("source_path") or "")
+        index = int(frame.get("frame_index") or 0)
+        video_id = _safe_segment(inherited_video_id)
+        key = (video_id, index, source_path)
+        grouped.setdefault(key, []).append(frame)
+
+    stats = {"unique_frames": len(grouped), "created": 0, "reused": 0, "missing": 0}
+    for (video_id, index, source_path), frames in grouped.items():
+        source = Path(source_path) if source_path else Path()
+        destination = asset_root / video_id / f"frame_{index:03d}.jpg"
+        relative = Path(os.path.relpath(destination, html_parent)).as_posix()
+        status = "ready"
+        if not source_path or not source.is_file():
+            stats["missing"] += 1
+            status = "missing"
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                stats["reused"] += 1
+            else:
+                convert(source, destination)
+                stats["created"] += 1
+        for frame in frames:
+            frame.pop("source_path", None)
+            frame["thumbnail_status"] = status
+            if status == "ready":
+                frame["thumbnail_src"] = relative
+    return stats

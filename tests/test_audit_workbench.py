@@ -16,7 +16,11 @@ from tools.audit_workbench.build import (
     organize_delivery,
     render_workbench,
 )
-from tools.audit_workbench.evidence_assets import enrich_evidence_refs, load_frame_manifests
+from tools.audit_workbench.evidence_assets import (
+    enrich_evidence_refs,
+    load_frame_manifests,
+    materialize_thumbnails,
+)
 
 
 def test_module_cli_resolves_src_package_despite_salesbench_script_shadowing() -> None:
@@ -441,3 +445,83 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     assert data["qa"][0]["evidence_items"][0]["semantic_text"] == "产品｜认证｜国家专利"
     assert data["qa"][0]["evidence_items"][0]["frames"][0]["frame_index"] == 1
     assert data["judge"]["rows"][0]["evidence_items"] == data["qa"][0]["evidence_items"]
+
+
+def test_thumbnail_materialization_deduplicates_and_uses_relative_paths(tmp_path: Path) -> None:
+    source = tmp_path / "source.jpg"
+    source.write_bytes(b"jpeg")
+    frame = {
+        "frame_index": 1,
+        "timestamp_s": 1.5,
+        "source_path": str(source),
+        "relation": "direct",
+    }
+    data = {
+        "evidence": {"queue": [{"evidence_items": [{"frames": [dict(frame)]}]}], "risks": []},
+        "qa": [{"evidence_items": [{"frames": [dict(frame)]}]}],
+        "judge": {"rows": [{"evidence_items": [{"frames": [dict(frame)]}]}]},
+    }
+
+    result = materialize_thumbnails(
+        data,
+        asset_root=tmp_path / "audit/assets/frames",
+        html_parent=tmp_path / "audit",
+        converter=lambda src, dst: dst.write_bytes(src.read_bytes()),
+    )
+
+    assert result == {"unique_frames": 1, "created": 1, "reused": 0, "missing": 0}
+    thumbnail = tmp_path / "audit/assets/frames/unknown/frame_001.jpg"
+    assert thumbnail.read_bytes() == b"jpeg"
+    qa_frame = data["qa"][0]["evidence_items"][0]["frames"][0]
+    judge_frame = data["judge"]["rows"][0]["evidence_items"][0]["frames"][0]
+    assert qa_frame["thumbnail_src"] == "assets/frames/unknown/frame_001.jpg"
+    assert judge_frame["thumbnail_src"] == qa_frame["thumbnail_src"]
+    assert "source_path" not in qa_frame
+
+
+def test_rendered_evidence_uses_lazy_images_and_readable_content() -> None:
+    prompts = collect_prompt_snapshot()
+    data = {
+        "release": {"status": "pilot", "prompt_version": "v6"},
+        "counts": {"videos": 1, "evidence_units": 1, "annotations": 1, "review_queue": 1, "qa": 1},
+        "delivery": {},
+        "evidence": {
+            "queue": [
+                {
+                    "id": "r1",
+                    "video_id": "v1",
+                    "task_type": "BP",
+                    "reason": "复核",
+                    "evidence_items": [
+                        {
+                            "evidence_id": "e1",
+                            "modality": "ocr",
+                            "semantic_text": "产品｜认证｜国家专利",
+                            "text_span": "国家专利",
+                            "localization_note": "",
+                            "frames": [
+                                {
+                                    "frame_index": 1,
+                                    "timestamp_s": 1.5,
+                                    "relation": "direct",
+                                    "thumbnail_src": "assets/frames/v1/frame_001.jpg",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "risks": [],
+            "missing_task_videos": [],
+        },
+        "qa": [],
+        "judge": {"summary": {}, "metrics": {}, "rows": []},
+    }
+
+    html = render_workbench(data, prompts, fragment=True)
+
+    assert 'loading="lazy"' in html
+    assert "产品｜认证｜国家专利" in html
+    assert "国家专利" in html
+    assert "frame_001.jpg" in html
+    assert "openLightbox" in html
