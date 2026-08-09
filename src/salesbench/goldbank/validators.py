@@ -159,6 +159,17 @@ def validate_gold_proposal(proposal: GoldProposal, evidence: dict[str, EvidenceU
     issues = _validate_common(proposal, evidence, proposal.evidence_ids)
     if len(proposal.evidence_ids) < TASK_MIN_EVIDENCE.get(proposal.task_type, 1):
         issues.append(ValidationIssue("INSUFFICIENT_EVIDENCE", "WARNING", proposal.proposal_id, "Proposal has too little evidence"))
+    if proposal.task_type == GoldTaskType.CM:
+        modalities = {evidence[eid].modality.value for eid in set(proposal.evidence_ids) if eid in evidence}
+        if len(modalities) < 2:
+            issues.append(
+                ValidationIssue(
+                    "CM_MODALITY_DIVERSITY",
+                    "ERROR",
+                    proposal.proposal_id,
+                    "CM requires evidence from at least two distinct modalities",
+                )
+            )
     return issues
 
 
@@ -172,6 +183,16 @@ def validate_gold_item(item: GoldItem, evidence: dict[str, EvidenceUnit]) -> lis
     if item.task_type == GoldTaskType.BP and any(marker in _text_blob(item.gold_value) for marker in INFERENCE_MARKERS):
         issues.append(ValidationIssue("OBSERVATION_INFERENCE_MIXED", "ERROR", item_id, "BP must not contain marketing inference language"))
     if item.task_type == GoldTaskType.CM:
+        modalities = {evidence[eid].modality.value for eid in set(item.evidence_ids) if eid in evidence}
+        if len(modalities) < 2:
+            issues.append(
+                ValidationIssue(
+                    "CM_MODALITY_DIVERSITY",
+                    "ERROR",
+                    item_id,
+                    "CM requires evidence from at least two distinct modalities",
+                )
+            )
         relation = clean_text(item.gold_value.get("relation")).upper()
         if relation and relation not in CM_RELATIONS:
             issues.append(ValidationIssue("INVALID_GOLD_VALUE", "ERROR", item_id, f"Invalid CM relation: {relation}"))

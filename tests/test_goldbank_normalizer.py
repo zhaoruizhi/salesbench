@@ -96,6 +96,40 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 ],
             )
 
+        with self.assertRaisesRegex(ValueError, "consumer proposer cannot emit"):
+            normalize_proposals(
+                "v1",
+                "consumer",
+                [
+                    {
+                        "task_type": "SS",
+                        "task_subtype": "VALUE_PROPOSITION",
+                        "target": {"segment": "开场"},
+                        "proposed_gold": {"label": "卖点"},
+                        "evidence_ids": ["e1", "e2"],
+                        "reasoning_edges": [],
+                        "proposal_confidence": 0.9,
+                    }
+                ],
+            )
+
+        with self.assertRaisesRegex(ValueError, "operator proposer cannot emit"):
+            normalize_proposals(
+                "v1",
+                "operator",
+                [
+                    {
+                        "task_type": "SS",
+                        "task_subtype": "HOOK_MECHANISM",
+                        "target": {"segment": "开场"},
+                        "proposed_gold": {"label": "提问"},
+                        "evidence_ids": ["e1", "e2"],
+                        "reasoning_edges": [],
+                        "proposal_confidence": 0.9,
+                    }
+                ],
+            )
+
     def test_placeholder_proposal_id_is_replaced_locally(self):
         proposal = normalize_proposals(
             "v1",

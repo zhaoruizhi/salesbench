@@ -133,21 +133,21 @@ def successful_responses() -> list[dict[str, object]]:
 
 def successful_responses_with_two_evidence() -> list[dict[str, object]]:
     responses = deepcopy(successful_responses())
-    second_id = "v1_visual_001_def"
+    second_id = "v1_asr_001_def"
     responses[0]["evidence_units"].append(
         {
             "evidence_id": second_id,
             "video_id": "v1",
-            "modality": "visual",
+            "modality": "asr",
             "start_s": 1,
             "end_s": 2,
-            "frame_indices": [1],
-            "text_span": "",
-            "subject": "product detail",
-            "predicate": "visible",
-            "value": True,
+            "frame_indices": [],
+            "text_span": "这款产品采用编织材质",
+            "subject": "口播者",
+            "predicate": "声称",
+            "value": "产品采用编织材质",
             "attributes": {},
-            "source_domains": ["C6_raw_video"],
+            "source_domains": ["C2_audio_speech"],
             "extractor": "fake",
             "confidence": 0.95,
             "timestamp_status": "available",
@@ -158,7 +158,30 @@ def successful_responses_with_two_evidence() -> list[dict[str, object]]:
     return responses
 
 
+def successful_v7_responses() -> list[dict[str, object]]:
+    responses = successful_responses_with_two_evidence()
+    responses[5] = {
+        "accepted_groups": [{"source_proposal_ids": ["p_cm"], "reason": "两种模态证据一致"}],
+        "human_review_queue": [],
+    }
+    return responses
+
+
 class GoldBankPipelineTest(unittest.TestCase):
+    def test_v7_adjudicator_decision_reconstructs_annotation_locally(self):
+        responses = successful_v7_responses()
+        vlm = FakeGoldClient(responses[:1])
+        llm = FakeGoldClient(responses[1:])
+
+        result = GoldBankPipeline(vlm, llm).run_video(bundle())
+
+        cm_item = next(item for item in result.video_gold_record["grounded_annotations"] if item["task_type"] == "CM")
+        self.assertEqual(cm_item["source_proposal_ids"], ["p_cm"])
+        self.assertEqual(cm_item["evidence_refs"], ["v1_visual_000_abc", "v1_asr_001_def"])
+        self.assertEqual(cm_item["quality_status"], "DIRECT")
+        adjudication_trace = next(trace for trace in result.agent_traces if trace["stage"] == "adjudication")
+        self.assertIn("accepted_groups", adjudication_trace["parsed_output"])
+
     def test_evidence_images_keep_frame_labels_and_order(self):
         vlm = FakeGoldClient(successful_responses()[:1])
         llm = FakeGoldClient(successful_responses()[1:])
@@ -343,7 +366,7 @@ class GoldBankPipelineTest(unittest.TestCase):
                 "task_subtype": "CONTENT_MOTIVATION",
                 "target": {"claim": "claim"},
                 "proposed_gold": {"answer": "bad task pairing"},
-                "evidence_ids": ["v1_visual_000_abc", "v1_visual_001_def"],
+                "evidence_ids": ["v1_visual_000_abc", "v1_asr_001_def"],
                 "reasoning_edges": [],
                 "proposal_confidence": 0.9,
             }

@@ -52,6 +52,27 @@ def parse_review_response(raw_response: str) -> list[dict[str, object]]:
 
 
 def parse_adjudication_response(raw_response: str) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    raw = (raw_response or "").strip()
+    if not raw:
+        raise ModelOutputError("empty model response")
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ModelOutputError(f"invalid JSON: {exc}") from exc
+    if not isinstance(decoded, dict):
+        raise ModelOutputError("top-level JSON must be an object")
+    if "accepted_groups" in decoded:
+        groups = decoded["accepted_groups"]
+        queue = decoded.get("human_review_queue", [])
+        if not isinstance(groups, list) or not isinstance(queue, list):
+            raise ModelOutputError("accepted_groups and human_review_queue must be lists")
+        normalized_groups = []
+        for item in groups:
+            if isinstance(item, dict):
+                normalized_groups.append({**item, "_decision_only": True})
+        return normalized_groups, [item for item in queue if isinstance(item, dict)]
+
+    # Keep legacy v6 replay readable. New prompts never request this format.
     payload = parse_json_object(raw_response, "grounded_annotations")
     queue = payload.get("human_review_queue", [])
     if not isinstance(payload["grounded_annotations"], list) or not isinstance(queue, list):

@@ -5,11 +5,12 @@ import sys
 
 sys.path.insert(0, "src")
 
-from salesbench.goldbank.schema import EvidenceModality, EvidenceUnit, GoldItem, GoldTaskType, GoldTier  # noqa: E402
+from salesbench.goldbank.schema import EvidenceModality, EvidenceUnit, GoldItem, GoldProposal, GoldTaskType, GoldTier  # noqa: E402
 from salesbench.goldbank.validators import (  # noqa: E402
     find_duplicate_and_conflicting_items,
     public_gold_record,
     validate_gold_item,
+    validate_gold_proposal,
 )
 
 
@@ -61,6 +62,26 @@ def gold_item(
 
 
 class GoldBankValidatorTest(unittest.TestCase):
+    def test_cm_proposal_requires_two_distinct_modalities(self):
+        first = evidence()
+        second = evidence("v1_visual_001_def")
+        proposal = GoldProposal(
+            proposal_id="p1",
+            video_id="v1",
+            source_agent="operator",
+            task_type=GoldTaskType.CM,
+            task_subtype="CLAIM_EVIDENCE_RELATION",
+            target={"claim": "口播称产品防水"},
+            proposed_gold={"relation": "SUPPORTED", "modality_pair": ["asr", "visual"]},
+            evidence_ids=(first.evidence_id, second.evidence_id),
+            reasoning_edges=(),
+            proposal_confidence=0.9,
+        )
+
+        issues = validate_gold_proposal(proposal, {first.evidence_id: first, second.evidence_id: second})
+
+        self.assertIn("CM_MODALITY_DIVERSITY", {issue.code for issue in issues})
+
     def test_missing_evidence_reference_is_error(self):
         issues = validate_gold_item(gold_item(evidence_ids=("missing",)), {})
 

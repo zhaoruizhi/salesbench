@@ -56,7 +56,7 @@ class RepeatingClient:
 
 def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     e1 = "v1_visual_000"
-    e2 = "v1_visual_001"
+    e2 = "v1_asr_001"
     vision = [
         {
             "evidence_units": [
@@ -78,16 +78,16 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
                 },
                 {
                     "evidence_id": e2,
-                    "modality": "visual",
+                    "modality": "asr",
                     "start_s": 1,
                     "end_s": 2,
-                    "frame_indices": [1],
-                    "text_span": "",
-                    "subject": "产品",
-                    "predicate": "action",
-                    "value": "现场演示",
+                    "frame_indices": [],
+                    "text_span": "这款产品适合通勤",
+                    "subject": "口播者",
+                    "predicate": "声称",
+                    "value": "产品适合通勤",
                     "attributes": {},
-                    "source_domains": ["C1_visual"],
+                    "source_domains": ["C2_audio_speech"],
                     "extractor": "fake",
                     "confidence": 0.95,
                     "timestamp_status": "available",
@@ -186,7 +186,7 @@ class EvidenceVQAE2ETest(unittest.TestCase):
             "video_ids": ["v1"],
             "frame_strategy": "hook_plus_uniform",
             "frames_per_video": 16,
-            "prompt_version": "evidence-prompt-v6",
+            "prompt_version": "evidence-prompt-v7",
             "schema_version": "evidence-dataset-schema-v2",
             "min_confidence": 0.7,
         }

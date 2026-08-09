@@ -37,16 +37,11 @@ _PROPOSER_ALLOWED_SUBTYPES = {
         (GoldTaskType.AE, "USAGE_CONTEXT"),
         (GoldTaskType.AE, "DECISION_STATE"),
         (GoldTaskType.AE, "CONTENT_MOTIVATION"),
-        (GoldTaskType.SS, "VALUE_PROPOSITION"),
-        (GoldTaskType.SS, "OBJECTION_HANDLING"),
     },
     "operator": {
         (GoldTaskType.CM, "CLAIM_EVIDENCE_RELATION"),
         (GoldTaskType.CM, "CLAIM_PARTIAL_SUPPORT"),
         (GoldTaskType.CM, "TEXT_VISUAL_CONSISTENCY"),
-        (GoldTaskType.SS, "HOOK_MECHANISM"),
-        (GoldTaskType.SS, "URGENCY_CTA"),
-        (GoldTaskType.SS, "FUNNEL_ROLE"),
     },
     "strategist": {
         (GoldTaskType.SS, "HOOK_MECHANISM"),

@@ -376,7 +376,16 @@ class GoldBankPipeline:
             return self._review_only_result(video_id, evidence_units, proposal_dicts, [review.to_dict() for review in reviews], traces, "partial", "adjudication_failed")
         try:
             gold_raw, adjudicator_queue = parse_adjudication_response(adjudication_call.raw_response)
-            traces.append(_trace("adjudication", "gold_adjudicator", adjudication_call, {"grounded_annotations": gold_raw, "human_review_queue": adjudicator_queue}))
+            decision_only = any(bool(item.get("_decision_only")) for item in gold_raw)
+            parsed_key = "accepted_groups" if decision_only else "grounded_annotations"
+            traces.append(
+                _trace(
+                    "adjudication",
+                    "gold_adjudicator",
+                    adjudication_call,
+                    {parsed_key: gold_raw, "human_review_queue": adjudicator_queue},
+                )
+            )
         except (ModelOutputError, ValueError) as exc:
             traces.append(_trace("adjudication", "gold_adjudicator", adjudication_call, error=str(exc)))
             return self._review_only_result(video_id, evidence_units, proposal_dicts, [review.to_dict() for review in reviews], traces, "partial", "adjudication_parse_failed")
@@ -388,6 +397,7 @@ class GoldBankPipeline:
         for raw_item in gold_raw:
             try:
                 local_payload = dict(raw_item)
+                decision_only = bool(local_payload.pop("_decision_only", False))
                 local_payload.pop("gold_tier", None)
                 local_payload.pop("quality_status", None)
                 source_ids = {
@@ -400,10 +410,20 @@ class GoldBankPipeline:
                     source_ids = {annotation_id}
                 adjudicated_source_ids.update(source_ids)
                 source_proposals = [passed_proposals_by_id[source_id] for source_id in source_ids if source_id in passed_proposals_by_id]
+                if decision_only and (not source_ids or len(source_proposals) != len(source_ids)):
+                    human_review_queue.append(_review_queue_item(video_id, "adjudicator_unknown_source", raw_item))
+                    continue
                 if source_proposals and all(proposal.task_type == GoldTaskType.BP for proposal in source_proposals):
                     continue
-                if len(source_proposals) == 1:
-                    source = source_proposals[0]
+                if decision_only and len(source_proposals) > 1:
+                    semantic_keys = {semantic_key(proposal) for proposal in source_proposals}
+                    if len(semantic_keys) != 1:
+                        human_review_queue.append(
+                            _review_queue_item(video_id, "adjudicator_group_not_semantically_equivalent", raw_item)
+                        )
+                        continue
+                if len(source_proposals) == 1 or (decision_only and source_proposals):
+                    source = sorted(source_proposals, key=lambda proposal: proposal.proposal_id)[0]
                     local_payload.update(
                         {
                             "video_id": video_id,
@@ -414,7 +434,7 @@ class GoldBankPipeline:
                             "evidence_refs": list(source.evidence_ids),
                             "reasoning_edges": [list(edge) for edge in source.reasoning_edges],
                             "eligible_question_formats": list(eligible_question_formats(source.task_type, source.task_subtype)),
-                            "source_proposal_ids": [source.proposal_id],
+                            "source_proposal_ids": sorted(source_ids),
                             "confidence": source.proposal_confidence,
                             "annotation_id": make_gold_id(
                                 video_id,

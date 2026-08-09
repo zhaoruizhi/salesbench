@@ -2,7 +2,7 @@
 
 ## 状态
 
-当前契约版本为 `evidence-dataset-schema-v2`，提示词版本为 `evidence-prompt-v6`。固定 5 视频 pilot、64 视频 pilot 与 128 视频 alpha cohort 配置已准备，真实生成需要由环境变量注入模型凭证。
+当前契约版本为 `evidence-dataset-schema-v2`，下一次生成使用 `evidence-prompt-v7`。现有 5 视频 smoke、64 视频 pilot 与 128 视频 alpha 产物/配置属于 `evidence-prompt-v6` 运行快照；v7 必须写入新的输出目录，不能覆盖或重标既有结果。真实生成仍需要由环境变量注入模型凭证。
 
 ## 用途
 
