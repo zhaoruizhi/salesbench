@@ -80,6 +80,21 @@ class JudgeParsingTest(unittest.TestCase):
         self.assertEqual(parsed_json["reason"], "核心正确但偏泛")
         self.assertEqual(parsed_line["score"], 0.25)
 
+        parsed_v7 = parse_judge_response(
+            '{"score":0.75,"correctness":1.0,"grounding":0.75,"completeness":0.75,'
+            '"reason":"结论正确但略有遗漏","evidence_alignment":"引用证据支持核心结论"}'
+        )
+        self.assertEqual(parsed_v7["correctness"], 1.0)
+        self.assertEqual(parsed_v7["grounding"], 0.75)
+        self.assertEqual(parsed_v7["completeness"], 0.75)
+
+        locally_scored = parse_judge_response(
+            '{"score":1.0,"correctness":0.25,"grounding":0.25,"completeness":1.0,'
+            '"reason":"存在关键错误","evidence_alignment":"证据仅部分支持"}'
+        )
+        self.assertEqual(locally_scored["reported_score"], 1.0)
+        self.assertEqual(locally_scored["score"], 0.5)
+
     def test_parse_judge_response_rejects_invalid_scores(self) -> None:
         from salesbench.vqa_evaluate.judge import parse_judge_response
 
@@ -95,6 +110,13 @@ class JudgePromptAndContextTest(unittest.TestCase):
             self.assertIn(text, JUDGE_SYSTEM_PROMPT)
         for task_type in ("BP", "CM", "SS", "AE"):
             self.assertIn(task_type, JUDGE_SYSTEM_PROMPT)
+        self.assertIn("自然语言字段必须使用中文", JUDGE_SYSTEM_PROMPT)
+        self.assertIn("直接可观察事实", JUDGE_SYSTEM_PROMPT)
+        self.assertIn("跨模态关系", JUDGE_SYSTEM_PROMPT)
+        self.assertIn("说服机制", JUDGE_SYSTEM_PROMPT)
+        self.assertIn("有界解释", JUDGE_SYSTEM_PROMPT)
+        for dimension in ("correctness", "grounding", "completeness"):
+            self.assertIn(dimension, JUDGE_SYSTEM_PROMPT)
         self.assertNotIn("Performance Metadata", JUDGE_SYSTEM_PROMPT)
         self.assertNotIn("Performance Metadata", JUDGE_SYSTEM_PROMPT)
 
@@ -107,7 +129,7 @@ class JudgePromptAndContextTest(unittest.TestCase):
                 "evidence_context": {"evidence": "证据"},
             }
         )
-        for label in ("Question", "Task Type", "Reference Answer", "Model Output", "Evidence Context"):
+        for label in ("问题", "任务类型", "参考答案", "模型回答", "证据上下文"):
             self.assertIn(label, user_prompt)
         self.assertNotIn("Performance Metadata", user_prompt)
 
