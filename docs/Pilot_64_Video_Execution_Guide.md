@@ -4,6 +4,8 @@
 
 当前项目中的“4 个公开数据集”应准确表述为同一 SalesBench 数据集下的 4 个公开任务集：BP、CM、SS、AE。互动分析是独立附加实验，不是第五个 VQA 任务，也不进入主榜。
 
+> 版本说明（2026-08-09）：现有 64 视频结果是 `evidence-prompt-v6` 运行快照。下一轮先使用 `configs/evidence_smoke_v7_5videos.json` 写入 `outputs/evidence/v7_smoke5_gpt4o_yunwu/`；5/5 全链路和人工抽检通过后，才使用 `configs/evidence_pilot_v7_64videos.json` 写入 `outputs/evidence/v7_pilot64_gpt4o_yunwu/`。smoke 与正式目录禁止复用，v7 也不得覆盖或重标 v6 产物。
+
 ## 1. Pilot 的目标和完成标准
 
 64 视频 pilot 需要回答以下问题：
