@@ -165,6 +165,32 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
             }
         )
     text = [
+        {
+            "commerce_cues": [
+                {
+                    "cue_type": "PRODUCT_IDENTITY",
+                    "content_en": "A yellow product package is shown.",
+                    "source_text_native": "",
+                    "evidence_ids": [e1],
+                    "attributes": {"color": "yellow"},
+                    "directness": "DIRECT",
+                    "theory_tags": ["product_description"],
+                    "confidence": 0.95,
+                },
+                {
+                    "cue_type": "USAGE_SCENARIO",
+                    "content_en": "The speaker presents commuting as a usage scenario.",
+                    "source_text_native": "这款产品适合通勤",
+                    "evidence_ids": [e2],
+                    "attributes": {"scenario": "commuting"},
+                    "directness": "DIRECT",
+                    "theory_tags": ["usage_scenario"],
+                    "confidence": 0.95,
+                },
+            ],
+            "abstentions": [],
+        },
+        {"commercial_relations": [], "abstentions": []},
         {"proposals": [proposals["p_cm"]], "abstentions": []},
         {"proposals": [proposals["p_ss"]], "abstentions": []},
         {"proposals": [proposals["p_ae"]], "abstentions": []},
@@ -186,8 +212,8 @@ class EvidenceVQAE2ETest(unittest.TestCase):
             "video_ids": ["v1"],
             "frame_strategy": "hook_plus_uniform",
             "frames_per_video": 16,
-            "prompt_version": "evidence-prompt-v8",
-            "schema_version": "evidence-dataset-schema-v2",
+            "prompt_version": "evidence-prompt-v9",
+            "schema_version": "evidence-dataset-schema-v3",
             "min_confidence": 0.7,
         }
 

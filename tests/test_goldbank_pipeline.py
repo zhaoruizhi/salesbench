@@ -76,6 +76,22 @@ def successful_responses() -> list[dict[str, object]]:
             ]
         },
         {
+            "commerce_cues": [
+                {
+                    "cue_type": "PRODUCT_IDENTITY",
+                    "content_en": "A product is visible.",
+                    "source_text_native": "",
+                    "evidence_ids": [evidence_id],
+                    "attributes": {},
+                    "directness": "DIRECT",
+                    "theory_tags": ["product_description"],
+                    "confidence": 0.95,
+                }
+            ],
+            "abstentions": [],
+        },
+        {"commercial_relations": [], "abstentions": []},
+        {
             "proposals": [
                 {
                     "proposal_id": "p_cm",
@@ -153,14 +169,14 @@ def successful_responses_with_two_evidence() -> list[dict[str, object]]:
             "timestamp_status": "available",
         }
     )
-    responses[1]["proposals"][0]["evidence_ids"] = ["v1_visual_000_abc", second_id]
-    responses[5]["grounded_annotations"][0]["evidence_ids"] = ["v1_visual_000_abc", second_id]
+    responses[3]["proposals"][0]["evidence_ids"] = ["v1_visual_000_abc", second_id]
+    responses[7]["grounded_annotations"][0]["evidence_ids"] = ["v1_visual_000_abc", second_id]
     return responses
 
 
 def successful_v7_responses() -> list[dict[str, object]]:
     responses = successful_responses_with_two_evidence()
-    responses[5] = {
+    responses[7] = {
         "accepted_groups": [{"source_proposal_ids": ["p_cm"], "reason": "The two modalities agree."}],
         "human_review_queue": [],
     }
@@ -210,12 +226,16 @@ class GoldBankPipelineTest(unittest.TestCase):
         self.assertEqual(result.status, "ok")
         self.assertEqual([trace["stage"] for trace in result.agent_traces], [
             "evidence_extraction",
-            "cm_proposal",
-            "ss_proposal",
-            "ae_proposal",
+            "commerce_cue_extraction",
+            "commercial_relation_building",
+            "task_proposal",
+            "task_proposal",
+            "task_proposal",
             "challenge",
             "adjudication",
         ])
+        self.assertTrue(result.commerce_cues)
+        self.assertEqual(result.commercial_relations, [])
 
     def test_bp_builder_does_not_call_proposer(self):
         vlm = FakeGoldClient(successful_responses()[:1])
@@ -229,7 +249,7 @@ class GoldBankPipelineTest(unittest.TestCase):
 
     def test_rejected_proposal_never_enters_gold_items(self):
         responses = successful_responses()
-        responses[4] = {
+        responses[6] = {
             "reviews": [
                 {
                     "review_id": "r_cm",
@@ -253,7 +273,7 @@ class GoldBankPipelineTest(unittest.TestCase):
 
     def test_low_confidence_proposal_enters_review_and_cannot_be_passed(self):
         responses = successful_responses()
-        responses[1]["proposals"][0]["proposal_confidence"] = 0.6
+        responses[3]["proposals"][0]["proposal_confidence"] = 0.6
         vlm = FakeGoldClient(responses[:1])
         llm = FakeGoldClient(responses[1:])
 
@@ -279,7 +299,7 @@ class GoldBankPipelineTest(unittest.TestCase):
 
     def test_abstention_uses_canonical_review_queue_shape(self):
         responses = successful_responses()
-        responses[2]["abstentions"] = [
+        responses[4]["abstentions"] = [
             {
                 "task_type": "SS",
                 "task_subtype": "TRUST_MECHANISM",
@@ -300,7 +320,7 @@ class GoldBankPipelineTest(unittest.TestCase):
     def test_rejected_bp_proposal_never_enters_grounded_annotations(self):
         responses = successful_responses()
         local_bp_id = "v1_local_bp_000"
-        responses[4] = {
+        responses[6] = {
             "reviews": [
                 {
                     "review_id": "r_bp",
@@ -314,7 +334,7 @@ class GoldBankPipelineTest(unittest.TestCase):
                 }
             ]
         }
-        responses[5]["grounded_annotations"] = [
+        responses[7]["grounded_annotations"] = [
             {
                 "annotation_id": "g_bp_injected",
                 "video_id": "v1",
@@ -342,7 +362,7 @@ class GoldBankPipelineTest(unittest.TestCase):
 
     def test_adjudicator_quality_status_is_ignored(self):
         responses = successful_responses_with_two_evidence()
-        annotation = responses[5]["grounded_annotations"][0]
+        annotation = responses[7]["grounded_annotations"][0]
         annotation["quality_status"] = "REJECTED"
         annotation["gold_tier"] = "Rejected"
         vlm = FakeGoldClient(responses[:1])
@@ -355,10 +375,10 @@ class GoldBankPipelineTest(unittest.TestCase):
 
     def test_semantic_duplicates_are_removed(self):
         responses = successful_responses_with_two_evidence()
-        duplicate_proposal = deepcopy(responses[1]["proposals"][0])
+        duplicate_proposal = deepcopy(responses[3]["proposals"][0])
         duplicate_proposal["proposal_id"] = "p_cm_duplicate"
-        responses[1]["proposals"].append(duplicate_proposal)
-        responses[4]["reviews"].append(
+        responses[3]["proposals"].append(duplicate_proposal)
+        responses[6]["reviews"].append(
             {
                 "review_id": "r_cm_duplicate",
                 "proposal_id": "p_cm_duplicate",
@@ -370,10 +390,10 @@ class GoldBankPipelineTest(unittest.TestCase):
                 "suggested_revision": None,
             }
         )
-        duplicate_annotation = deepcopy(responses[5]["grounded_annotations"][0])
+        duplicate_annotation = deepcopy(responses[7]["grounded_annotations"][0])
         duplicate_annotation["gold_id"] = "g_cm_duplicate"
         duplicate_annotation["source_proposal_ids"] = ["p_cm_duplicate"]
-        responses[5]["grounded_annotations"].append(duplicate_annotation)
+        responses[7]["grounded_annotations"].append(duplicate_annotation)
         vlm = FakeGoldClient(responses[:1])
         llm = FakeGoldClient(responses[1:])
 
@@ -387,7 +407,7 @@ class GoldBankPipelineTest(unittest.TestCase):
 
     def test_invalid_proposal_is_isolated_instead_of_dropping_agent_batch(self):
         responses = successful_responses_with_two_evidence()
-        responses[2]["proposals"] = [
+        responses[4]["proposals"] = [
             {
                 "proposal_id": "bad_cm",
                 "task_type": "CM",

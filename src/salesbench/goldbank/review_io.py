@@ -98,8 +98,10 @@ def apply_human_reviews(
         if video_id not in records_by_video:
             records_by_video[video_id] = {
                 "video_id": video_id,
-                "schema_version": "evidence-dataset-schema-v2",
+                "schema_version": "evidence-dataset-schema-v3",
                 "evidence_unit_ids": [],
+                "commerce_cue_ids": [],
+                "commercial_relation_ids": [],
                 "grounded_annotations": [],
                 "coverage": {},
                 "quality_summary": {},

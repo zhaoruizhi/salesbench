@@ -19,12 +19,14 @@ from .pipeline import GoldBankPipeline, GoldBankResult
 from .schema import stable_digest
 
 
-PIPELINE_VERSION = "evidence-first-pipeline-v7"
+PIPELINE_VERSION = "evidence-first-pipeline-v8"
 
 
 GOLD_BANK_OUTPUT_FILES = (
     "video_samples.jsonl",
     "evidence_units.jsonl",
+    "commerce_cues.jsonl",
+    "commercial_relations.jsonl",
     "gold_proposals.jsonl",
     "gold_reviews.jsonl",
     "video_evidence_dataset.jsonl",
@@ -47,6 +49,8 @@ def _result_to_payload(result: GoldBankResult, pipeline_fingerprint: str) -> dic
         "pipeline_fingerprint": pipeline_fingerprint,
         "video_id": result.video_id,
         "evidence_units": result.evidence_units,
+        "commerce_cues": result.commerce_cues,
+        "commercial_relations": result.commercial_relations,
         "gold_proposals": result.gold_proposals,
         "gold_reviews": result.gold_reviews,
         "video_gold_record": result.video_gold_record,
@@ -60,6 +64,8 @@ def _payload_to_result(payload: dict[str, object]) -> GoldBankResult:
     return GoldBankResult(
         video_id=clean_text(payload.get("video_id")),
         evidence_units=list(payload.get("evidence_units") or []),
+        commerce_cues=list(payload.get("commerce_cues") or []),
+        commercial_relations=list(payload.get("commercial_relations") or []),
         gold_proposals=list(payload.get("gold_proposals") or []),
         gold_reviews=list(payload.get("gold_reviews") or []),
         video_gold_record=payload.get("video_gold_record") if isinstance(payload.get("video_gold_record"), dict) else None,
@@ -172,6 +178,8 @@ def _merge_outputs(
     fingerprints: dict[str, str],
 ) -> dict[str, object]:
     evidence_units: list[dict[str, object]] = []
+    commerce_cues: list[dict[str, object]] = []
+    commercial_relations: list[dict[str, object]] = []
     proposals: list[dict[str, object]] = []
     reviews: list[dict[str, object]] = []
     gold_records: list[dict[str, object]] = []
@@ -179,6 +187,8 @@ def _merge_outputs(
     traces: list[dict[str, object]] = []
     for result in results:
         evidence_units.extend(result.evidence_units)
+        commerce_cues.extend(result.commerce_cues)
+        commercial_relations.extend(result.commercial_relations)
         proposals.extend(result.gold_proposals)
         reviews.extend(result.gold_reviews)
         if result.video_gold_record is not None:
@@ -193,6 +203,11 @@ def _merge_outputs(
 
     write_jsonl(output_dir / "video_samples.jsonl", _sort_records(video_samples, "video_id"))
     write_jsonl(output_dir / "evidence_units.jsonl", _sort_records(evidence_units, "video_id", "evidence_id"))
+    write_jsonl(output_dir / "commerce_cues.jsonl", _sort_records(commerce_cues, "video_id", "cue_id"))
+    write_jsonl(
+        output_dir / "commercial_relations.jsonl",
+        _sort_records(commercial_relations, "video_id", "relation_id"),
+    )
     write_jsonl(output_dir / "gold_proposals.jsonl", _sort_records(proposals, "video_id", "proposal_id"))
     write_jsonl(output_dir / "gold_reviews.jsonl", _sort_records(reviews, "video_id", "review_id"))
     write_jsonl(output_dir / "video_evidence_dataset.jsonl", _sort_records(gold_records, "video_id"))
@@ -207,6 +222,8 @@ def _merge_outputs(
         "counts": {
             "video_samples": len(video_samples),
             "evidence_units": len(evidence_units),
+            "commerce_cues": len(commerce_cues),
+            "commercial_relations": len(commercial_relations),
             "gold_proposals": len(proposals),
             "gold_reviews": len(reviews),
             "video_gold_records": len(gold_records),

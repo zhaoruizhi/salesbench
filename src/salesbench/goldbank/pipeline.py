@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..multiagent.context import public_observation_context
 from ..multiagent.schema import VideoContextBundle
 from ..utils import clean_text
 from ..vlm.api_client import APICallResult, VLMClient
-from .normalizer import normalize_evidence_units, normalize_proposals, semantic_key
+from .normalizer import (
+    normalize_commerce_cues,
+    normalize_commercial_relations,
+    normalize_evidence_units,
+    normalize_proposals,
+    semantic_key,
+)
 from .ontology import eligible_question_formats
 from .parsing import (
     ModelOutputError,
     parse_adjudication_response,
+    parse_commerce_cue_response,
+    parse_commercial_relation_response,
     parse_evidence_response,
     parse_proposal_response,
     parse_review_response,
@@ -21,6 +29,8 @@ from .parsing import (
 from .prompts import (
     build_adjudicator_prompt,
     build_challenger_prompt,
+    build_commerce_cue_prompt,
+    build_commercial_relation_prompt,
     build_evidence_extractor_prompt,
     build_proposer_prompt,
 )
@@ -41,6 +51,8 @@ from .schema import (
 from .validators import (
     ValidationIssue,
     find_duplicate_and_conflicting_items,
+    validate_commerce_cue,
+    validate_commercial_relation,
     validate_evidence_unit,
     validate_gold_item,
 )
@@ -56,6 +68,8 @@ class GoldBankResult:
     human_review_queue: list[dict[str, object]]
     agent_traces: list[dict[str, object]]
     status: str
+    commerce_cues: list[dict[str, object]] = field(default_factory=list)
+    commercial_relations: list[dict[str, object]] = field(default_factory=list)
 
 
 def _trace(
@@ -92,6 +106,8 @@ def _empty_result(video_id: str, status: str, traces: list[dict[str, object]]) -
         human_review_queue=[],
         agent_traces=traces,
         status=status,
+        commerce_cues=[],
+        commercial_relations=[],
     )
 
 
@@ -337,16 +353,247 @@ class GoldBankPipeline:
             return _empty_result(video_id, "failed", traces)
 
         evidence_dict = {unit.evidence_id: unit for unit in evidence_units}
-        bp_proposals = build_bp_proposals_from_evidence(video_id, evidence_units)
-        all_proposals = list(bp_proposals)
-        used_proposal_ids = {proposal.proposal_id for proposal in bp_proposals}
         human_review_queue: list[dict[str, object]] = []
         status = "ok"
 
+        cue_system, cue_user = build_commerce_cue_prompt(
+            video_id,
+            [unit.to_dict() for unit in evidence_units],
+        )
+        cue_call = self.llm_client.call_text_only(cue_system, cue_user, response_format="json_object")
+        if not cue_call.success:
+            traces.append(
+                _trace(
+                    "commerce_cue_extraction",
+                    "commerce_cue_extractor",
+                    cue_call,
+                    error=cue_call.error,
+                )
+            )
+            return GoldBankResult(
+                video_id=video_id,
+                evidence_units=[unit.to_dict() for unit in evidence_units],
+                gold_proposals=[],
+                gold_reviews=[],
+                video_gold_record=None,
+                human_review_queue=[],
+                agent_traces=traces,
+                status="partial",
+            )
+        try:
+            cue_raw, cue_abstentions = parse_commerce_cue_response(cue_call.raw_response)
+            commerce_cues = []
+            for raw_cue in cue_raw:
+                try:
+                    cue = normalize_commerce_cues(video_id, [raw_cue], evidence_dict)[0]
+                except (ValueError, IndexError) as exc:
+                    status = "partial"
+                    human_review_queue.append(
+                        _review_queue_item(
+                            video_id,
+                            f"commerce_cue_parse_error: {exc}",
+                            raw_cue,
+                            stage="commerce_cue_extraction",
+                            item_type="commerce_cue",
+                        )
+                    )
+                    continue
+                issues = validate_commerce_cue(cue, evidence_dict)
+                if any(issue.severity == "ERROR" for issue in issues):
+                    status = "partial"
+                    human_review_queue.append(
+                        _review_queue_item(
+                            video_id,
+                            "commerce_cue_validation_failed",
+                            cue.to_dict(),
+                            issues,
+                            stage="commerce_cue_extraction",
+                            item_type="commerce_cue",
+                        )
+                    )
+                    continue
+                if cue.confidence < self.min_confidence:
+                    human_review_queue.append(
+                        _review_queue_item(
+                            video_id,
+                            "commerce_cue_below_min_confidence",
+                            cue.to_dict(),
+                            stage="commerce_cue_extraction",
+                            item_type="commerce_cue",
+                        )
+                    )
+                    continue
+                commerce_cues.append(cue)
+            for ordinal, abstention in enumerate(cue_abstentions):
+                human_review_queue.append(
+                    _abstention_queue_item(video_id, "commerce_cue_extractor", abstention, ordinal)
+                )
+            traces.append(
+                _trace(
+                    "commerce_cue_extraction",
+                    "commerce_cue_extractor",
+                    cue_call,
+                    {"commerce_cues": cue_raw, "abstentions": cue_abstentions},
+                )
+            )
+        except (ModelOutputError, ValueError) as exc:
+            traces.append(
+                _trace(
+                    "commerce_cue_extraction",
+                    "commerce_cue_extractor",
+                    cue_call,
+                    error=str(exc),
+                )
+            )
+            return GoldBankResult(
+                video_id=video_id,
+                evidence_units=[unit.to_dict() for unit in evidence_units],
+                gold_proposals=[],
+                gold_reviews=[],
+                video_gold_record=None,
+                human_review_queue=human_review_queue,
+                agent_traces=traces,
+                status="partial",
+            )
+
+        if not commerce_cues:
+            return GoldBankResult(
+                video_id=video_id,
+                evidence_units=[unit.to_dict() for unit in evidence_units],
+                gold_proposals=[],
+                gold_reviews=[],
+                video_gold_record=None,
+                human_review_queue=human_review_queue,
+                agent_traces=traces,
+                status="partial",
+            )
+
+        cue_dict = {cue.cue_id: cue for cue in commerce_cues}
+        relation_system, relation_user = build_commercial_relation_prompt(
+            video_id,
+            [unit.to_dict() for unit in evidence_units],
+            [cue.to_dict() for cue in commerce_cues],
+        )
+        relation_call = self.llm_client.call_text_only(
+            relation_system,
+            relation_user,
+            response_format="json_object",
+        )
+        if not relation_call.success:
+            traces.append(
+                _trace(
+                    "commercial_relation_building",
+                    "commercial_relation_builder",
+                    relation_call,
+                    error=relation_call.error,
+                )
+            )
+            return GoldBankResult(
+                video_id=video_id,
+                evidence_units=[unit.to_dict() for unit in evidence_units],
+                commerce_cues=[cue.to_dict() for cue in commerce_cues],
+                gold_proposals=[],
+                gold_reviews=[],
+                video_gold_record=None,
+                human_review_queue=human_review_queue,
+                agent_traces=traces,
+                status="partial",
+            )
+        try:
+            relation_raw, relation_abstentions = parse_commercial_relation_response(
+                relation_call.raw_response
+            )
+            commercial_relations = []
+            for raw_relation in relation_raw:
+                try:
+                    relation = normalize_commercial_relations(
+                        video_id,
+                        [raw_relation],
+                        cue_dict,
+                        evidence_dict,
+                    )[0]
+                except (ValueError, IndexError) as exc:
+                    status = "partial"
+                    human_review_queue.append(
+                        _review_queue_item(
+                            video_id,
+                            f"commercial_relation_parse_error: {exc}",
+                            raw_relation,
+                            stage="commercial_relation_building",
+                            item_type="commercial_relation",
+                        )
+                    )
+                    continue
+                issues = validate_commercial_relation(relation, cue_dict, evidence_dict)
+                if any(issue.severity == "ERROR" for issue in issues):
+                    status = "partial"
+                    human_review_queue.append(
+                        _review_queue_item(
+                            video_id,
+                            "commercial_relation_validation_failed",
+                            relation.to_dict(),
+                            issues,
+                            stage="commercial_relation_building",
+                            item_type="commercial_relation",
+                        )
+                    )
+                    continue
+                if relation.confidence < self.min_confidence:
+                    human_review_queue.append(
+                        _review_queue_item(
+                            video_id,
+                            "commercial_relation_below_min_confidence",
+                            relation.to_dict(),
+                            stage="commercial_relation_building",
+                            item_type="commercial_relation",
+                        )
+                    )
+                    continue
+                commercial_relations.append(relation)
+            for ordinal, abstention in enumerate(relation_abstentions):
+                human_review_queue.append(
+                    _abstention_queue_item(video_id, "commercial_relation_builder", abstention, ordinal)
+                )
+            traces.append(
+                _trace(
+                    "commercial_relation_building",
+                    "commercial_relation_builder",
+                    relation_call,
+                    {
+                        "commercial_relations": relation_raw,
+                        "abstentions": relation_abstentions,
+                    },
+                )
+            )
+        except (ModelOutputError, ValueError) as exc:
+            traces.append(
+                _trace(
+                    "commercial_relation_building",
+                    "commercial_relation_builder",
+                    relation_call,
+                    error=str(exc),
+                )
+            )
+            return GoldBankResult(
+                video_id=video_id,
+                evidence_units=[unit.to_dict() for unit in evidence_units],
+                commerce_cues=[cue.to_dict() for cue in commerce_cues],
+                gold_proposals=[],
+                gold_reviews=[],
+                video_gold_record=None,
+                human_review_queue=human_review_queue,
+                agent_traces=traces,
+                status="partial",
+            )
+
+        bp_proposals = build_bp_proposals_from_evidence(video_id, evidence_units)
+        all_proposals = list(bp_proposals)
+        used_proposal_ids = {proposal.proposal_id for proposal in bp_proposals}
+
         for generator, stage in (
-            ("cm_proposer", "cm_proposal"),
-            ("ss_proposer", "ss_proposal"),
-            ("ae_proposer", "ae_proposal"),
+            ("cm_proposer", "task_proposal"),
+            ("ss_proposer", "task_proposal"),
+            ("ae_proposer", "task_proposal"),
         ):
             system, user = build_proposer_prompt(generator, video_id, [unit.to_dict() for unit in evidence_units])
             call = self.llm_client.call_text_only(system, user, response_format="json_object")
@@ -397,14 +644,20 @@ class GoldBankPipeline:
         challenge_call = self.llm_client.call_text_only(system, user, response_format="json_object")
         if not challenge_call.success:
             traces.append(_trace("challenge", "gold_challenger", challenge_call, error=challenge_call.error))
-            return self._review_only_result(video_id, evidence_units, proposal_dicts, [], traces, "partial", "challenge_failed")
+            return self._review_only_result(
+                video_id, evidence_units, commerce_cues, commercial_relations,
+                proposal_dicts, [], traces, "partial", "challenge_failed"
+            )
         try:
             review_raw = parse_review_response(challenge_call.raw_response)
             reviews = [parse_gold_review(review) for review in review_raw]
             traces.append(_trace("challenge", "gold_challenger", challenge_call, {"reviews": review_raw}))
         except (ModelOutputError, ValueError) as exc:
             traces.append(_trace("challenge", "gold_challenger", challenge_call, error=str(exc)))
-            return self._review_only_result(video_id, evidence_units, proposal_dicts, [], traces, "partial", "challenge_parse_failed")
+            return self._review_only_result(
+                video_id, evidence_units, commerce_cues, commercial_relations,
+                proposal_dicts, [], traces, "partial", "challenge_parse_failed"
+            )
 
         proposals_by_id = {proposal.proposal_id: proposal for proposal in all_proposals}
         for review in reviews:
@@ -459,7 +712,10 @@ class GoldBankPipeline:
         adjudication_call = self.llm_client.call_text_only(system, user, response_format="json_object")
         if not adjudication_call.success:
             traces.append(_trace("adjudication", "gold_adjudicator", adjudication_call, error=adjudication_call.error))
-            return self._review_only_result(video_id, evidence_units, proposal_dicts, [review.to_dict() for review in reviews], traces, "partial", "adjudication_failed")
+            return self._review_only_result(
+                video_id, evidence_units, commerce_cues, commercial_relations,
+                proposal_dicts, [review.to_dict() for review in reviews], traces, "partial", "adjudication_failed"
+            )
         try:
             gold_raw, adjudicator_queue = parse_adjudication_response(adjudication_call.raw_response)
             decision_only = any(bool(item.get("_decision_only")) for item in gold_raw)
@@ -474,7 +730,10 @@ class GoldBankPipeline:
             )
         except (ModelOutputError, ValueError) as exc:
             traces.append(_trace("adjudication", "gold_adjudicator", adjudication_call, error=str(exc)))
-            return self._review_only_result(video_id, evidence_units, proposal_dicts, [review.to_dict() for review in reviews], traces, "partial", "adjudication_parse_failed")
+            return self._review_only_result(
+                video_id, evidence_units, commerce_cues, commercial_relations,
+                proposal_dicts, [review.to_dict() for review in reviews], traces, "partial", "adjudication_parse_failed"
+            )
 
         accepted_items = _bp_items_from_proposals(
             [proposal for proposal in bp_proposals if proposal.proposal_id in passed_proposal_ids]
@@ -624,6 +883,10 @@ class GoldBankPipeline:
                 "sampled_frame_count": len(frames_b64 or []),
                 "known_limitations": [],
             },
+            commerce_cue_ids=tuple(cue.cue_id for cue in commerce_cues),
+            commercial_relation_ids=tuple(
+                relation.relation_id for relation in commercial_relations
+            ),
         )
         return GoldBankResult(
             video_id=video_id,
@@ -634,12 +897,16 @@ class GoldBankPipeline:
             human_review_queue=human_review_queue,
             agent_traces=traces,
             status=status,
+            commerce_cues=[cue.to_dict() for cue in commerce_cues],
+            commercial_relations=[relation.to_dict() for relation in commercial_relations],
         )
 
     def _review_only_result(
         self,
         video_id: str,
         evidence_units: list[EvidenceUnit],
+        commerce_cues: list,
+        commercial_relations: list,
         proposals: list[dict[str, object]],
         reviews: list[dict[str, object]],
         traces: list[dict[str, object]],
@@ -660,4 +927,6 @@ class GoldBankPipeline:
             human_review_queue=queue,
             agent_traces=traces,
             status=status,
+            commerce_cues=[cue.to_dict() for cue in commerce_cues],
+            commercial_relations=[relation.to_dict() for relation in commercial_relations],
         )

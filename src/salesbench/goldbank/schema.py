@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -296,12 +296,16 @@ class VideoGoldRecord:
     coverage: dict[str, object]
     quality_summary: dict[str, int]
     observation_scope: dict[str, object]
+    commerce_cue_ids: tuple[str, ...] = field(default_factory=tuple)
+    commercial_relation_ids: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "video_id": self.video_id,
             "schema_version": self.schema_version,
             "evidence_unit_ids": list(self.evidence_unit_ids),
+            "commerce_cue_ids": list(self.commerce_cue_ids),
+            "commercial_relation_ids": list(self.commercial_relation_ids),
             "grounded_annotations": [item.to_dict() for item in self.gold_items],
             "coverage": dict(self.coverage),
             "quality_summary": dict(self.quality_summary),
@@ -399,6 +403,10 @@ def parse_video_gold_record(record: dict[str, object]) -> VideoGoldRecord:
         coverage=_dict(record.get("coverage")),
         quality_summary={str(key): int(value) for key, value in _dict(record.get("quality_summary")).items()},
         observation_scope=_dict(record.get("observation_scope")),
+        commerce_cue_ids=tuple(clean_text(value) for value in _tuple(record.get("commerce_cue_ids"))),
+        commercial_relation_ids=tuple(
+            clean_text(value) for value in _tuple(record.get("commercial_relation_ids"))
+        ),
     )
 
 

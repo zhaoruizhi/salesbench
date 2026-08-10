@@ -28,12 +28,22 @@ class FakePipeline:
                     "subject": "product",
                 }
             ],
+            commerce_cues=[
+                {
+                    "cue_id": f"{bundle.video_id}_cue_product_identity_abc",
+                    "video_id": bundle.video_id,
+                    "cue_type": "PRODUCT_IDENTITY",
+                }
+            ],
+            commercial_relations=[],
             gold_proposals=[{"proposal_id": f"p_{bundle.video_id}", "video_id": bundle.video_id}],
             gold_reviews=[{"review_id": f"r_{bundle.video_id}", "video_id": bundle.video_id}],
             video_gold_record={
                 "video_id": bundle.video_id,
-                "schema_version": "evidence-dataset-schema-v2",
+                "schema_version": "evidence-dataset-schema-v3",
                 "evidence_unit_ids": [f"{bundle.video_id}_visual_000_abc"],
+                "commerce_cue_ids": [f"{bundle.video_id}_cue_product_identity_abc"],
+                "commercial_relation_ids": [],
                 "grounded_annotations": [],
                 "coverage": {},
                 "quality_summary": {},
@@ -58,8 +68,8 @@ class GoldBankRunnerTest(unittest.TestCase):
             "video_ids": ["v2", "v1"],
             "frame_strategy": "hook_plus_uniform",
             "frames_per_video": 16,
-            "prompt_version": "evidence-prompt-v6",
-            "schema_version": "evidence-dataset-schema-v2",
+            "prompt_version": "evidence-prompt-v9",
+            "schema_version": "evidence-dataset-schema-v3",
             "min_confidence": 0.7,
         }
 
@@ -75,6 +85,8 @@ class GoldBankRunnerTest(unittest.TestCase):
             run_gold_bank_records(self.records(), self.pilot_config(), output_dir, FakePipeline())
 
             visible = {path.name for path in output_dir.iterdir() if path.is_file()}
+            self.assertTrue((output_dir / "commerce_cues.jsonl").is_file())
+            self.assertTrue((output_dir / "commercial_relations.jsonl").is_file())
 
         self.assertEqual(visible, set(GOLD_BANK_OUTPUT_FILES))
 
@@ -118,8 +130,8 @@ class GoldBankRunnerTest(unittest.TestCase):
             run_gold_bank_records(self.records(), self.pilot_config(), output_dir, FakePipeline())
             meta = (output_dir / "generation_meta.json").read_text(encoding="utf-8")
 
-        self.assertIn("evidence-prompt-v6", meta)
-        self.assertIn("evidence-dataset-schema-v2", meta)
+        self.assertIn("evidence-prompt-v9", meta)
+        self.assertIn("evidence-dataset-schema-v3", meta)
 
 
 if __name__ == "__main__":
