@@ -13,6 +13,7 @@ from ..utils import clean_text
 from ..vlm.api_client import VLMClient
 from .judge import judge_qa_item
 from .metrics import aggregate_judge_metrics
+from .prompts import JUDGE_PROMPT_VERSION
 from .schema import TASK_TYPES
 
 
@@ -176,5 +177,6 @@ def evaluate_salesbench_qa_files(
         "summary": str(report_path),
     }
     report["judge_model"] = getattr(client, "model", judge_model)
+    report["judge_prompt_version"] = JUDGE_PROMPT_VERSION
     write_json(report_path, report)
     return report

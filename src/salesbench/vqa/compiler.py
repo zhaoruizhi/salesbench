@@ -9,9 +9,12 @@ from pathlib import Path
 from ..goldbank.schema import GoldItem
 from ..goldbank.validators import PRIVATE_KEYS
 from ..io_utils import read_jsonl, write_json, write_jsonl
-from ..utils import clean_text
+from ..utils import clean_text, contains_cjk
 from .goldbank_loader import load_compilable_gold
 from .question_programs import UnsupportedQuestionProgramError, render_question
+
+
+COMPILER_VERSION = "evidence-qa-compiler-v4"
 
 
 @dataclass(frozen=True)
@@ -101,6 +104,9 @@ def compile_qa_records(
             if _question_leaks_answer(compiled.question, compiled.answer):
                 validation.append({"gold_id": item.gold_id, "status": "rejected", "reason": "question_leaks_answer"})
                 continue
+            if contains_cjk((compiled.question, compiled.answer)):
+                validation.append({"gold_id": item.gold_id, "status": "rejected", "reason": "non_english_public_text"})
+                continue
             vqa_id = f"{video_id}_{item.task_type.value.lower()}_{len(qa_records) + 1:05d}"
             record = {
                 "vqa_id": vqa_id,
@@ -116,7 +122,7 @@ def compile_qa_records(
                 "question_program_id": compiled.question_program_id,
                 "quality_status": item.quality_status.value,
                 "review_status": item.review_status,
-                "compiler_version": "evidence-qa-compiler-v3",
+                "compiler_version": COMPILER_VERSION,
             }
             if _contains_private(record):
                 validation.append({"gold_id": item.gold_id, "status": "rejected", "reason": "private_field_leak"})
@@ -182,7 +188,7 @@ def compile_vqa_from_gold(
             [record for record in public_records if record.get("task_type") == task],
         )
     meta = {
-        "compiler_version": "evidence-qa-compiler-v3",
+        "compiler_version": COMPILER_VERSION,
         "public_tasks": list(policy.task_priority),
         "bank_file": str(bank_path),
         "counts": {

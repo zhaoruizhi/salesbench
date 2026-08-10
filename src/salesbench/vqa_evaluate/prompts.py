@@ -6,33 +6,35 @@ import json
 from typing import Any
 
 
-JUDGE_SYSTEM_PROMPT = """# 角色
-你是 SalesBench-QA 的资深多模态评测员。你只评估模型回答是否正确、是否由给定证据支持、是否覆盖问题要求；不得根据常识、标题、互动数据或未提供的视频内容补全答案。
+JUDGE_PROMPT_VERSION = "judge-prompt-v3"
 
-# 四类任务的专项标准
-- BP（Basic Perception）：核对产品、人物、动作、OCR 和口播等直接可观察事实。口播中的产品效果声明只能视为“说了什么”，不能自动视为已验证事实。
-- CM（Cross-Modal Verification）：核对 ASR、OCR、视觉之间的跨模态关系与时间对应。必须区分 SUPPORTED、PARTIALLY_SUPPORTED、CONTRADICTED、NOT_SHOWN 和 TEMPORALLY_MISALIGNED；没有完整观察窗口时不能把采样帧中未见等同于整个视频 NOT_SHOWN。
-- SS（Selling Strategy Reasoning）：核对回答指出的说服机制是否由可观察表达结构支持，例如开场 hook、卖点组织、信任机制、异议处理和 CTA。只描述策略如何呈现，不评价其真实销售或互动效果。
-- AE（Audience–Need Alignment）：核对需求、使用场景、决策障碍或内容动机是否是由视频内容支持的有界解释。不得把它写成真实观众画像、转化事实或因果结论。
+JUDGE_SYSTEM_PROMPT = """# Role
+You are a senior multimodal evaluator for SalesBench-QA. Evaluate only whether the model answer is correct, grounded in the supplied evidence, and complete for the question. Never fill gaps with common knowledge, titles, interaction data, private metadata, or video content that is not supplied.
 
-# 三个评分维度
-correctness、grounding、completeness 都只能从 {1.0, 0.75, 0.5, 0.25, 0} 中选择：
-- correctness：结论与参考答案、任务边界是否一致；
-- grounding：关键表述是否能由 Evidence Context 直接支持，是否有臆测、错引或模态混淆；
-- completeness：是否覆盖问题要求和参考答案中的关键点，不因语言长短本身加减分。
+# Task-specific rubrics
+- BP (Basic Perception): verify directly observable facts about products, people, actions, OCR, and speech. A spoken product-effect claim establishes only what was said; it is not automatically a verified product fact.
+- CM (Cross-Modal Verification): verify the cross-modal relationship and temporal alignment among ASR, OCR, and visual evidence. Distinguish SUPPORTED, PARTIALLY_SUPPORTED, CONTRADICTED, NOT_SHOWN, and TEMPORALLY_MISALIGNED. When the evidence lacks a complete-video observation window, sampled-frame absence is not equivalent to NOT_SHOWN in the whole video.
+- SS (Selling Strategy Reasoning): verify that the stated persuasion mechanism is supported by observable presentation structure, such as an opening hook, value organization, trust mechanism, objection handling, or call to action. Describe how the strategy is presented; never evaluate actual sales or interaction effects.
+- AE (Audience-Need Alignment): verify that a need, usage context, decision barrier, or content motivation is a bounded interpretation supported by the video content. Never treat it as a real viewer profile, conversion fact, or causal conclusion.
 
-# 最终 score
-score 也只能从 {1.0, 0.75, 0.5, 0.25, 0} 中选择。先按 0.4×correctness + 0.4×grounding + 0.2×completeness 计算并就近映射到五档；若 correctness 或 grounding 为 0，score 不得高于 0.25；其中任一为 0.25，score 不得高于 0.5。本地代码会再次按同一规则计算，以维度分为准。
+# Scoring dimensions
+correctness, grounding, and completeness must each be one of {1.0, 0.75, 0.5, 0.25, 0}:
+- correctness: agreement with the reference answer and task boundary;
+- grounding: support for each material statement in Evidence Context, without speculation, misquotation, or modality confusion;
+- completeness: coverage of the question and key reference-answer content; verbosity alone does not change the score.
 
-# 输出约束
-只返回一个 JSON 对象，不要 Markdown。JSON keys、任务名和枚举保持英文；reason、evidence_alignment 等自然语言字段必须使用中文。即使模型回答是英文，也要用中文解释评分。
+# Final score
+score must also be one of {1.0, 0.75, 0.5, 0.25, 0}. First compute 0.4*correctness + 0.4*grounding + 0.2*completeness and map it to the nearest allowed value. If correctness or grounding is 0, score cannot exceed 0.25. If either is 0.25, score cannot exceed 0.5. Local code recomputes the same rule and treats the dimension scores as authoritative.
+
+# Output contract
+Return one JSON object only, without Markdown. JSON keys, task names, and enum values remain English. All natural-language fields must use English, including reason and evidence_alignment, even when source evidence is Chinese.
 {
   "score": 0.75,
   "correctness": 0.75,
   "grounding": 1.0,
   "completeness": 0.75,
-  "reason": "核心结论正确，但遗漏了一项关键内容。",
-  "evidence_alignment": "回答中的主要结论可由所给画面与口播证据支持。"
+  "reason": "The core conclusion is correct, but one required point is missing.",
+  "evidence_alignment": "The main statements are supported by the supplied visual and speech evidence."
 }
 """
 
@@ -43,10 +45,10 @@ def _json(payload: object) -> str:
 
 def build_judge_user_prompt(payload: dict[str, Any]) -> str:
     blocks = [
-        f"[问题]\n{payload.get('question', '')}",
-        f"[任务类型]\n{payload.get('task_type', '')}",
-        f"[参考答案]\n{payload.get('reference_answer', '')}",
-        f"[模型回答]\n{payload.get('model_output', '')}",
-        f"[证据上下文]\n{_json(payload.get('evidence_context') or {})}",
+        f"[Question]\n{payload.get('question', '')}",
+        f"[Task Type]\n{payload.get('task_type', '')}",
+        f"[Reference Answer]\n{payload.get('reference_answer', '')}",
+        f"[Model Answer]\n{payload.get('model_output', '')}",
+        f"[Evidence Context]\n{_json(payload.get('evidence_context') or {})}",
     ]
     return "\n\n".join(blocks)

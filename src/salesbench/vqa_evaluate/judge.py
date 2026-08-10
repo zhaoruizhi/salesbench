@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from ..utils import clean_text
+from ..utils import clean_text, contains_cjk
 from ..vlm.api_client import APICallResult, VLMClient
 from ..vlm.response_parser import _try_parse_json
 from .context import build_judge_payload
@@ -47,12 +47,16 @@ def parse_judge_response(raw_text: str) -> dict[str, Any]:
             )
         else:
             score = reported_score
+        reason = clean_text(parsed.get("reason"))
+        evidence_alignment = clean_text(parsed.get("evidence_alignment"))
+        if contains_cjk((reason, evidence_alignment)):
+            raise ValueError("Judge natural-language output must use English")
         return {
             "score": score,
             "reported_score": reported_score,
             **dimension_values,
-            "reason": clean_text(parsed.get("reason")),
-            "evidence_alignment": clean_text(parsed.get("evidence_alignment")),
+            "reason": reason,
+            "evidence_alignment": evidence_alignment,
         }
 
     match = ANSWER_LINE_RE.search(text)
@@ -63,6 +67,8 @@ def parse_judge_response(raw_text: str) -> dict[str, Any]:
     reason_match = re.search(r"Reason\s*:\s*(.+)", text, re.IGNORECASE | re.DOTALL)
     if reason_match:
         reason = clean_text(reason_match.group(1))
+    if contains_cjk(reason):
+        raise ValueError("Judge natural-language output must use English")
     return {
         "score": score,
         "reported_score": score,

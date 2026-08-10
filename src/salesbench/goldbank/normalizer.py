@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..utils import clean_text
+from ..utils import clean_text, contains_cjk
 from .ontology import allowed_subtypes
 from .schema import (
     EvidenceModality,
@@ -21,7 +21,6 @@ from .schema import (
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _FRAME_REFERENCE_RE = re.compile(r"frame[_-]?(\d+)", re.IGNORECASE)
-_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _CONFIDENCE_LABELS = {
     "very_high": 0.95,
     "very high": 0.95,
@@ -53,14 +52,6 @@ _PROPOSER_ALLOWED_SUBTYPES = {
         (GoldTaskType.SS, "FUNNEL_ROLE"),
     },
 }
-
-
-def _contains_cjk(payload: object) -> bool:
-    if isinstance(payload, dict):
-        return any(_contains_cjk(value) for value in payload.values())
-    if isinstance(payload, (list, tuple)):
-        return any(_contains_cjk(value) for value in payload)
-    return isinstance(payload, str) and bool(_CJK_RE.search(payload))
 
 
 def normalize_text(value: object) -> str:
@@ -194,7 +185,7 @@ def normalize_proposals(video_id: str, generator: str, raw: list[dict[str, objec
             raise ValueError("Proposal target must be a non-empty object")
         if not isinstance(proposed_gold, dict) or not proposed_gold:
             raise ValueError("Proposal proposed_gold must be a non-empty object")
-        if _contains_cjk((target, proposed_gold, payload.get("reasoning_edges", []))):
+        if contains_cjk((target, proposed_gold, payload.get("reasoning_edges", []))):
             raise ValueError("Proposal normalized natural-language fields must use English")
         payload["task_subtype"] = subtype
         payload["video_id"] = video_id

@@ -86,11 +86,11 @@ class GoldBankQACompilerTest(unittest.TestCase):
         bp = record["grounded_annotations"][0]
         bp["task_subtype"] = "OCR_FACT"
         bp["target"] = {"subject": "product", "predicate": "name"}
-        bp["gold_value"] = {"value": "测试产品"}
+        bp["gold_value"] = {"value": "test product"}
 
         qa, _ = compile_qa_records(load_compilable_gold_from_records([record]), CompilePolicy())
 
-        self.assertIn("产品的名称", qa[0]["question"])
+        self.assertIn("product's name", qa[0]["question"])
 
     def test_ss_answer_prefers_complete_answer_over_short_label(self):
         record = gold_record()
@@ -98,14 +98,23 @@ class GoldBankQACompilerTest(unittest.TestCase):
         ss["quality_status"] = "INFERRED"
         ss["review_status"] = "verified"
         ss["gold_value"] = {
-            "label": "结果前置",
-            "answer": "开场先给出预期结果，再展示对应产品，以结果前置方式吸引注意。",
+            "label": "result first",
+            "answer": "The opening states the desired result before showing the corresponding product.",
         }
 
         qa, _ = compile_qa_records(load_compilable_gold_from_records([record]), CompilePolicy())
         ss_qa = next(item for item in qa if item["task_type"] == "SS")
 
         self.assertEqual(ss_qa["gold_answer"], ss["gold_value"]["answer"])
+
+    def test_compiler_rejects_non_english_public_question_or_answer(self):
+        record = gold_record()
+        record["grounded_annotations"][0]["gold_value"] = {"action": "打开包装"}
+
+        qa, validation = compile_qa_records(load_compilable_gold_from_records([record]), CompilePolicy())
+
+        self.assertEqual(qa, [])
+        self.assertEqual(validation[0]["reason"], "non_english_public_text")
 
     def test_public_qa_contains_no_private_interaction_fields(self):
         with tempfile.TemporaryDirectory() as tmp:

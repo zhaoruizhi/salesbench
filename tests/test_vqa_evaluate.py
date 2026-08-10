@@ -46,8 +46,8 @@ def _bp_gold() -> dict[str, object]:
         "video_id": "v1",
         "task_layer": "salesbench_qa",
         "task_type": "BP",
-        "question": "视频中展示的产品包装颜色是什么？",
-        "gold_answer": "包装颜色是黄色。",
+        "question": "What color is the product package shown in the video?",
+        "gold_answer": "The package is yellow.",
         "answer_type": "open",
         "evidence_context": [{"evidence_id": "e1", "modality": "visual", "text_span": "画面展示黄色包装。"}],
     }
@@ -59,8 +59,8 @@ def _ss_gold() -> dict[str, object]:
         "video_id": "v1",
         "task_layer": "salesbench_qa",
         "task_type": "SS",
-        "question": "该视频如何建立信任？",
-        "gold_answer": "通过现场演示建立信任。",
+        "question": "How does the video build trust?",
+        "gold_answer": "It builds trust through an in-use demonstration.",
         "answer_type": "open",
         "evidence_context": [{"evidence_id": "e2", "modality": "visual", "text_span": "现场演示产品使用。"}],
         "performance_metadata": {"likes": 100, "collects": 80, "shares": 20, "comments": 5},
@@ -72,17 +72,17 @@ class JudgeParsingTest(unittest.TestCase):
         from salesbench.vqa_evaluate.judge import parse_judge_response
 
         parsed_json = parse_judge_response(
-            '{"score": 0.75, "reason": "核心正确但偏泛", "evidence_alignment": "证据一致"}'
+            '{"score": 0.75, "reason": "The core answer is correct but vague.", "evidence_alignment": "The evidence aligns."}'
         )
         parsed_line = parse_judge_response("Answer: 0.25\nReason: evidence mismatch")
 
         self.assertEqual(parsed_json["score"], 0.75)
-        self.assertEqual(parsed_json["reason"], "核心正确但偏泛")
+        self.assertEqual(parsed_json["reason"], "The core answer is correct but vague.")
         self.assertEqual(parsed_line["score"], 0.25)
 
         parsed_v7 = parse_judge_response(
             '{"score":0.75,"correctness":1.0,"grounding":0.75,"completeness":0.75,'
-            '"reason":"结论正确但略有遗漏","evidence_alignment":"引用证据支持核心结论"}'
+            '"reason":"The conclusion is correct but incomplete.","evidence_alignment":"The evidence supports the core conclusion."}'
         )
         self.assertEqual(parsed_v7["correctness"], 1.0)
         self.assertEqual(parsed_v7["grounding"], 0.75)
@@ -90,7 +90,7 @@ class JudgeParsingTest(unittest.TestCase):
 
         locally_scored = parse_judge_response(
             '{"score":1.0,"correctness":0.25,"grounding":0.25,"completeness":1.0,'
-            '"reason":"存在关键错误","evidence_alignment":"证据仅部分支持"}'
+            '"reason":"A material error remains.","evidence_alignment":"The evidence provides only partial support."}'
         )
         self.assertEqual(locally_scored["reported_score"], 1.0)
         self.assertEqual(locally_scored["score"], 0.5)
@@ -101,20 +101,31 @@ class JudgeParsingTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_judge_response('{"score": 0.8, "reason": "not allowed"}')
 
+    def test_parse_judge_response_rejects_non_english_explanations(self) -> None:
+        from salesbench.vqa_evaluate.judge import parse_judge_response
+
+        with self.assertRaisesRegex(ValueError, "English"):
+            parse_judge_response(
+                '{"score":1.0,"correctness":1.0,"grounding":1.0,"completeness":1.0,'
+                '"reason":"完全正确","evidence_alignment":"证据一致"}'
+            )
+
 
 class JudgePromptAndContextTest(unittest.TestCase):
     def test_prompt_covers_salesbench_scores_and_four_tasks(self) -> None:
-        from salesbench.vqa_evaluate.prompts import JUDGE_SYSTEM_PROMPT, build_judge_user_prompt
+        from salesbench.vqa_evaluate.prompts import JUDGE_PROMPT_VERSION, JUDGE_SYSTEM_PROMPT, build_judge_user_prompt
 
+        self.assertEqual(JUDGE_PROMPT_VERSION, "judge-prompt-v3")
         for text in ("1.0", "0.75", "0.5", "0.25", "0"):
             self.assertIn(text, JUDGE_SYSTEM_PROMPT)
         for task_type in ("BP", "CM", "SS", "AE"):
             self.assertIn(task_type, JUDGE_SYSTEM_PROMPT)
-        self.assertIn("自然语言字段必须使用中文", JUDGE_SYSTEM_PROMPT)
-        self.assertIn("直接可观察事实", JUDGE_SYSTEM_PROMPT)
-        self.assertIn("跨模态关系", JUDGE_SYSTEM_PROMPT)
-        self.assertIn("说服机制", JUDGE_SYSTEM_PROMPT)
-        self.assertIn("有界解释", JUDGE_SYSTEM_PROMPT)
+        self.assertIn("natural-language fields must use English", JUDGE_SYSTEM_PROMPT)
+        self.assertIn("directly observable facts", JUDGE_SYSTEM_PROMPT)
+        self.assertIn("cross-modal relationship", JUDGE_SYSTEM_PROMPT)
+        self.assertIn("persuasion mechanism", JUDGE_SYSTEM_PROMPT)
+        self.assertIn("bounded interpretation", JUDGE_SYSTEM_PROMPT)
+        self.assertNotRegex(JUDGE_SYSTEM_PROMPT, r"[\u4e00-\u9fff]")
         for dimension in ("correctness", "grounding", "completeness"):
             self.assertIn(dimension, JUDGE_SYSTEM_PROMPT)
         self.assertNotIn("Performance Metadata", JUDGE_SYSTEM_PROMPT)
@@ -129,15 +140,15 @@ class JudgePromptAndContextTest(unittest.TestCase):
                 "evidence_context": {"evidence": "证据"},
             }
         )
-        for label in ("问题", "任务类型", "参考答案", "模型回答", "证据上下文"):
+        for label in ("Question", "Task Type", "Reference Answer", "Model Answer", "Evidence Context"):
             self.assertIn(label, user_prompt)
         self.assertNotIn("Performance Metadata", user_prompt)
 
     def test_context_includes_evidence_but_strips_performance_metadata(self) -> None:
         from salesbench.vqa_evaluate.context import build_judge_payload
 
-        ss_payload = build_judge_payload(_ss_gold(), {"answer": "通过现场演示建立信任。"})
-        bp_payload = build_judge_payload(_bp_gold(), {"answer": "黄色。"})
+        ss_payload = build_judge_payload(_ss_gold(), {"answer": "It builds trust through a demonstration."})
+        bp_payload = build_judge_payload(_bp_gold(), {"answer": "Yellow."})
 
         ss_text = json.dumps(ss_payload, ensure_ascii=False)
         self.assertIn("现场演示产品使用", ss_text)
@@ -184,8 +195,8 @@ class JudgeRunnerTest(unittest.TestCase):
                 "\n".join(
                     json.dumps(item, ensure_ascii=False)
                     for item in [
-                        {"vqa_id": "v1_bp_001", "answer": "包装是黄色。"},
-                        {"vqa_id": "v1_ss_001", "answer": "通过现场演示建立信任。"},
+                        {"vqa_id": "v1_bp_001", "answer": "The package is yellow."},
+                        {"vqa_id": "v1_ss_001", "answer": "It builds trust through an in-use demonstration."},
                     ]
                 )
                 + "\n",
@@ -194,8 +205,8 @@ class JudgeRunnerTest(unittest.TestCase):
 
             fake = FakeJudgeClient(
                 [
-                    '{"score": 1.0, "reason": "完全正确", "evidence_alignment": "一致"}',
-                    '{"score": 0.75, "reason": "核心正确", "evidence_alignment": "一致"}',
+                    '{"score": 1.0, "reason": "Fully correct.", "evidence_alignment": "Aligned."}',
+                    '{"score": 0.75, "reason": "The core answer is correct.", "evidence_alignment": "Aligned."}',
                 ]
             )
 
@@ -213,6 +224,7 @@ class JudgeRunnerTest(unittest.TestCase):
             self.assertTrue((output_dir / "answers_salesbench_qa_eval.json").exists())
             self.assertEqual(len(fake.calls), 2)
             self.assertEqual(fake.calls[0]["response_format"], "json_object")
+            self.assertEqual(report["judge_prompt_version"], "judge-prompt-v3")
 
 
 if __name__ == "__main__":

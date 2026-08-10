@@ -6,12 +6,22 @@ import re
 
 
 MISSING_TOKENS = {"", "-", "—", "暂无", "N/A", "NA", "None", "null", "nan"}
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 
 def clean_text(value: object) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def contains_cjk(value: object) -> bool:
+    """Return whether a nested payload contains CJK unified ideographs."""
+    if isinstance(value, dict):
+        return any(contains_cjk(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(contains_cjk(item) for item in value)
+    return isinstance(value, str) and bool(_CJK_RE.search(value))
 
 
 def is_missing(value: object) -> bool:

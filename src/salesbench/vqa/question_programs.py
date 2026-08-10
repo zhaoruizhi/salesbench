@@ -12,26 +12,26 @@ class UnsupportedQuestionProgramError(ValueError):
 
 
 QUESTION_PROGRAMS = {
-    ("BP", "COUNT_SPATIAL", "direct_question"): "视频中出现了多少个{subject}？",
-    ("BP", "ACTION", "direct_question"): "视频中人物或画面对{subject}做了什么？",
-    ("BP", "ENTITY_ATTRIBUTE", "direct_question"): "视频中{subject}的{predicate}是什么？",
-    ("BP", "OCR_FACT", "direct_question"): "视频画面文字显示，{subject}的{predicate}是什么？",
-    ("BP", "ASR_FACT", "direct_question"): "视频口播提到，{subject}的{predicate}是什么？",
-    ("BP", "STATE_CHANGE", "direct_question"): "视频中{subject}发生了什么可观察的状态变化？",
-    ("BP", "TEMPORAL_ORDER", "direct_question"): "视频中与{subject}有关的事件按什么顺序发生？",
-    ("CM", "CLAIM_EVIDENCE_RELATION", "relation_choice"): "画面或文本证据与口播/文案中关于{claim}的说法是什么关系？",
-    ("CM", "CLAIM_PARTIAL_SUPPORT", "supported_missing"): "画面中的哪些证据支持或不支持口播关于{claim}的说法？",
-    ("CM", "TEXT_VISUAL_CONSISTENCY", "relation_choice"): "口播或画面文字与画面呈现是否一致？",
-    ("SS", "HOOK_MECHANISM", "mechanism_with_evidence"): "视频开场使用了什么吸引注意的机制？请结合证据回答。",
-    ("SS", "VALUE_PROPOSITION", "mechanism_with_evidence"): "该视频主要强调了什么价值主张？请结合证据回答。",
-    ("SS", "TRUST_MECHANISM", "mechanism_with_evidence"): "该视频使用了什么建立信任的机制？请结合证据回答。",
-    ("SS", "OBJECTION_HANDLING", "mechanism_with_evidence"): "该视频如何回应潜在用户的顾虑？请结合证据回答。",
-    ("SS", "URGENCY_CTA", "mechanism_with_evidence"): "该视频使用了什么行动提示或紧迫性机制？请结合证据回答。",
-    ("SS", "FUNNEL_ROLE", "mechanism_with_evidence"): "该内容片段在吸引注意、传递信息、建立信任或促进行动中承担什么作用？请结合证据回答。",
-    ("AE", "AUDIENCE_NEED_FIT", "need_with_evidence"): "该内容主要满足哪类受众的什么需求？请说明视频证据。",
-    ("AE", "USAGE_CONTEXT", "need_with_evidence"): "该内容对应的主要使用场景是什么？请说明视频证据。",
-    ("AE", "DECISION_STATE", "need_with_evidence"): "视频内容主要回应了受众处于什么决策状态时的障碍？请说明视频证据。",
-    ("AE", "CONTENT_MOTIVATION", "need_with_evidence"): "视频通过什么可观察内容回应受众需求或促使其继续了解？请说明视频证据。",
+    ("BP", "COUNT_SPATIAL", "direct_question"): "How many {subject} are visible in the video?",
+    ("BP", "ACTION", "direct_question"): "What observable action involving {subject} occurs in the video?",
+    ("BP", "ENTITY_ATTRIBUTE", "direct_question"): "What is the {predicate} of the {subject} shown in the video?",
+    ("BP", "OCR_FACT", "direct_question"): "According to the on-screen text, what is the {subject}'s {predicate}?",
+    ("BP", "ASR_FACT", "direct_question"): "According to the speech, what is stated about the {subject}'s {predicate}?",
+    ("BP", "STATE_CHANGE", "direct_question"): "What observable state change happens to the {subject}?",
+    ("BP", "TEMPORAL_ORDER", "direct_question"): "In what order do the observable events involving the {subject} occur?",
+    ("CM", "CLAIM_EVIDENCE_RELATION", "relation_choice"): "How does the visual or textual evidence relate to the claim that {claim}?",
+    ("CM", "CLAIM_PARTIAL_SUPPORT", "supported_missing"): "Which visible evidence supports or fails to support the claim that {claim}?",
+    ("CM", "TEXT_VISUAL_CONSISTENCY", "relation_choice"): "Are the speech or on-screen text consistent with the visual content?",
+    ("SS", "HOOK_MECHANISM", "mechanism_with_evidence"): "What attention hook is used at the beginning of the video? Support the answer with observable evidence.",
+    ("SS", "VALUE_PROPOSITION", "mechanism_with_evidence"): "What main value proposition does the video emphasize? Support the answer with observable evidence.",
+    ("SS", "TRUST_MECHANISM", "mechanism_with_evidence"): "What trust-building mechanism does the video use? Support the answer with observable evidence.",
+    ("SS", "OBJECTION_HANDLING", "mechanism_with_evidence"): "How does the video address a potential buyer concern? Support the answer with observable evidence.",
+    ("SS", "URGENCY_CTA", "mechanism_with_evidence"): "What call to action or urgency mechanism does the video use? Support the answer with observable evidence.",
+    ("SS", "FUNNEL_ROLE", "mechanism_with_evidence"): "What role does this segment play in gaining attention, explaining value, building trust, or prompting action? Support the answer with observable evidence.",
+    ("AE", "AUDIENCE_NEED_FIT", "need_with_evidence"): "What audience need represented by the content does the video address? Support the answer with observable evidence.",
+    ("AE", "USAGE_CONTEXT", "need_with_evidence"): "What primary usage context does the content present? Support the answer with observable evidence.",
+    ("AE", "DECISION_STATE", "need_with_evidence"): "What decision barrier represented by the content does the video address? Support the answer with observable evidence.",
+    ("AE", "CONTENT_MOTIVATION", "need_with_evidence"): "How does the observable content address a need or encourage further consideration? Support the answer with observable evidence.",
 }
 
 
@@ -56,24 +56,24 @@ def _first_value(payload: dict[str, object], keys: tuple[str, ...]) -> str:
 def _format_context(item: GoldItem) -> dict[str, object]:
     context = dict(item.target)
     context.update(item.gold_value)
-    context.setdefault("subject", item.target.get("subject") or item.gold_value.get("subject") or "目标对象")
-    context.setdefault("predicate", item.target.get("predicate") or item.gold_value.get("predicate") or "可观察信息")
-    context.setdefault("claim", item.target.get("claim") or item.gold_value.get("claim") or "该说法")
-    context.setdefault("mechanism", item.target.get("mechanism") or item.gold_value.get("label") or "该机制")
+    context.setdefault("subject", item.target.get("subject") or item.gold_value.get("subject") or "target object")
+    context.setdefault("predicate", item.target.get("predicate") or item.gold_value.get("predicate") or "observable attribute")
+    context.setdefault("claim", item.target.get("claim") or item.gold_value.get("claim") or "the stated claim")
+    context.setdefault("mechanism", item.target.get("mechanism") or item.gold_value.get("label") or "the mechanism")
     label_map = {
-        "product": "产品",
-        "video": "视频",
-        "brand": "品牌",
-        "method": "方法",
-        "platform": "平台",
-        "color": "颜色",
-        "type": "类型",
-        "feature": "特征",
-        "price": "价格",
-        "title": "标题",
-        "name": "名称",
-        "count": "数量",
-        "action": "动作",
+        "product": "product",
+        "video": "video",
+        "brand": "brand",
+        "method": "method",
+        "platform": "platform",
+        "color": "color",
+        "type": "type",
+        "feature": "feature",
+        "price": "price",
+        "title": "title",
+        "name": "name",
+        "count": "count",
+        "action": "action",
     }
     for key in ("subject", "predicate"):
         value = str(context.get(key) or "")
@@ -83,7 +83,7 @@ def _format_context(item: GoldItem) -> dict[str, object]:
 
 def derive_answer(item: GoldItem) -> str:
     if item.task_type.value == "CM":
-        return _first_value(item.gold_value, ("relation", "answer"))
+        return _first_value(item.gold_value, ("answer", "relation"))
     if item.task_type.value == "BP":
         return _first_value(item.gold_value, ("action", "count", "value", "answer"))
     if item.task_type.value == "SS":

@@ -195,7 +195,7 @@ def test_render_workbench_has_interaction_contract_without_private_fields() -> N
     assert "v6 运行快照" in html
     assert "v8 当前代码" in html
     assert "Gold Challenger" in html
-    assert "资深多模态评测员" in html
+    assert "senior multimodal evaluator" in html
     assert "自动风险概览" in html
     assert "\"likes\"" not in html
     assert "\"followers\"" not in html

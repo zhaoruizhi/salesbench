@@ -73,23 +73,23 @@
 - Consumes: accepted English `GroundedAnnotation` records.
 - Produces: English BP/CM/SS/AE questions and reference answers, English task-specific Judge payloads, and a bumped QA compiler/Judge prompt fingerprint.
 
-- [ ] **Step 1: Write failing English-output and Judge tests**
+- [x] **Step 1: Write failing English-output and Judge tests**
 
   Add literal fixtures asserting all four compiled tasks produce English questions/answers, reject CJK in normalized public QA fields, preserve original-language evidence separately, and request English-only Judge explanations.
 
-- [ ] **Step 2: Run focused tests and confirm failures**
+- [x] **Step 2: Run focused tests and confirm failures**
 
   Run: `pytest -q tests/test_vqa_question_programs.py tests/test_vqa_compiler.py tests/test_vqa_evaluate.py`
 
-- [ ] **Step 3: Translate templates and enforce public-language boundaries**
+- [x] **Step 3: Translate templates and enforce public-language boundaries**
 
   Replace Chinese templates/default labels with English, add compiler validation at the public dataset boundary, rewrite the Judge prompt/rubrics in English, and bump compiler/Judge prompt versions.
 
-- [ ] **Step 4: Run focused and full tests**
+- [x] **Step 4: Run focused and full tests**
 
   Run the focused command from Step 2, then `pytest -q`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   Commit message: `feat: normalize vqa and judge output to English`
 

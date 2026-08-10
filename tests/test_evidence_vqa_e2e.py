@@ -212,7 +212,7 @@ class EvidenceVQAE2ETest(unittest.TestCase):
                 bank_filename="video_evidence_dataset.jsonl",
             )
             public_items = read_records(qa_dir / "vqa_public.jsonl")
-            answer_client = RepeatingClient("基于画面和口播作答。", "fake-model")
+            answer_client = RepeatingClient("The answer is based on the frames and speech.", "fake-model")
             run_meta = run_salesbench_qa_baseline_records(
                 public_items,
                 {"v1": {"video_id": "v1", "video_text": "适合通勤，画面现场演示。"}},
@@ -222,7 +222,7 @@ class EvidenceVQAE2ETest(unittest.TestCase):
                 max_workers=1,
             )
             judge_client = RepeatingClient(
-                '{"score": 1.0, "reason": "正确", "evidence_alignment": "一致"}',
+                '{"score": 1.0, "reason": "The answer is correct.", "evidence_alignment": "The evidence aligns."}',
                 "fake-judge",
             )
             report = evaluate_salesbench_qa_files(
