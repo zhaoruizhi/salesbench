@@ -110,13 +110,30 @@ class GoldBankRunnerTest(unittest.TestCase):
         self.assertEqual(first.calls, ["v2", "v1"])
         self.assertEqual(second.calls, [])
 
-    def test_resume_retries_non_ok_video_ids(self):
+    def test_resume_reuses_terminal_partial_candidate_with_no_failed_trace(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
             run_gold_bank_records(self.records(), self.pilot_config(), output_dir, FakePipeline())
             part_path = output_dir / ".parts" / "v2" / "result.json"
             payload = json.loads(part_path.read_text(encoding="utf-8"))
             payload["status"] = "partial"
+            part_path.write_text(json.dumps(payload), encoding="utf-8")
+            resumed = FakePipeline()
+
+            run_gold_bank_records(self.records(), self.pilot_config(), output_dir, resumed)
+
+        self.assertEqual(resumed.calls, [])
+
+    def test_resume_retries_partial_video_with_a_failed_trace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            run_gold_bank_records(self.records(), self.pilot_config(), output_dir, FakePipeline())
+            part_path = output_dir / ".parts" / "v2" / "result.json"
+            payload = json.loads(part_path.read_text(encoding="utf-8"))
+            payload["status"] = "partial"
+            payload["agent_traces"].append(
+                {"stage": "language_evidence_extraction", "success": False, "error": "bad output"}
+            )
             part_path.write_text(json.dumps(payload), encoding="utf-8")
             retry = FakePipeline()
 

@@ -158,6 +158,15 @@ def _frame_indices(raw: dict[str, object], source_locator: str) -> tuple[int, ..
     return (int(match.group(1)),) if match else ()
 
 
+def _normalize_attributes(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, (list, tuple)):
+        return {"items": list(value)} if value else {}
+    normalized = normalize_text(value)
+    return {"value": normalized} if normalized else {}
+
+
 def normalize_evidence_units(video_id: str, raw_units: list[dict[str, object]]) -> list[EvidenceUnit]:
     units: list[EvidenceUnit] = []
     used_ids: set[str] = set()
@@ -177,7 +186,7 @@ def normalize_evidence_units(video_id: str, raw_units: list[dict[str, object]]) 
         if not evidence_id or evidence_id in used_ids:
             evidence_id = make_evidence_id(video_id, modality, idx)
         used_ids.add(evidence_id)
-        attributes = dict(raw.get("attributes") or {})
+        attributes = _normalize_attributes(raw.get("attributes"))
         if source_locator and source_locator != evidence_id:
             attributes.setdefault("source_locator", source_locator)
         text_span = normalize_text(raw.get("source_text_native") or raw.get("text_span"))

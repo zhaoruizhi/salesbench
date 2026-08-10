@@ -95,7 +95,14 @@ def _load_completed(
             payload = json.loads(path.read_text(encoding="utf-8"))
             if clean_text(payload.get("pipeline_fingerprint")) != fingerprints.get(video_id):
                 continue
-            if clean_text(payload.get("status")) != "ok":
+            status = clean_text(payload.get("status"))
+            traces = list(payload.get("agent_traces") or [])
+            terminal_partial = (
+                status == "partial"
+                and isinstance(payload.get("video_gold_record"), dict)
+                and not any(isinstance(trace, dict) and trace.get("success") is False for trace in traces)
+            )
+            if status != "ok" and not terminal_partial:
                 continue
             completed[video_id] = _payload_to_result(payload)
         except (json.JSONDecodeError, OSError, ValueError):

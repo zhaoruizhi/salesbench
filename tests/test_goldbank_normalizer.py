@@ -83,6 +83,26 @@ class EvidenceNormalizerTest(unittest.TestCase):
         self.assertEqual(units[0].content_en, "speaker claims a price a little over ten yuan")
         self.assertNotIn("text_span", units[0].to_dict())
 
+    def test_normalizes_model_attribute_lists_without_dropping_the_evidence_batch(self):
+        unit = normalize_evidence_units(
+            "v1",
+            [
+                {
+                    "modality": "asr",
+                    "source_text_native": "适合日常妆",
+                    "subject": "speaker",
+                    "predicate": "claims",
+                    "value": "the product suits daily makeup",
+                    "content_en": "The speaker claims that the product suits daily makeup.",
+                    "attributes": ["daily use", "makeup style"],
+                    "confidence": 0.9,
+                }
+            ],
+        )[0]
+
+        self.assertEqual(unit.attributes, {"items": ["daily use", "makeup style"]})
+        self.assertFalse(validate_evidence_unit(unit))
+
     def test_normalizes_commerce_graph_with_local_ids_and_local_provenance(self):
         evidence_units = normalize_evidence_units(
             "v1",
