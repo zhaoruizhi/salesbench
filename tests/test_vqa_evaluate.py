@@ -49,7 +49,9 @@ def _bp_gold() -> dict[str, object]:
         "question": "What color is the product package shown in the video?",
         "gold_answer": "The package is yellow.",
         "answer_type": "open",
-        "evidence_context": [{"evidence_id": "e1", "modality": "visual", "text_span": "画面展示黄色包装。"}],
+        "capability": "PRODUCT_IDENTITY",
+        "reasoning_operator": "READ_GROUNDED_VALUE",
+        "evidence_context": [{"evidence_id": "e1", "modality": "visual", "content_en": "The frame shows yellow packaging.", "source_text_native": "画面展示黄色包装。"}],
     }
 
 
@@ -62,7 +64,14 @@ def _ss_gold() -> dict[str, object]:
         "question": "How does the video build trust?",
         "gold_answer": "It builds trust through an in-use demonstration.",
         "answer_type": "open",
-        "evidence_context": [{"evidence_id": "e2", "modality": "visual", "text_span": "现场演示产品使用。"}],
+        "task_subtype": "PROCESS_DEMONSTRATION",
+        "capability": "PROCESS_DEMONSTRATION",
+        "reasoning_operator": "INTERPRET_PROCESS_ROLE",
+        "evidence_context": [{"evidence_id": "e2", "modality": "visual", "content_en": "The host demonstrates the product in use.", "source_text_native": "现场演示产品使用。"}],
+        "graph_context": {
+            "commerce_cues": [{"cue_id": "c1", "cue_type": "PROCESS_DEMONSTRATION", "content_en": "The host demonstrates the product in use.", "source_text_native": "现场演示产品使用。"}],
+            "commercial_relations": [{"relation_id": "r1", "relation_type": "CONTENT_PRECEDES_CTA", "status": "SUPPORTED", "rationale_en": "The demonstration appears before the action prompt."}],
+        },
         "performance_metadata": {"likes": 100, "collects": 80, "shares": 20, "comments": 5},
     }
 
@@ -95,6 +104,24 @@ class JudgeParsingTest(unittest.TestCase):
         self.assertEqual(locally_scored["reported_score"], 1.0)
         self.assertEqual(locally_scored["score"], 0.5)
 
+        diagnosed = parse_judge_response(
+            '{"score":0.5,"correctness":0.5,"grounding":0.5,"completeness":0.5,'
+            '"error_tags":["CLAIM_EVIDENCE_CONFUSION"],'
+            '"reason":"The answer treats repeated text as visual proof.",'
+            '"evidence_alignment":"The frames do not independently demonstrate the claim."}'
+        )
+        self.assertEqual(diagnosed["error_tags"], ["CLAIM_EVIDENCE_CONFUSION"])
+
+    def test_parse_judge_response_rejects_unknown_error_tag(self) -> None:
+        from salesbench.vqa_evaluate.judge import parse_judge_response
+
+        with self.assertRaisesRegex(ValueError, "error tag"):
+            parse_judge_response(
+                '{"score":0.5,"correctness":0.5,"grounding":0.5,"completeness":0.5,'
+                '"error_tags":["POPULARITY_ERROR"],"reason":"The answer is unsupported.",'
+                '"evidence_alignment":"No supplied evidence supports it."}'
+            )
+
     def test_parse_judge_response_rejects_invalid_scores(self) -> None:
         from salesbench.vqa_evaluate.judge import parse_judge_response
 
@@ -115,7 +142,7 @@ class JudgePromptAndContextTest(unittest.TestCase):
     def test_prompt_covers_salesbench_scores_and_four_tasks(self) -> None:
         from salesbench.vqa_evaluate.prompts import JUDGE_PROMPT_VERSION, JUDGE_SYSTEM_PROMPT, build_judge_user_prompt
 
-        self.assertEqual(JUDGE_PROMPT_VERSION, "judge-prompt-v3")
+        self.assertEqual(JUDGE_PROMPT_VERSION, "judge-prompt-v4")
         for text in ("1.0", "0.75", "0.5", "0.25", "0"):
             self.assertIn(text, JUDGE_SYSTEM_PROMPT)
         for task_type in ("BP", "CM", "SS", "AE"):
@@ -128,6 +155,17 @@ class JudgePromptAndContextTest(unittest.TestCase):
         self.assertNotRegex(JUDGE_SYSTEM_PROMPT, r"[\u4e00-\u9fff]")
         for dimension in ("correctness", "grounding", "completeness"):
             self.assertIn(dimension, JUDGE_SYSTEM_PROMPT)
+        for error_tag in (
+            "FACTUAL_ERROR",
+            "UNSUPPORTED_INFERENCE",
+            "MISSING_KEY_INFORMATION",
+            "CLAIM_EVIDENCE_CONFUSION",
+            "OFFER_CONDITION_MISSING",
+            "TEMPORAL_ERROR",
+            "TASK_MISUNDERSTANDING",
+            "UNANSWERED",
+        ):
+            self.assertIn(error_tag, JUDGE_SYSTEM_PROMPT)
         self.assertNotIn("Performance Metadata", JUDGE_SYSTEM_PROMPT)
         self.assertNotIn("Performance Metadata", JUDGE_SYSTEM_PROMPT)
 
@@ -151,10 +189,14 @@ class JudgePromptAndContextTest(unittest.TestCase):
         bp_payload = build_judge_payload(_bp_gold(), {"answer": "Yellow."})
 
         ss_text = json.dumps(ss_payload, ensure_ascii=False)
-        self.assertIn("现场演示产品使用", ss_text)
+        self.assertIn("The host demonstrates the product in use.", ss_text)
+        self.assertIn("PROCESS_DEMONSTRATION", ss_text)
+        self.assertIn("CONTENT_PRECEDES_CTA", ss_text)
+        self.assertNotIn("现场演示产品使用", ss_text)
         for key in ("likes", "collects", "shares", "comments"):
             self.assertNotIn(key, ss_text)
-        self.assertIn("画面展示黄色包装", json.dumps(bp_payload, ensure_ascii=False))
+        self.assertIn("The frame shows yellow packaging.", json.dumps(bp_payload, ensure_ascii=False))
+        self.assertNotIn("画面展示黄色包装", json.dumps(bp_payload, ensure_ascii=False))
 
 
 class JudgeMetricsTest(unittest.TestCase):
@@ -224,7 +266,16 @@ class JudgeRunnerTest(unittest.TestCase):
             self.assertTrue((output_dir / "answers_salesbench_qa_eval.json").exists())
             self.assertEqual(len(fake.calls), 2)
             self.assertEqual(fake.calls[0]["response_format"], "json_object")
-            self.assertEqual(report["judge_prompt_version"], "judge-prompt-v3")
+            self.assertEqual(report["judge_prompt_version"], "judge-prompt-v4")
+
+    def test_missing_answer_receives_unanswered_error_tag(self) -> None:
+        from salesbench.vqa_evaluate.runner import evaluate_salesbench_qa_records
+
+        report, details = evaluate_salesbench_qa_records([_bp_gold()], [], FakeJudgeClient([]), max_workers=1)
+
+        self.assertEqual(report["summary"]["missing_answer_count"], 1)
+        self.assertEqual(details[0]["score"], 0.0)
+        self.assertEqual(details[0]["error_tags"], ["UNANSWERED"])
 
 
 if __name__ == "__main__":

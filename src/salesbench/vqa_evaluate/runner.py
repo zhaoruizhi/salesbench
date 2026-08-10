@@ -78,6 +78,7 @@ def evaluate_salesbench_qa_records(
                     "correctness": 0.0,
                     "grounding": 0.0,
                     "completeness": 0.0,
+                    "error_tags": ["UNANSWERED"],
                     "reason": "missing_model_answer",
                     "evidence_alignment": "",
                     "judge_success": True,
@@ -113,6 +114,7 @@ def evaluate_salesbench_qa_records(
                     "task_type": "",
                     "score": None,
                     "judge_success": False,
+                    "error_tags": [],
                     "error": str(exc),
                     "cost_usd": 0.0,
                 }

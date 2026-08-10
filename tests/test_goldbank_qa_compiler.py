@@ -216,6 +216,11 @@ class GoldBankQACompilerTest(unittest.TestCase):
             gold_dir.mkdir()
             write_jsonl(gold_dir / "video_evidence_dataset.jsonl", [record])
             write_jsonl(gold_dir / "evidence_units.jsonl", [{"evidence_id": "e1", "video_id": "v1", "content_en": "The host opens the package."}])
+            write_jsonl(
+                gold_dir / "commerce_cues.jsonl",
+                [{"cue_id": "c1", "video_id": "v1", "cue_type": "PROCESS_DEMONSTRATION", "content_en": "The host opens the package.", "evidence_ids": ["e1"]}],
+            )
+            write_jsonl(gold_dir / "commercial_relations.jsonl", [])
             realizations = Path(tmp) / "qa_realizations_reviewed.jsonl"
             write_jsonl(
                 realizations,
@@ -230,10 +235,14 @@ class GoldBankQACompilerTest(unittest.TestCase):
                 realizations_path=realizations,
             )
             diversity = json.loads((out_dir / "qa_diversity.json").read_text(encoding="utf-8"))
+            private = json.loads((out_dir / "vqa_gold_private.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            public = json.loads((out_dir / "vqa_public.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(summary["compiler_version"], "evidence-qa-compiler-v5")
         self.assertEqual(diversity["exact_duplicate_count"], 0)
         self.assertIn("normalized_stem_clusters", diversity)
+        self.assertEqual(private["graph_context"]["commerce_cues"][0]["cue_id"], "c1")
+        self.assertNotIn("graph_context", public)
 
     def test_question_does_not_leak_answer(self):
         qa, validation = compile_qa_records(load_compilable_gold_from_records([gold_record()]), CompilePolicy())

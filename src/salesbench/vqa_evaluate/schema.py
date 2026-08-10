@@ -9,6 +9,18 @@ from ..utils import clean_text
 
 ALLOWED_SCORES = (0.0, 0.25, 0.5, 0.75, 1.0)
 TASK_TYPES = ("BP", "CM", "SS", "AE")
+JUDGE_ERROR_TAGS = frozenset(
+    {
+        "FACTUAL_ERROR",
+        "UNSUPPORTED_INFERENCE",
+        "MISSING_KEY_INFORMATION",
+        "CLAIM_EVIDENCE_CONFUSION",
+        "OFFER_CONDITION_MISSING",
+        "TEMPORAL_ERROR",
+        "TASK_MISUNDERSTANDING",
+        "UNANSWERED",
+    }
+)
 
 
 def coerce_allowed_score(value: object) -> float:

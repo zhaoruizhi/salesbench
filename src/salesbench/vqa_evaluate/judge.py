@@ -11,7 +11,7 @@ from ..vlm.api_client import APICallResult, VLMClient
 from ..vlm.response_parser import _try_parse_json
 from .context import build_judge_payload
 from .prompts import JUDGE_SYSTEM_PROMPT, build_judge_user_prompt
-from .schema import coerce_allowed_score, normalize_task_type
+from .schema import JUDGE_ERROR_TAGS, coerce_allowed_score, normalize_task_type
 
 
 ANSWER_LINE_RE = re.compile(r"Answer\s*:\s*(1(?:\.0)?|0\.75|0\.5(?:0)?|0\.25|0(?:\.0)?)\b", re.IGNORECASE)
@@ -49,12 +49,20 @@ def parse_judge_response(raw_text: str) -> dict[str, Any]:
             score = reported_score
         reason = clean_text(parsed.get("reason"))
         evidence_alignment = clean_text(parsed.get("evidence_alignment"))
+        raw_tags = parsed.get("error_tags") or []
+        if not isinstance(raw_tags, list):
+            raise ValueError("Judge error_tags must be a list")
+        error_tags = list(dict.fromkeys(clean_text(value).upper() for value in raw_tags if clean_text(value)))
+        invalid_tags = [value for value in error_tags if value not in JUDGE_ERROR_TAGS]
+        if invalid_tags:
+            raise ValueError(f"Unknown Judge error tag: {invalid_tags}")
         if contains_cjk((reason, evidence_alignment)):
             raise ValueError("Judge natural-language output must use English")
         return {
             "score": score,
             "reported_score": reported_score,
             **dimension_values,
+            "error_tags": error_tags,
             "reason": reason,
             "evidence_alignment": evidence_alignment,
         }
@@ -75,6 +83,7 @@ def parse_judge_response(raw_text: str) -> dict[str, Any]:
         "correctness": None,
         "grounding": None,
         "completeness": None,
+        "error_tags": [],
         "reason": reason,
         "evidence_alignment": "",
     }
@@ -94,6 +103,7 @@ def _failure_detail(gold_record: dict[str, Any], answer_record: dict[str, Any], 
         "correctness": None,
         "grounding": None,
         "completeness": None,
+        "error_tags": [],
         "reason": "",
         "evidence_alignment": "",
         "judge_success": False,
@@ -138,6 +148,7 @@ def judge_qa_item(
         "correctness": parsed.get("correctness"),
         "grounding": parsed.get("grounding"),
         "completeness": parsed.get("completeness"),
+        "error_tags": parsed.get("error_tags", []),
         "reason": parsed.get("reason", ""),
         "evidence_alignment": parsed.get("evidence_alignment", ""),
         "judge_success": True,

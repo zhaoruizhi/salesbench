@@ -126,7 +126,13 @@ class BenchmarkConvergenceTest(unittest.TestCase):
                 "task_type": "SS",
                 "question": "视频如何建立信任？",
                 "gold_answer": "通过演示",
-                "evidence_refs": [{"evidence_id": "e1", "text_span": "现场演示"}],
+                "evidence_refs": [
+                    {
+                        "evidence_id": "e1",
+                        "content_en": "The host demonstrates the product in use.",
+                        "source_text_native": "现场演示",
+                    }
+                ],
                 "private_analysis_metadata": {"likes": 100},
                 "followers_total": 999,
             },
@@ -136,7 +142,8 @@ class BenchmarkConvergenceTest(unittest.TestCase):
         text = str(payload)
         self.assertNotIn("likes", text)
         self.assertNotIn("followers", text)
-        self.assertIn("现场演示", text)
+        self.assertIn("The host demonstrates the product in use.", text)
+        self.assertNotIn("现场演示", text)
 
     def test_missing_answer_is_scored_zero(self):
         report, details = evaluate_salesbench_qa_records(

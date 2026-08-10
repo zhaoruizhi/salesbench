@@ -46,6 +46,7 @@ def _public_qa(record: dict[str, object]) -> dict[str, object]:
             "answer",
             "evidence_refs",
             "evidence_context",
+            "graph_context",
             "gold_value",
             "source_annotation_ids",
             "quality_status",
@@ -280,12 +281,51 @@ def compile_vqa_from_gold(
         for record in read_jsonl(gold_bank_dir / "evidence_units.jsonl")
         if clean_text(record.get("evidence_id"))
     } if (gold_bank_dir / "evidence_units.jsonl").exists() else {}
+    cue_lookup = {
+        clean_text(record.get("cue_id")): record
+        for record in read_jsonl(gold_bank_dir / "commerce_cues.jsonl")
+        if clean_text(record.get("cue_id"))
+    } if (gold_bank_dir / "commerce_cues.jsonl").exists() else {}
+    relation_lookup = {
+        clean_text(record.get("relation_id")): record
+        for record in read_jsonl(gold_bank_dir / "commercial_relations.jsonl")
+        if clean_text(record.get("relation_id"))
+    } if (gold_bank_dir / "commercial_relations.jsonl").exists() else {}
     for record in qa_records:
         record["evidence_context"] = [
             evidence_lookup[evidence_id]
             for evidence_id in record.get("evidence_refs", [])
             if evidence_id in evidence_lookup
         ]
+        record["graph_context"] = {
+            "commerce_cues": [
+                {
+                    key: cue_lookup[cue_id][key]
+                    for key in ("cue_id", "cue_type", "content_en", "evidence_ids", "directness")
+                    if key in cue_lookup[cue_id]
+                }
+                for cue_id in record.get("commerce_cue_ids", [])
+                if cue_id in cue_lookup
+            ],
+            "commercial_relations": [
+                {
+                    key: relation_lookup[relation_id][key]
+                    for key in (
+                        "relation_id",
+                        "relation_type",
+                        "source_cue_ids",
+                        "target_cue_ids",
+                        "evidence_ids",
+                        "status",
+                        "rationale_en",
+                        "provenance",
+                    )
+                    if key in relation_lookup[relation_id]
+                }
+                for relation_id in record.get("commercial_relation_ids", [])
+                if relation_id in relation_lookup
+            ],
+        }
 
     qa_plan = [
         {
