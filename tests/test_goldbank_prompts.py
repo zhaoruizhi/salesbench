@@ -24,6 +24,7 @@ from salesbench.goldbank.prompts import (  # noqa: E402
     build_language_evidence_prompt,
     build_proposer_prompt,
     build_visual_evidence_prompt,
+    build_visual_commerce_cue_prompt,
 )
 
 
@@ -167,6 +168,18 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn("ASR-only performance", system)
         self.assertIn("must not become PRODUCT_ATTRIBUTE", system)
         self.assertIn("must not become PROCESS_DEMONSTRATION", system)
+
+    def test_visual_cue_repair_prompt_requires_visual_grounding(self):
+        system, user = build_visual_commerce_cue_prompt(
+            "v1",
+            [{"evidence_id": "e_visual", "modality": "visual", "content_en": "A host applies lip gloss."}],
+        )
+
+        self.assertIn("Visual Commerce Cue Extractor", system)
+        self.assertIn("PROCESS_DEMONSTRATION", system)
+        self.assertIn("must cite at least one visual EvidenceUnit", system)
+        self.assertIn("e_visual", user)
+        self.assertNotRegex(system, r"[\u4e00-\u9fff]")
 
     def test_unknown_or_legacy_proposer_name_is_rejected(self):
         for name in ("consumer", "operator", "strategist", "unknown"):

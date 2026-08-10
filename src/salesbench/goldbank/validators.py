@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..utils import clean_text, contains_cjk
-from .commerce_ontology import relation_rule
-from .commerce_schema import CommerceCue, CommercialRelation
+from .commerce_ontology import DEMONSTRATION_CUES, relation_rule
+from .commerce_schema import CommerceCue, CommercialRelation, RelationType
 from .normalizer import semantic_key, semantic_target_key
 from .ontology import (
     CM_RELATIONS,
@@ -222,6 +222,18 @@ def validate_commerce_cue(
                     f"Evidence {evidence_id} belongs to {unit.video_id}",
                 )
             )
+    if cue.cue_type in DEMONSTRATION_CUES and not any(
+        evidence_id in evidence and evidence[evidence_id].modality.value == "visual"
+        for evidence_id in cue.evidence_ids
+    ):
+        issues.append(
+            ValidationIssue(
+                "DEMONSTRATION_REQUIRES_VISUAL_EVIDENCE",
+                "ERROR",
+                cue.cue_id,
+                "Demonstration cues require a localized visual EvidenceUnit",
+            )
+        )
     if cue.directness not in {"DIRECT", "INFERRED", "NEEDS_REVIEW"}:
         issues.append(ValidationIssue("INVALID_DIRECTNESS", "ERROR", cue.cue_id, cue.directness))
     if contains_private_fields(cue.to_dict()):
@@ -275,6 +287,27 @@ def validate_commercial_relation(
                     "ERROR",
                     relation.relation_id,
                     f"{cue.cue_type.value} cannot be a target for {relation.relation_type.value}",
+                )
+            )
+
+    if relation.relation_type in {
+        RelationType.CLAIM_SUPPORTED_BY_DEMONSTRATION,
+        RelationType.CLAIM_PARTIALLY_SUPPORTED,
+        RelationType.CLAIM_TEMPORALLY_MISALIGNED,
+    }:
+        target_has_visual = any(
+            evidence_id in evidence and evidence[evidence_id].modality.value == "visual"
+            for cue_id in relation.target_cue_ids
+            if cue_id in cues
+            for evidence_id in cues[cue_id].evidence_ids
+        )
+        if not target_has_visual:
+            issues.append(
+                ValidationIssue(
+                    "DEMONSTRATION_REQUIRES_VISUAL_EVIDENCE",
+                    "ERROR",
+                    relation.relation_id,
+                    "Claim-demonstration relations require visual evidence at the demonstration endpoint",
                 )
             )
 

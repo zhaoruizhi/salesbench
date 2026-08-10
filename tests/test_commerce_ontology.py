@@ -146,3 +146,56 @@ def test_cue_rejects_non_english_canonical_semantics():
     issues = validate_commerce_cue(cue, {evidence.evidence_id: evidence})
 
     assert "NON_ENGLISH_CANONICAL_TEXT" in {issue.code for issue in issues}
+
+
+def test_demonstration_cue_and_claim_support_relation_require_visual_evidence():
+    claim_evidence = _evidence("e_claim", EvidenceModality.ASR)
+    described_demo_evidence = _evidence("e_described_demo", EvidenceModality.ASR)
+    claim = _cue(
+        CueType.FUNCTION_CLAIM,
+        "cue_claim",
+        (claim_evidence.evidence_id,),
+        "The speaker claims that the cable supports fast charging.",
+    )
+    described_demo = _cue(
+        CueType.PROCESS_DEMONSTRATION,
+        "cue_demo",
+        (described_demo_evidence.evidence_id,),
+        "The speaker says that the cable was tested with a phone.",
+    )
+    evidence = {
+        claim_evidence.evidence_id: claim_evidence,
+        described_demo_evidence.evidence_id: described_demo_evidence,
+    }
+    relation = CommercialRelation(
+        relation_id=make_relation_id(
+            "v1",
+            RelationType.CLAIM_SUPPORTED_BY_DEMONSTRATION,
+            (claim.cue_id,),
+            (described_demo.cue_id,),
+        ),
+        video_id="v1",
+        relation_type=RelationType.CLAIM_SUPPORTED_BY_DEMONSTRATION,
+        source_cue_ids=(claim.cue_id,),
+        target_cue_ids=(described_demo.cue_id,),
+        evidence_ids=tuple(evidence),
+        status="SUPPORTED",
+        rationale_en="The spoken claim is paired only with a spoken description of a test.",
+        provenance=RelationProvenance.THEORY_OPERATIONALIZED,
+        directness="INFERRED",
+        extractor="test",
+        confidence=0.9,
+    )
+
+    cue_codes = {issue.code for issue in validate_commerce_cue(described_demo, evidence)}
+    relation_codes = {
+        issue.code
+        for issue in validate_commercial_relation(
+            relation,
+            {claim.cue_id: claim, described_demo.cue_id: described_demo},
+            evidence,
+        )
+    }
+
+    assert "DEMONSTRATION_REQUIRES_VISUAL_EVIDENCE" in cue_codes
+    assert "DEMONSTRATION_REQUIRES_VISUAL_EVIDENCE" in relation_codes

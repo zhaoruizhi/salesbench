@@ -27,6 +27,7 @@ from salesbench.goldbank.prompts import (
     build_language_evidence_prompt,
     build_proposer_prompt,
     build_visual_evidence_prompt,
+    build_visual_commerce_cue_prompt,
 )
 from salesbench.goldbank.validators import PRIVATE_KEYS
 from salesbench.vqa_evaluate.prompts import JUDGE_PROMPT_VERSION, JUDGE_SYSTEM_PROMPT, build_judge_user_prompt
@@ -288,6 +289,16 @@ def collect_prompt_snapshot() -> list[dict[str, Any]]:
             )[1],
             "observed": ["独立处理帧与 OCR，并要求至少一条可见事实。"],
             "recommendations": ["核对 OCR 是否排除了重复字幕、账号水印和互动计数。"],
+        },
+        {
+            "id": "visual_commerce_cue_extractor",
+            "name": "Visual Commerce Cue Repair",
+            "stage": "CommerceCue / Visual coverage",
+            "version": PROMPT_VERSION,
+            "system": build_visual_commerce_cue_prompt("{{video_id}}", placeholder_evidence)[0],
+            "user_template": build_visual_commerce_cue_prompt("{{video_id}}", placeholder_evidence)[1],
+            "observed": ["仅在综合 Cue 阶段未覆盖视觉证据时触发。"],
+            "recommendations": ["演示、结果和前后对比 Cue 必须引用可定位视觉帧。"],
         },
         {
             "id": "evidence_extractor",

@@ -273,6 +273,39 @@ class GoldBankPipelineTest(unittest.TestCase):
         self.assertEqual({unit["modality"] for unit in result.evidence_units}, {"asr", "visual"})
         self.assertEqual(vlm.calls[0]["user_content"][0]["text"], "[FRAME frame_index=0 timestamp_s=0.0]")
 
+    def test_pipeline_repairs_missing_visual_commerce_cues_before_relations(self):
+        responses = successful_responses_with_two_evidence()
+        visual_raw, asr_raw = responses[0]["evidence_units"]
+        initial_cues = {
+            "commerce_cues": [responses[1]["commerce_cues"][1]],
+            "abstentions": [],
+        }
+        visual_cues = {
+            "commerce_cues": [responses[1]["commerce_cues"][0]],
+            "abstentions": [],
+        }
+        vlm = FakeGoldClient([{"evidence_units": [visual_raw]}])
+        llm = FakeGoldClient(
+            [
+                {"evidence_units": [asr_raw]},
+                initial_cues,
+                visual_cues,
+                *responses[2:],
+            ]
+        )
+        split_bundle = build_context_bundle(
+            "v1",
+            raw_video={"video_id": "v1", "video_text": "这款产品采用编织材质"},
+            frames=[{"frame_index": 0, "timestamp_s": 0.0, "path": "/tmp/f0.jpg"}],
+        )
+
+        result = GoldBankPipeline(vlm, llm).run_video(split_bundle, frames_b64=["AAA"])
+
+        stages = [trace["stage"] for trace in result.agent_traces]
+        self.assertIn("visual_commerce_cue_repair", stages)
+        process = next(cue for cue in result.commerce_cues if cue["cue_type"] == "PROCESS_DEMONSTRATION")
+        self.assertEqual(process["evidence_ids"], ["v1_visual_000_abc"])
+
     def test_bp_preserves_spoken_claim_boundary_and_requires_visual_demonstration(self):
         evidence = EvidenceUnit(
             evidence_id="v1_asr_000_claim",

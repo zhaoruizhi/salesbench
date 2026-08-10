@@ -9,6 +9,7 @@ from ..multiagent.context import public_observation_context
 from ..multiagent.schema import VideoContextBundle
 from ..utils import clean_text
 from ..vlm.api_client import APICallResult, VLMClient
+from .commerce_ontology import DEMONSTRATION_CUES
 from .commerce_schema import CommerceCue, CommercialRelation, CueType
 from .normalizer import (
     normalize_commerce_cues,
@@ -36,6 +37,7 @@ from .prompts import (
     build_language_evidence_prompt,
     build_proposer_prompt,
     build_visual_evidence_prompt,
+    build_visual_commerce_cue_prompt,
 )
 from .schema import (
     SCHEMA_VERSION,
@@ -582,6 +584,116 @@ class GoldBankPipeline:
                 agent_traces=traces,
                 status="partial",
             )
+
+        visual_evidence_ids = {
+            unit.evidence_id for unit in evidence_units if unit.modality == EvidenceModality.VISUAL
+        }
+        visual_cue_types = {
+            CueType.PRODUCT_IDENTITY,
+            CueType.PRODUCT_ATTRIBUTE,
+            CueType.PRODUCT_VARIANT,
+            CueType.USAGE_SCENARIO,
+            CueType.COMPARISON_ANCHOR,
+            CueType.CREDIBILITY_SIGNAL,
+            *DEMONSTRATION_CUES,
+        }
+        has_visual_commerce_cue = any(
+            cue.cue_type in visual_cue_types and visual_evidence_ids.intersection(cue.evidence_ids)
+            for cue in commerce_cues
+        )
+        if visual_evidence_ids and not has_visual_commerce_cue:
+            visual_cue_system, visual_cue_user = build_visual_commerce_cue_prompt(
+                video_id,
+                [
+                    unit.to_dict()
+                    for unit in evidence_units
+                    if unit.modality in {EvidenceModality.VISUAL, EvidenceModality.OCR}
+                ],
+            )
+            visual_cue_call = self.llm_client.call_text_only(
+                visual_cue_system,
+                visual_cue_user,
+                response_format="json_object",
+            )
+            if not visual_cue_call.success:
+                status = "partial"
+                traces.append(
+                    _trace(
+                        "visual_commerce_cue_repair",
+                        "visual_commerce_cue_extractor",
+                        visual_cue_call,
+                        error=visual_cue_call.error,
+                    )
+                )
+            else:
+                try:
+                    visual_cue_raw, visual_cue_abstentions = parse_commerce_cue_response(
+                        visual_cue_call.raw_response
+                    )
+                    used_cue_ids = {cue.cue_id for cue in commerce_cues}
+                    for raw_cue in visual_cue_raw:
+                        try:
+                            cue = normalize_commerce_cues(video_id, [raw_cue], evidence_dict)[0]
+                        except (ValueError, IndexError) as exc:
+                            status = "partial"
+                            human_review_queue.append(
+                                _review_queue_item(
+                                    video_id,
+                                    f"visual_commerce_cue_parse_error: {exc}",
+                                    raw_cue,
+                                    stage="visual_commerce_cue_repair",
+                                    item_type="commerce_cue",
+                                )
+                            )
+                            continue
+                        issues = validate_commerce_cue(cue, evidence_dict)
+                        if any(issue.severity == "ERROR" for issue in issues):
+                            status = "partial"
+                            human_review_queue.append(
+                                _review_queue_item(
+                                    video_id,
+                                    "visual_commerce_cue_validation_failed",
+                                    cue.to_dict(),
+                                    issues,
+                                    stage="visual_commerce_cue_repair",
+                                    item_type="commerce_cue",
+                                )
+                            )
+                            continue
+                        if cue.confidence < self.min_confidence or cue.cue_id in used_cue_ids:
+                            continue
+                        used_cue_ids.add(cue.cue_id)
+                        commerce_cues.append(cue)
+                    for ordinal, abstention in enumerate(visual_cue_abstentions):
+                        human_review_queue.append(
+                            _abstention_queue_item(
+                                video_id,
+                                "visual_commerce_cue_extractor",
+                                abstention,
+                                ordinal,
+                            )
+                        )
+                    traces.append(
+                        _trace(
+                            "visual_commerce_cue_repair",
+                            "visual_commerce_cue_extractor",
+                            visual_cue_call,
+                            {
+                                "commerce_cues": visual_cue_raw,
+                                "abstentions": visual_cue_abstentions,
+                            },
+                        )
+                    )
+                except (ModelOutputError, ValueError) as exc:
+                    status = "partial"
+                    traces.append(
+                        _trace(
+                            "visual_commerce_cue_repair",
+                            "visual_commerce_cue_extractor",
+                            visual_cue_call,
+                            error=str(exc),
+                        )
+                    )
 
         if not commerce_cues:
             return GoldBankResult(

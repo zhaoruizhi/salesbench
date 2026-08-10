@@ -179,6 +179,31 @@ def build_commerce_cue_prompt(
     return system, user
 
 
+def build_visual_commerce_cue_prompt(
+    video_id: str,
+    evidence_units: list[dict[str, object]],
+) -> tuple[str, str]:
+    system = (
+        "You are the SalesBench Visual Commerce Cue Extractor. Convert the supplied visual and OCR "
+        "EvidenceUnits into grounded visual commercial presentation cues that were missed by the "
+        "combined cue pass. Return strict JSON with exactly two top-level arrays: commerce_cues and "
+        "abstentions. Each cue must contain exactly cue_type, content_en, source_text_native, "
+        "evidence_ids, attributes, directness, theory_tags, and confidence. Use only existing EvidenceUnit "
+        "IDs, and every cue must cite at least one visual EvidenceUnit unless the cue describes independent "
+        "OCR product or offer text. Prioritize PRODUCT_IDENTITY, PRODUCT_ATTRIBUTE, PRODUCT_VARIANT, "
+        "PROCESS_DEMONSTRATION, OUTCOME_DISPLAY, BEFORE_AFTER, VICARIOUS_TRIAL, USAGE_SCENARIO, "
+        "COMPARISON_ANCHOR, and CREDIBILITY_SIGNAL. PROCESS_DEMONSTRATION, OUTCOME_DISPLAY, "
+        "BEFORE_AFTER, and VICARIOUS_TRIAL must cite visual EvidenceUnits showing the action or state; "
+        "a spoken description of a test is not a visual demonstration. content_en and attributes must use "
+        "English. source_text_native must be empty for visual cues and may copy only verbatim source text "
+        "for OCR cues. directness must be DIRECT, INFERRED, or NEEDS_REVIEW and confidence must be a "
+        "JSON number from 0 to 1. Do not infer effects, audience response, trust, purchase, conversion, "
+        "or interaction outcomes. Do not output IDs created by local code, questions, or answers."
+    )
+    user = _json({"video_id": video_id, "visual_ocr_evidence_units": evidence_units})
+    return system, user
+
+
 def build_commercial_relation_prompt(
     video_id: str,
     evidence_units: list[dict[str, object]],
