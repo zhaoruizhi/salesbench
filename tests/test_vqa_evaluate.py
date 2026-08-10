@@ -142,12 +142,13 @@ class JudgePromptAndContextTest(unittest.TestCase):
     def test_prompt_covers_salesbench_scores_and_four_tasks(self) -> None:
         from salesbench.vqa_evaluate.prompts import JUDGE_PROMPT_VERSION, JUDGE_SYSTEM_PROMPT, build_judge_user_prompt
 
-        self.assertEqual(JUDGE_PROMPT_VERSION, "judge-prompt-v4")
+        self.assertEqual(JUDGE_PROMPT_VERSION, "judge-prompt-v5")
         for text in ("1.0", "0.75", "0.5", "0.25", "0"):
             self.assertIn(text, JUDGE_SYSTEM_PROMPT)
         for task_type in ("BP", "CM", "SS", "AE"):
             self.assertIn(task_type, JUDGE_SYSTEM_PROMPT)
         self.assertIn("natural-language fields must use English", JUDGE_SYSTEM_PROMPT)
+        self.assertIn("Never quote or copy CJK", JUDGE_SYSTEM_PROMPT)
         self.assertIn("directly observable facts", JUDGE_SYSTEM_PROMPT)
         self.assertIn("cross-modal relationship", JUDGE_SYSTEM_PROMPT)
         self.assertIn("persuasion mechanism", JUDGE_SYSTEM_PROMPT)
@@ -266,7 +267,7 @@ class JudgeRunnerTest(unittest.TestCase):
             self.assertTrue((output_dir / "answers_salesbench_qa_eval.json").exists())
             self.assertEqual(len(fake.calls), 2)
             self.assertEqual(fake.calls[0]["response_format"], "json_object")
-            self.assertEqual(report["judge_prompt_version"], "judge-prompt-v4")
+            self.assertEqual(report["judge_prompt_version"], "judge-prompt-v5")
 
     def test_missing_answer_receives_unanswered_error_tag(self) -> None:
         from salesbench.vqa_evaluate.runner import evaluate_salesbench_qa_records

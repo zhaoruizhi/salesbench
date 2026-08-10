@@ -31,6 +31,7 @@ from .io_utils import read_json, read_jsonl, write_jsonl
 from .utils import clean_text, contains_cjk
 from .vlm.api_client import VLMClient
 from .vqa.prompts import QUESTION_REALIZER_SYSTEM_PROMPT, QUESTION_REPAIR_SYSTEM_PROMPT
+from .vqa_baseline.prompts import CLOSED_SOURCE_SYSTEM_PROMPT
 from .vqa_evaluate.prompts import JUDGE_SYSTEM_PROMPT
 
 
@@ -159,6 +160,7 @@ def _prompt_jobs() -> list[TranslationJob]:
         "adjudicator": build_adjudicator_prompt("video", [], [], [])[0],
         "question_realizer": QUESTION_REALIZER_SYSTEM_PROMPT,
         "question_repairer": QUESTION_REPAIR_SYSTEM_PROMPT,
+        "model_runner": CLOSED_SOURCE_SYSTEM_PROMPT,
         "judge": JUDGE_SYSTEM_PROMPT,
     }
     return [

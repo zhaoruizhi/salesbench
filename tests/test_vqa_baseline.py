@@ -70,7 +70,11 @@ def _video_lookup() -> dict[str, dict[str, object]]:
 
 class BaselinePromptTest(unittest.TestCase):
     def test_prompt_uses_closed_source_template_and_hides_gold_fields(self) -> None:
-        from salesbench.vqa_baseline.prompts import build_closed_source_user_prompt
+        from salesbench.vqa_baseline.prompts import (
+            BASELINE_PROMPT_VERSION,
+            CLOSED_SOURCE_SYSTEM_PROMPT,
+            build_closed_source_user_prompt,
+        )
 
         prompt = build_closed_source_user_prompt(_gold_item(), _video_lookup()["v1"])
 
@@ -78,6 +82,10 @@ class BaselinePromptTest(unittest.TestCase):
             self.assertIn(token, prompt)
         self.assertNotIn("<think>", prompt)
         self.assertNotIn("<answer>", prompt)
+        self.assertEqual(BASELINE_PROMPT_VERSION, "closed-source-prompt-v2")
+        self.assertIn("final answer in English", CLOSED_SOURCE_SYSTEM_PROMPT)
+        self.assertIn("final answer in English", prompt)
+        self.assertNotIn("answer in Chinese", CLOSED_SOURCE_SYSTEM_PROMPT + prompt)
         for forbidden in (
             "Title",
             "Product",

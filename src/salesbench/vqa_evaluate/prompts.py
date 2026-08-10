@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 
-JUDGE_PROMPT_VERSION = "judge-prompt-v4"
+JUDGE_PROMPT_VERSION = "judge-prompt-v5"
 
 JUDGE_SYSTEM_PROMPT = """# Role
 You are a senior multimodal evaluator for SalesBench-QA, a benchmark of commercial argument understanding in presenter-led e-commerce short videos. Evaluate only whether the model answer is correct, grounded in the supplied canonical English Evidence and Commercial Graph Context, and complete for the question. Never fill gaps with common knowledge, titles, interaction data, private metadata, consumer outcomes, or video content that is not supplied.
@@ -39,7 +39,7 @@ error_tags must be a JSON array containing zero or more values from this exact s
 Use no tag when the answer has no material error. Tags diagnose the score but do not create a separate metric.
 
 # Output contract
-Return one JSON object only, without Markdown. All natural-language fields must use English. JSON keys, task names, enum values, error tags, reason, and evidence_alignment must use English. Do not translate or repeat source-language provenance.
+Return one JSON object only, without Markdown. All natural-language fields must use English. JSON keys, task names, enum values, error tags, reason, and evidence_alignment must use English. Never quote or copy CJK characters from the model answer, source-language ASR, OCR, or provenance into reason or evidence_alignment. When evaluation requires discussing non-English content, paraphrase its meaning in English only while preserving exact numbers. Do not translate or repeat source-language provenance.
 {
   "score": 0.75,
   "correctness": 0.75,

@@ -37,6 +37,7 @@ from salesbench.vqa.prompts import (
     QUESTION_REALIZER_SYSTEM_PROMPT,
     QUESTION_REPAIR_SYSTEM_PROMPT,
 )
+from salesbench.vqa_baseline.prompts import BASELINE_PROMPT_VERSION, CLOSED_SOURCE_SYSTEM_PROMPT
 
 from .evidence_assets import enrich_evidence_refs, load_frame_manifests, materialize_thumbnails
 from .review_queue import normalize_review_queue_row
@@ -425,6 +426,18 @@ def collect_prompt_snapshot() -> list[dict[str, Any]]:
             },
             "observed": ["仅在首轮问题违反语言、公式化、问号或答案泄漏规则时触发一次。"],
             "recommendations": ["修复只能改写问句表面，不得改变 Gold、能力或证据引用。"],
+        }
+    )
+    prompts.append(
+        {
+            "id": "model_runner",
+            "name": "OpenAI-compatible VQA Model Runner",
+            "stage": "Evaluation / Model answer",
+            "version": BASELINE_PROMPT_VERSION,
+            "system": CLOSED_SOURCE_SYSTEM_PROMPT,
+            "user_template": "Sampled video frames + source-language ASR/subtitles + public English question",
+            "observed": ["公开问题与最终答案统一为英文，视频中的原语言内容由被测模型翻译。"],
+            "recommendations": ["模型答案不得读取 Gold、Evidence graph、任务类型或互动元数据。"],
         }
     )
     proposer_notes = {

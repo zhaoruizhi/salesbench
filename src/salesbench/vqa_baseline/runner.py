@@ -17,7 +17,7 @@ from ..vqa.schema import PUBLIC_TASKS, sanitize_model_name
 from ..vqa_evaluate.runner import evaluate_salesbench_qa_files
 from .analysis import build_analysis_markdown
 from .parser import parse_closed_source_response
-from .prompts import CLOSED_SOURCE_SYSTEM_PROMPT, build_closed_source_user_prompt
+from .prompts import BASELINE_PROMPT_VERSION, CLOSED_SOURCE_SYSTEM_PROMPT, build_closed_source_user_prompt
 
 
 def _answer_file_stem(model: str) -> str:
@@ -152,6 +152,7 @@ def run_salesbench_qa_baseline_records(
     write_jsonl(answer_path, answers)
     summary = {
         "model": model,
+        "prompt_version": BASELINE_PROMPT_VERSION,
         "vqa_count": len(items),
         "answer_count": len(answers),
         "failed_count": failed,
