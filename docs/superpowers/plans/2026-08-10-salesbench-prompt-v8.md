@@ -137,26 +137,28 @@
 **Files:**
 - Create: `configs/evidence_smoke_v8_5videos.json`
 - Create: `configs/evidence_pilot_v8_64videos.json`
-- Modify: `docs/SMALL_SAMPLE_64_VIDEO_EXECUTION_PLAN.md`
+- Modify: `docs/Pilot_64_Video_Execution_Guide.md`
+- Modify: `docs/data/EvidenceDataset_Data_Card_v2.md`
+- Modify: `tools/audit_workbench/build.py`
 - Generate (ignored): `outputs/audit/SalesBench_Prompt_Audit_Workbench_v8.html`
 
 **Interfaces:**
 - Consumes: v8 source contracts and existing v6/v7 audit artifacts.
 - Produces: separate smoke/formal configs, an explicit v8 execution guide, and a self-contained audit workbench that labels source-result versions honestly.
 
-- [ ] **Step 1: Add versioned smoke/formal configs and update execution documentation**
+- [x] **Step 1: Add versioned smoke/formal configs and update execution documentation**
 
   Preserve v7 files as historical records. Document that v8 code does not create v8 EvidenceDataset/QA/evaluation results until the API pipeline is rerun.
 
-- [ ] **Step 2: Build the v8 workbench**
+- [x] **Step 2: Build the v8 workbench**
 
   Run the workbench builder against the currently available historical artifacts and output `outputs/audit/SalesBench_Prompt_Audit_Workbench_v8.html` with clear runtime/result-version labels.
 
-- [ ] **Step 3: Verify generated data and HTML behavior**
+- [x] **Step 3: Verify generated data and HTML behavior**
 
   Check that no private fields enter public payloads, prompt tabs show BP/CM/SS/AE paths, queue rows have readable content, and lazy frame loading remains intact.
 
-- [ ] **Step 4: Run release verification**
+- [x] **Step 4: Run release verification**
 
   Run: `pytest -q`
 
@@ -164,7 +166,7 @@
 
   Run: `git diff --check`
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
   Commit message: `docs: publish prompt v8 pilot workflow`
 

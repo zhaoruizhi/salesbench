@@ -4,7 +4,7 @@
 
 当前项目中的“4 个公开数据集”应准确表述为同一 SalesBench 数据集下的 4 个公开任务集：BP、CM、SS、AE。互动分析是独立附加实验，不是第五个 VQA 任务，也不进入主榜。
 
-> 版本说明（2026-08-09）：现有 64 视频结果是 `evidence-prompt-v6` 运行快照。下一轮先使用 `configs/evidence_smoke_v7_5videos.json` 写入 `outputs/evidence/v7_smoke5_gpt4o_yunwu/`；5/5 全链路和人工抽检通过后，才使用 `configs/evidence_pilot_v7_64videos.json` 写入 `outputs/evidence/v7_pilot64_gpt4o_yunwu/`。smoke 与正式目录禁止复用，v7 也不得覆盖或重标 v6 产物。
+> 版本说明（2026-08-10）：现有 64 视频 Evidence/QA/Evaluation 是 `evidence-prompt-v6` 运行快照。Prompt v8、英文 QA/Judge 和审计队列归一化只改变当前代码，不会把旧结果自动升级为 v8。下一轮必须先使用 `configs/evidence_smoke_v8_5videos.json` 写入 `outputs/evidence/v8_smoke5_gpt4o_yunwu/`；5/5 全链路与人工抽检通过后，才使用 `configs/evidence_pilot_v8_64videos.json` 写入 `outputs/evidence/v8_pilot64_gpt4o_yunwu/`。smoke 与正式目录禁止复用，v8 也不得覆盖或重标 v6/v7 产物。
 
 ## 1. Pilot 的目标和完成标准
 
@@ -41,8 +41,9 @@
 | 资产索引 | `outputs/manifests/assets_v1.json` | `prepare` 重新生成并覆盖 |
 | 数据概况 | `outputs/reports/data_profile_v1.json` | `prepare` 重新生成并覆盖 |
 | C1-C6 派生资产 | `input/` | `build-inputs` 重新生成并覆盖 |
-| 64 视频 EvidenceDataset | `outputs/evidence/v2_pilot64/` | 独立版本目录，支持断点续跑 |
-| 64 视频 VQA | `outputs/vqa/v2_pilot64/` | 独立版本目录 |
+| 5 视频 v8 smoke EvidenceDataset | `outputs/evidence/v8_smoke5_gpt4o_yunwu/` | 仅用于结构和质量预检 |
+| 64 视频 v8 EvidenceDataset | `outputs/evidence/v8_pilot64_gpt4o_yunwu/` | 正式 pilot 目录，支持断点续跑 |
+| 64 视频 v8 VQA | `outputs/vqa/v8_pilot64_gpt4o_yunwu/` | 由审核冻结后的 v8 EvidenceDataset 编译 |
 
 因此，本文中的“重建”不是重新制作或删除原始数据，而是从现有 Excel 和素材目录重新计算可再生的 JSON/JSONL 派生文件。原始 Excel、MP4 和 PNG 始终只读；会被覆盖的是 `outputs/processed`、`outputs/manifests`、`outputs/reports` 和 `input/` 中的派生文件。
 
@@ -144,14 +145,14 @@ python salesbench.py select-evidence-cohort \
   --config configs/benchmark_v1.json \
   --total 64 \
   --seed 42 \
-  --output configs/evidence_pilot_64videos.json
+  --output configs/evidence_pilot_v8_64videos.json
 
-python -m json.tool configs/evidence_pilot_64videos.json
+python -m json.tool configs/evidence_pilot_v8_64videos.json
 ```
 
 选择器先保留默认 anchor 视频，再在“产品类别 × 粉丝层级”单元格之间轮转抽样，并优先选择不同 creator。只有 creator 数量不足时才允许重复 creator。
 
-产出 `configs/evidence_pilot_64videos.json`，重点检查：
+产出 `configs/evidence_pilot_v8_64videos.json`，重点检查：
 
 - `selection.actual_total == 64`；
 - `video_ids` 没有重复；
@@ -173,63 +174,52 @@ EvidenceDataset 生成过程使用两个 provider：
 | `--vision-model` | 16 张采样帧 + ASR/字幕 | 客观 visual/OCR/ASR EvidenceUnit 提取 |
 | `--text-model` | 已提取的结构化 EvidenceUnit | CM/SS/AE proposal、Challenger 和 Adjudicator |
 
-因此可以使用 OpenAI 视觉模型 + DeepSeek 文本模型。DeepSeek V4 官方 API 是 text-only，不能作为 `--vision-model`，但可以作为 `--text-model`。
+本轮按已确认的实验条件，两个阶段都固定使用中转站提供的 `gpt-4o`。这样 5 视频 smoke 与 64 视频正式运行只改变数据规模，不额外引入模型差异。BP 不调用 proposer，而是由本地确定性编译器从已验证 EvidenceUnit 生成。
 
-### 6.2 模型组合建议
+### 6.2 本轮固定模型
 
 | 用途 | 视觉模型 | 文本模型 | 说明 |
 | --- | --- | --- | --- |
-| 当前代码兼容性优先 | `gpt-4o` | `deepseek-v4-pro` | 可以直接尝试；适合先验证现有 Chat Completions 链路 |
-| 当前正式 pilot 建议 | `gpt-5.6-terra` | `deepseek-v4-pro` | 质量/成本平衡，但必须先完成 5 视频 smoke test |
-| 成本优先试验 | `gpt-5.6-luna` | `deepseek-v4-flash` | 适合比较成本，不建议直接作为唯一 Gold 生成配置 |
-| 质量上限对照 | `gpt-5.6-sol` | `deepseek-v4-pro` | 作为少量高质量对照，成本更高 |
+| v8 smoke 与 64 视频 pilot | `gpt-4o` | `gpt-4o` | 共用同一中转 base URL 和凭证；不同运行目录严格隔离 |
 
-OpenAI 当前官方推荐系列是 GPT-5.6；Sol 偏质量，Terra 平衡质量和成本，Luna 面向高吞吐，三者均支持 image input 和 Chat Completions。`gpt-4o` 仍与当前客户端调用方式匹配，但官方模型目录已将其列为 deprecated，因此只建议用于兼容性复现或过渡，不建议写成长期默认模型：
-
-- <https://developers.openai.com/api/docs/models>
-- <https://developers.openai.com/api/docs/models/gpt-4o>
-
-DeepSeek 当前正式模型 ID 是 `deepseek-v4-pro` 和 `deepseek-v4-flash`，OpenAI-compatible base URL 是 `https://api.deepseek.com`。旧的 `deepseek-chat` 和 `deepseek-reasoner` 已到退役日期，不应再写入新配置：
-
-- <https://api-docs.deepseek.com/quick_start/pricing/>
-- <https://api-docs.deepseek.com/updates/>
-- <https://api-docs.deepseek.com/quick_start/agent_integrations/github_copilot/>
+本轮不使用 DeepSeek。后续若比较其他 proposer 或 Judge，只能新建实验目录，并在 metadata 中记录模型、Prompt、pipeline 和 compiler 指纹，不能与本轮结果混写。
 
 ### 6.3 设置 API key
 
-不要把 key 直接放到命令参数或配置文件中。当前 CLI 不会自动读取 `.env`，应在当前终端导出环境变量：
+不要把 key 直接放到命令参数、配置或文档中。项目根目录已有被 Git 忽略的 `.env`，当前 CLI 不会自动读取它，因此在当前终端只加载变量，不打印密钥：
 
 ```bash
-export VISION_API_KEY="<OPENAI_API_KEY>"
-export VISION_BASE_URL="https://api.openai.com/v1"
-export VISION_MODEL="gpt-4o"
+set -a
+source .env
+set +a
 
-export DEEPSEEK_API_KEY="<DEEPSEEK_API_KEY>"
-export DEEPSEEK_BASE_URL="https://api.deepseek.com"
-export DEEPSEEK_MODEL="deepseek-v4-pro"
+export VISION_API_KEY="$OPENAI_API_KEY"
+export VISION_BASE_URL="$OPENAI_BASE_URL"
+export VISION_MODEL="gpt-4o"
+export TEXT_API_KEY="$OPENAI_API_KEY"
+export TEXT_BASE_URL="$OPENAI_BASE_URL"
+export TEXT_MODEL="gpt-4o"
 ```
 
-若使用当前推荐组合，将 `VISION_MODEL` 改为 `gpt-5.6-terra`。如果账号尚未开放该模型，先使用可访问的 image-input 模型完成 smoke test，不要在 64 视频正式目录中混用多个视觉模型。
-
-当前 `VLMClient` 使用 `/v1/chat/completions`，并发送 `temperature` 和 `max_tokens`。GPT-5.6 官方支持 Chat Completions 和 image input，但本项目尚未在你的实际账号和凭证下验证这些请求参数。若 smoke test 返回 unsupported parameter，不得继续跑 64 个视频：应先调整 API client 适配该 provider，或者暂时使用已经兼容的 `gpt-4o` 完成旧链路验证。文档中的 GPT-5.6 建议表示模型能力选择，不表示当前代码已经完成实网兼容认证。
+运行前只确认变量非空，不回显其值。若 smoke 出现 401、404、图片输入不支持或 JSON schema 持续失败，不得继续启动 64 视频正式目录。
 
 ### 6.4 先跑 5 视频 smoke test
 
 ```bash
 python salesbench.py build-evidence-dataset \
   --config configs/benchmark_v1.json \
-  --cohort-config configs/evidence_pilot_5videos.json \
-  --output-dir outputs/evidence/v2_smoke5 \
+  --cohort-config configs/evidence_smoke_v8_5videos.json \
+  --output-dir outputs/evidence/v8_smoke5_gpt4o_yunwu \
   --vision-base-url "$VISION_BASE_URL" \
   --vision-model "$VISION_MODEL" \
-  --text-base-url "$DEEPSEEK_BASE_URL" \
-  --text-model "$DEEPSEEK_MODEL" \
+  --text-base-url "$TEXT_BASE_URL" \
+  --text-model "$TEXT_MODEL" \
   --max-workers 1
 ```
 
 smoke test 通过标准：
 
-- `outputs/evidence/v2_smoke5/generation_meta.json` 中 5 个视频都有状态；
+- `outputs/evidence/v8_smoke5_gpt4o_yunwu/generation_meta.json` 中 5 个视频都有状态；
 - 没有大面积 `failed` 或 `review_only`；
 - `evidence_units.jsonl` 非空；
 - `agent_traces.jsonl` 中没有持续的 401、404、模型不支持图片、JSON 解析失败；
@@ -244,12 +234,12 @@ smoke test 通过后运行：
 ```bash
 python salesbench.py build-evidence-dataset \
   --config configs/benchmark_v1.json \
-  --cohort-config configs/evidence_pilot_64videos.json \
-  --output-dir outputs/evidence/v2_pilot64 \
+  --cohort-config configs/evidence_pilot_v8_64videos.json \
+  --output-dir outputs/evidence/v8_pilot64_gpt4o_yunwu \
   --vision-base-url "$VISION_BASE_URL" \
   --vision-model "$VISION_MODEL" \
-  --text-base-url "$DEEPSEEK_BASE_URL" \
-  --text-model "$DEEPSEEK_MODEL" \
+  --text-base-url "$TEXT_BASE_URL" \
+  --text-model "$TEXT_MODEL" \
   --max-workers 2
 ```
 
@@ -258,8 +248,10 @@ python salesbench.py build-evidence-dataset \
 ```text
 16 帧 + ASR/字幕
   -> 视觉模型提取 EvidenceUnit
-  -> 本地生成 BP proposal
-  -> 文本模型生成 CM/SS/AE proposal
+  -> 本地 BP compiler 确定性生成 BP candidate
+  -> CM proposer 只生成 CM candidate
+  -> SS proposer 只生成 SS candidate
+  -> AE proposer 只生成 AE candidate
   -> Challenger 检查证据、冲突、重复和因果越界
   -> Adjudicator 合并或送人工复核
   -> 本地验证、去重、质量状态赋值
@@ -282,7 +274,7 @@ python salesbench.py build-evidence-dataset \
 
 ### 7.1 断点续跑规则
 
-每个完成的视频会写入 `outputs/evidence/v2_pilot64/.parts/<video_id>/result.json`。同一命令再次运行时会复用 fingerprint 一致的已完成结果，只处理未完成或配置已变化的视频。
+每个完成的视频会写入 `outputs/evidence/v8_pilot64_gpt4o_yunwu/.parts/<video_id>/result.json`。同一命令再次运行时会复用 fingerprint 一致的已完成结果，只处理未完成或配置已变化的视频。
 
 fingerprint 包含视频 SHA256、视觉模型、文本模型、采帧策略、帧数、schema、prompt 和置信度阈值。修改任一项后，对应视频会重新计算。需要完全强制重跑时可以使用 `--no-resume`，但更推荐为新模型配置使用新的版本目录，保留可比较的旧结果。
 
@@ -290,9 +282,9 @@ fingerprint 包含视频 SHA256、视觉模型、文本模型、采帧策略、�
 
 ```bash
 python salesbench.py audit-evidence-dataset \
-  --dataset outputs/evidence/v2_pilot64/video_evidence_dataset.jsonl \
-  --evidence outputs/evidence/v2_pilot64/evidence_units.jsonl \
-  --output outputs/evidence/v2_pilot64/audit_before_review.json
+  --dataset outputs/evidence/v8_pilot64_gpt4o_yunwu/video_evidence_dataset.jsonl \
+  --evidence outputs/evidence/v8_pilot64_gpt4o_yunwu/evidence_units.jsonl \
+  --output outputs/evidence/v8_pilot64_gpt4o_yunwu/audit_before_review.json
 ```
 
 重点指标与 pilot 建议阈值：
@@ -309,6 +301,19 @@ python salesbench.py audit-evidence-dataset \
 
 自动 audit 只检查结构、引用、重复、冲突和泄漏，不能替代人工判断“问题是否自然、答案是否正确”。
 
+### 8.1 生成可交互审计 HTML
+
+当前工作台用 v8 代码读取既有 v6 历史结果，因此页面必须同时显示 `runtime_prompt_version=evidence-prompt-v6` 和 `current_prompt_version=evidence-prompt-v8`。它不会修改 Gold，只把历史 review queue 归一化为可读卡片，并按需加载关联帧缩略图：
+
+```bash
+python -m tools.audit_workbench.build \
+  --manifest configs/pilot64_gpt4o_v6_delivery.json \
+  --output outputs/audit/SalesBench_Prompt_Audit_Workbench_v8.html \
+  --skip-organize
+```
+
+页面中候选项必须直接显示 target、Candidate Gold、Evidence 内容和关联帧；abstention 必须显示 `No candidate generated` 及具体原因；无法恢复的历史 ID 必须标记为 unresolved，不能显示空白 Gold 或笼统的 `UNKNOWN`。
+
 ## 9. Step 6：人工复核 Evidence
 
 复核对象是 `human_review_queue.jsonl` 中的 proposal/annotation，不是先修改自然语言 QA。每个待审项应同时查看：
@@ -318,7 +323,7 @@ python salesbench.py audit-evidence-dataset \
 - `gold_proposals.jsonl` 和 `gold_reviews.jsonl` 中的上下文；
 - `docs/annotation/Evidence_Annotation_Guide_v2.md` 的任务边界。
 
-创建 `outputs/evidence/v2_pilot64/human_review_decisions.jsonl`。字段格式参考 `docs/annotation/Evidence_Review_Form_v2.jsonl`，每个 review item 使用以下决定之一：
+创建 `outputs/evidence/v8_pilot64_gpt4o_yunwu/human_review_decisions.jsonl`。字段格式参考 `docs/annotation/Evidence_Review_Form_v2.jsonl`，每个 review item 使用以下决定之一：
 
 - `ACCEPT_INFERRED`：证据足够，接受为人工确认的 INFERRED 项；
 - `REVISE`：修改结构化答案和 evidence refs 后接受；
@@ -335,9 +340,9 @@ python salesbench.py audit-evidence-dataset \
 
 ```bash
 python salesbench.py apply-evidence-reviews \
-  --evidence-dir outputs/evidence/v2_pilot64 \
-  --decisions outputs/evidence/v2_pilot64/human_review_decisions.jsonl \
-  --output outputs/evidence/v2_pilot64/video_evidence_dataset_reviewed.jsonl
+  --evidence-dir outputs/evidence/v8_pilot64_gpt4o_yunwu \
+  --decisions outputs/evidence/v8_pilot64_gpt4o_yunwu/human_review_decisions.jsonl \
+  --output outputs/evidence/v8_pilot64_gpt4o_yunwu/video_evidence_dataset_reviewed.jsonl
 ```
 
 产出 `video_evidence_dataset_reviewed.jsonl`。`REJECT` 项不会进入该文件；`ACCEPT_INFERRED` 和 `REVISE` 项会带有 reviewer、时间和 reason code。
@@ -346,9 +351,9 @@ python salesbench.py apply-evidence-reviews \
 
 ```bash
 python salesbench.py audit-evidence-dataset \
-  --dataset outputs/evidence/v2_pilot64/video_evidence_dataset_reviewed.jsonl \
-  --evidence outputs/evidence/v2_pilot64/evidence_units.jsonl \
-  --output outputs/evidence/v2_pilot64/audit_after_review.json
+  --dataset outputs/evidence/v8_pilot64_gpt4o_yunwu/video_evidence_dataset_reviewed.jsonl \
+  --evidence outputs/evidence/v8_pilot64_gpt4o_yunwu/evidence_units.jsonl \
+  --output outputs/evidence/v8_pilot64_gpt4o_yunwu/audit_after_review.json
 ```
 
 将 `audit_before_review.json` 与 `audit_after_review.json` 一起保留，检查人工接受项没有引入跨视频 Evidence、重复、冲突或私有字段。
@@ -357,9 +362,9 @@ python salesbench.py audit-evidence-dataset \
 
 ```bash
 python salesbench.py compile-vqa \
-  --evidence-dir outputs/evidence/v2_pilot64 \
+  --evidence-dir outputs/evidence/v8_pilot64_gpt4o_yunwu \
   --dataset-file video_evidence_dataset_reviewed.jsonl \
-  --output-dir outputs/vqa/v2_pilot64 \
+  --output-dir outputs/vqa/v8_pilot64_gpt4o_yunwu \
   --max-questions-per-video 8 \
   --max-per-task 2
 ```
@@ -381,6 +386,8 @@ python salesbench.py compile-vqa \
 编译验收：
 
 - `generation_meta.json` 中 BP、CM、SS、AE 均非空；
+- `compiler_version == "evidence-qa-compiler-v4"`；
+- `question` 与 `gold_answer` 的规范化自然语言全部为英文；中文视频中的 OCR/ASR 原文只保留在 EvidenceDataset 的 `text_span`；
 - `vqa_public.jsonl` 和 `vqa_gold_private.jsonl` 行数一致；
 - 每视频不超过 8 题，每任务每视频不超过 2 题；
 - `qa_validation.jsonl` 中的 rejected 原因可解释；
@@ -417,19 +424,18 @@ Evidence 复核和 QA 复核解决不同问题。Evidence 复核回答“事实�
 
 ## 12. Step 9：运行多模态模型回答 QA
 
-被测模型必须能够直接接收图片输入。DeepSeek V4 是 text-only，不能作为当前统一协议下的被测 VLM，否则它无法获得与其他模型相同的 16 帧输入。
+被测模型必须能够直接接收图片输入。本轮先固定为 `gpt-4o`，使 Evidence 生成、模型作答和 Judge 都能使用已经验证过的同一中转 API；这只用于 pilot 流程和质量检查，不用于宣称无偏的正式榜单比较。
 
 先用少量题验证模型和 API：
 
 ```bash
-export OPENAI_API_KEY="<TEST_MODEL_API_KEY>"
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-
+# 复用 Step 3 已从 .env 加载的 OPENAI_API_KEY / OPENAI_BASE_URL，
+# 不要在命令、配置或文档中写入明文密钥。
 python salesbench.py run-vqa-benchmark \
   --config configs/benchmark_v1.json \
-  --vqa outputs/vqa/v2_pilot64/vqa_public.jsonl \
-  --output-dir outputs/vqa/v2_pilot64/run_smoke \
-  --model <TEST_VLM> \
+  --vqa outputs/vqa/v8_pilot64_gpt4o_yunwu/vqa_public.jsonl \
+  --output-dir outputs/vqa/v8_pilot64_gpt4o_yunwu/run_smoke_gpt4o \
+  --model gpt-4o \
   --max-samples 8 \
   --max-workers 1
 ```
@@ -439,9 +445,9 @@ python salesbench.py run-vqa-benchmark \
 ```bash
 python salesbench.py run-vqa-benchmark \
   --config configs/benchmark_v1.json \
-  --vqa outputs/vqa/v2_pilot64/vqa_public.jsonl \
-  --output-dir outputs/vqa/v2_pilot64/run_<MODEL_NAME> \
-  --model <TEST_VLM> \
+  --vqa outputs/vqa/v8_pilot64_gpt4o_yunwu/vqa_public.jsonl \
+  --output-dir outputs/vqa/v8_pilot64_gpt4o_yunwu/run_gpt4o \
+  --model gpt-4o \
   --max-workers 2
 ```
 
@@ -450,7 +456,7 @@ python salesbench.py run-vqa-benchmark \
 - `predictions.jsonl`：每题答案、调用状态、原始响应、token、成本和错误；
 - `model_answers/<model>_run_meta.json`：题目总数、失败数和总成本。
 
-当前 baseline runner 没有逐题断点续跑；全量运行前必须先完成 8 题 smoke test。正式比较建议至少选择两个能力层次不同的 VLM，不能只测一个模型。
+当前 baseline runner 没有逐题断点续跑；全量运行前必须先完成 8 题 smoke test。本轮只用 `gpt-4o` 检查流程和数据质量；以后若发布正式模型比较，应另建运行目录并加入至少一个不同模型家族，不能把本轮单模型 pilot 当成完整排行榜。
 
 ## 13. Step 10：运行并校准 LLM-as-Judge
 
@@ -459,15 +465,13 @@ python salesbench.py run-vqa-benchmark \
 Judge 最好与 QA 生成模型和被测模型使用不同模型或至少不同模型家族。Judge 只接收问题、任务类型、参考答案、模型答案和私有 Evidence Context，不接收互动量或账号信息。
 
 ```bash
-export OPENAI_API_KEY="<JUDGE_API_KEY>"
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-
+# 复用 Step 3 已从 .env 加载的中转 API 环境变量。
 python salesbench.py evaluate-vqa-benchmark \
   --config configs/benchmark_v1.json \
-  --gold outputs/vqa/v2_pilot64/vqa_gold_private.jsonl \
-  --predictions outputs/vqa/v2_pilot64/run_<MODEL_NAME>/predictions.jsonl \
-  --output-dir outputs/vqa/v2_pilot64/evaluation_<MODEL_NAME> \
-  --judge-model <JUDGE_MODEL> \
+  --gold outputs/vqa/v8_pilot64_gpt4o_yunwu/vqa_gold_private.jsonl \
+  --predictions outputs/vqa/v8_pilot64_gpt4o_yunwu/run_gpt4o/predictions.jsonl \
+  --output-dir outputs/vqa/v8_pilot64_gpt4o_yunwu/evaluation_gpt4o \
+  --judge-model gpt-4o \
   --max-workers 4
 ```
 
@@ -477,6 +481,8 @@ python salesbench.py evaluate-vqa-benchmark \
 - `predictions_salesbench_qa_eval.json`：BP/CM/SS/AE、宏平均、微平均、缺失答案和 Judge 失败数。
 
 当前实现中缺失模型答案本地记 0 分；Judge 调用或解析失败会计入 `judge_failed_count`，但不进入成功样本均值。因此 pilot 报告必须同时写出 `gold_count`、`scored_count` 和 `judge_failed_count`，不能只报告平均分。
+
+v8 Judge 的 system/user prompt 和 `reason`、`evidence_alignment` 输出统一为英文，报告记录 `judge_prompt_version=judge-prompt-v3`。原始中文 OCR/ASR 仍可作为 Evidence Context 提供给 Judge，但 Judge 不得把它复制成中英混杂的评语。
 
 ### 13.2 Pilot 阶段的 Judge 校准
 
@@ -507,7 +513,7 @@ python salesbench.py evaluate-vqa-benchmark \
 ```bash
 python salesbench.py analyze-interactions \
   --config configs/benchmark_v1.json \
-  --judge-details outputs/vqa/v2_pilot64/evaluation_<MODEL_NAME>/predictions_judge_details.jsonl \
+  --judge-details outputs/vqa/v8_pilot64_gpt4o_yunwu/evaluation_gpt4o/predictions_judge_details.jsonl \
   --output-dir outputs/analysis/interactions_pilot64 \
   --bootstrap-samples 1000
 ```

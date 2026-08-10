@@ -2,7 +2,7 @@
 
 ## 状态
 
-当前契约版本为 `evidence-dataset-schema-v2`，下一次生成使用 `evidence-prompt-v7`。现有 5 视频 smoke、64 视频 pilot 与 128 视频 alpha 产物/配置属于 `evidence-prompt-v6` 运行快照；v7 必须写入新的输出目录，不能覆盖或重标既有结果。真实生成仍需要由环境变量注入模型凭证。
+当前契约版本为 `evidence-dataset-schema-v2`，下一次生成使用 `evidence-prompt-v8`。现有 5 视频 smoke、64 视频 pilot 与 128 视频 alpha 产物属于 `evidence-prompt-v6` 运行快照；v7 配置仅保留为历史中间版本。v8 必须写入新的输出目录，不能覆盖或重标既有结果。v8 的规范化 Evidence、QA 和 Judge 自然语言使用英文，中文 OCR/ASR 原文只保留在 `text_span`。真实生成仍需要由环境变量注入模型凭证。
 
 ## 用途
 

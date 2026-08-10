@@ -21,6 +21,7 @@ from tools.audit_workbench.evidence_assets import (
     load_frame_manifests,
     materialize_thumbnails,
 )
+from salesbench.vqa_evaluate.prompts import JUDGE_PROMPT_VERSION
 
 
 def test_module_cli_resolves_src_package_despite_salesbench_script_shadowing() -> None:
@@ -200,6 +201,12 @@ def test_render_workbench_has_interaction_contract_without_private_fields() -> N
     assert "\"likes\"" not in html
     assert "\"followers\"" not in html
     json.loads(html.split('<script type="application/json" id="sbaw-data">', 1)[1].split("</script>", 1)[0])
+
+
+def test_prompt_snapshot_uses_current_judge_prompt_version() -> None:
+    judge = next(item for item in collect_prompt_snapshot() if item["id"] == "judge")
+
+    assert judge["version"] == JUDGE_PROMPT_VERSION
 
 
 def test_compact_preview_prioritizes_structural_risks_over_systemic_missing_time() -> None:
@@ -450,6 +457,7 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     assert data["judge"]["rows"][0]["evidence_items"] == data["qa"][0]["evidence_items"]
     assert data["release"]["runtime_prompt_version"] == "evidence-prompt-v6"
     assert data["release"]["current_prompt_version"] == "evidence-prompt-v8"
+    assert data["release"]["current_judge_prompt_version"] == "judge-prompt-v3"
 
 
 def test_thumbnail_materialization_deduplicates_and_uses_relative_paths(tmp_path: Path) -> None:
