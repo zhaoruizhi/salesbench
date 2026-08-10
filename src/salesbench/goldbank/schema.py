@@ -194,6 +194,12 @@ class GoldProposal:
     evidence_ids: tuple[str, ...]
     reasoning_edges: tuple[tuple[str, str, str], ...]
     proposal_confidence: float
+    capability: str = ""
+    reasoning_operator: str = ""
+    commerce_cue_ids: tuple[str, ...] = field(default_factory=tuple)
+    commercial_relation_ids: tuple[str, ...] = field(default_factory=tuple)
+    question_intent: str = ""
+    forbidden_inferences: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         _confidence(self.proposal_confidence)
@@ -210,6 +216,12 @@ class GoldProposal:
             "evidence_ids": list(self.evidence_ids),
             "reasoning_edges": [list(edge) for edge in self.reasoning_edges],
             "proposal_confidence": self.proposal_confidence,
+            "capability": self.capability or self.task_subtype,
+            "reasoning_operator": self.reasoning_operator,
+            "commerce_cue_ids": list(self.commerce_cue_ids),
+            "commercial_relation_ids": list(self.commercial_relation_ids),
+            "question_intent": self.question_intent,
+            "forbidden_inferences": list(self.forbidden_inferences),
         }
 
 
@@ -252,6 +264,12 @@ class GoldItem:
     gold_tier: GoldTier
     review_status: str
     confidence: float
+    capability: str = ""
+    reasoning_operator: str = ""
+    commerce_cue_ids: tuple[str, ...] = field(default_factory=tuple)
+    commercial_relation_ids: tuple[str, ...] = field(default_factory=tuple)
+    question_intent: str = ""
+    forbidden_inferences: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         _confidence(self.confidence)
@@ -283,6 +301,12 @@ class GoldItem:
             "quality_status": self.quality_status.value,
             "review_status": self.review_status,
             "confidence": self.confidence,
+            "capability": self.capability or self.task_subtype,
+            "reasoning_operator": self.reasoning_operator,
+            "commerce_cue_ids": list(self.commerce_cue_ids),
+            "commercial_relation_ids": list(self.commercial_relation_ids),
+            "question_intent": self.question_intent,
+            "forbidden_inferences": list(self.forbidden_inferences),
         }
 
 
@@ -348,6 +372,16 @@ def parse_gold_proposal(record: dict[str, object]) -> GoldProposal:
         evidence_ids=tuple(clean_text(value) for value in _tuple(record.get("evidence_ids"))),
         reasoning_edges=tuple(tuple(clean_text(part) for part in edge[:3]) for edge in _tuple(record.get("reasoning_edges"))),
         proposal_confidence=_confidence(record.get("proposal_confidence", 0.0)),
+        capability=clean_text(record.get("capability")) or clean_text(record.get("task_subtype")).upper(),
+        reasoning_operator=clean_text(record.get("reasoning_operator")).upper(),
+        commerce_cue_ids=tuple(clean_text(value) for value in _tuple(record.get("commerce_cue_ids"))),
+        commercial_relation_ids=tuple(
+            clean_text(value) for value in _tuple(record.get("commercial_relation_ids"))
+        ),
+        question_intent=clean_text(record.get("question_intent")),
+        forbidden_inferences=tuple(
+            clean_text(value) for value in _tuple(record.get("forbidden_inferences"))
+        ),
     )
 
 
@@ -387,6 +421,16 @@ def parse_gold_item(record: dict[str, object]) -> GoldItem:
         gold_tier=gold_tier,
         review_status=clean_text(record.get("review_status")),
         confidence=_confidence(record.get("confidence", 0.0)),
+        capability=clean_text(record.get("capability")) or clean_text(record.get("task_subtype")).upper(),
+        reasoning_operator=clean_text(record.get("reasoning_operator")).upper(),
+        commerce_cue_ids=tuple(clean_text(value) for value in _tuple(record.get("commerce_cue_ids"))),
+        commercial_relation_ids=tuple(
+            clean_text(value) for value in _tuple(record.get("commercial_relation_ids"))
+        ),
+        question_intent=clean_text(record.get("question_intent")),
+        forbidden_inferences=tuple(
+            clean_text(value) for value in _tuple(record.get("forbidden_inferences"))
+        ),
     )
 
 

@@ -12,6 +12,17 @@ class UnsupportedQuestionProgramError(ValueError):
 
 
 QUESTION_PROGRAMS = {
+    ("BP", "PRODUCT_IDENTITY", "grounded_question"): "What product is presented in the video?",
+    ("BP", "ATTRIBUTE_AND_VARIANT", "grounded_question"): "What product attribute or variant is presented?",
+    ("BP", "QUANTITY_AND_BUNDLE", "grounded_question"): "What quantity or bundle is included in the presented offer?",
+    ("BP", "PRICE_AND_DISCOUNT", "grounded_question"): "What price or discount is explicitly presented?",
+    ("BP", "OFFER_CONDITION", "grounded_question"): "What condition is required for the presented offer?",
+    ("BP", "USAGE_STEP", "grounded_question"): "What concrete product-use step is shown?",
+    ("BP", "DEMONSTRATED_STATE_CHANGE", "grounded_question"): "What visible state change is demonstrated?",
+    ("BP", "USAGE_SCENARIO", "grounded_question"): "What usage scenario is presented for the product?",
+    ("CM", "CLAIM_DEMONSTRATION_STATUS", "grounded_question"): "How does the cited visual content relate to the spoken product claim?",
+    ("SS", "PROCESS_DEMONSTRATION", "grounded_question"): "What does the product demonstration show, and how is it used in the sales presentation?",
+    ("AE", "USAGE_CONTEXT", "grounded_question"): "What usage context represented by the content is connected to the product?",
     ("BP", "COUNT_SPATIAL", "direct_question"): "How many {subject} are visible in the video?",
     ("BP", "ACTION", "direct_question"): "What observable action involving {subject} occurs in the video?",
     ("BP", "ENTITY_ATTRIBUTE", "direct_question"): "What is the {predicate} of the {subject} shown in the video?",

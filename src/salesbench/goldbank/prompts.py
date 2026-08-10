@@ -143,93 +143,79 @@ def build_proposer_prompt(
     generator: str,
     video_id: str,
     evidence_units: list[dict[str, object]],
+    commerce_cues: list[dict[str, object]] | None = None,
+    commercial_relations: list[dict[str, object]] | None = None,
 ) -> tuple[str, str]:
     generator = generator.lower()
     contracts = {
         "cm_proposer": (
-            "Generate CM candidates only; never generate BP, SS, or AE. Allowed subtypes are "
-            "CLAIM_EVIDENCE_RELATION, CLAIM_PARTIAL_SUPPORT, and TEXT_VISUAL_CONSISTENCY. For "
-            "CLAIM_EVIDENCE_RELATION or CLAIM_PARTIAL_SUPPORT use target={claim,observation_window} "
-            "and proposed_gold={relation,modality_pair,answer}. For TEXT_VISUAL_CONSISTENCY use "
-            "target={text_claim,visual_target} and proposed_gold={relation,modality_pair,answer}. "
-            "relation must be SUPPORTED, PARTIALLY_SUPPORTED, CONTRADICTED, NOT_SHOWN, or "
-            "TEMPORALLY_MISALIGNED. Every CM candidate must cite at least two distinct EvidenceUnits "
-            "from two distinct modalities, and modality_pair must list the actual modalities. Use "
-            "NOT_SHOWN only when the input defines a complete-video observation window; abstain when "
-            "only sampled frames are available."
+            "Generate CM candidates only. Allowed capabilities are SPEECH_VISUAL_COREFERENCE, "
+            "OCR_SPEECH_OFFER_ALIGNMENT, CLAIM_DEMONSTRATION_STATUS, "
+            "REPETITION_VS_INDEPENDENT_EVIDENCE, PARTIAL_SUPPORT, CONTRADICTION, "
+            "TEMPORAL_MISALIGNMENT, and NOT_DEMONSTRATED. Each candidate must test a real relation "
+            "or information difference between at least two distinct modalities. CLAIM_DEMONSTRATION_STATUS "
+            "must distinguish independent demonstration from repeated wording. NOT_DEMONSTRATED is "
+            "allowed only with a complete observation window; sampled frames are insufficient."
         ),
         "ss_proposer": (
-            "Generate SS candidates only; never generate BP, CM, or AE. Allowed subtypes are "
-            "HOOK_MECHANISM, VALUE_PROPOSITION, TRUST_MECHANISM, OBJECTION_HANDLING, URGENCY_CTA, "
-            "and FUNNEL_ROLE. target must contain segment and mechanism. proposed_gold must contain "
-            "label and answer. The answer must explain how observable content instantiates the "
-            "mechanism; it must not predict sales, conversion, or interaction outcomes."
+            "Generate SS candidates only. Allowed capabilities are PROBLEM_SOLUTION, FEATURE_BENEFIT, "
+            "PROCESS_DEMONSTRATION, OUTCOME_DISPLAY, BEFORE_AFTER_COMPARISON, VICARIOUS_TRIAL, "
+            "PRICE_VALUE_FRAMING, REFERENCE_PRICE_ANCHORING, CREDIBILITY_SIGNAL, SOCIAL_PROOF, "
+            "LIMITATION_DISCLOSURE, OBJECTION_HANDLING, SCARCITY_AND_URGENCY, and CTA_SEQUENCE. "
+            "Every candidate must reconstruct a specific observable commercial relation or ordered "
+            "relation path. Do not use generic labels such as strategy, mechanism, or trust without "
+            "naming the cited claim, product feature, demonstration, offer, objection, or action cue."
         ),
         "ae_proposer": (
-            "Generate AE candidates only; never generate BP, CM, or SS. Allowed subtypes are "
-            "AUDIENCE_NEED_FIT, USAGE_CONTEXT, DECISION_STATE, and CONTENT_MOTIVATION. Use these exact "
-            "structures: AUDIENCE_NEED_FIT target={need}, proposed_gold={audience_need,answer}; "
-            "USAGE_CONTEXT target={scenario}, proposed_gold={usage_context,answer}; DECISION_STATE "
-            "target={decision_barrier}, proposed_gold={decision_state,answer}; CONTENT_MOTIVATION "
-            "target={motivation_cue}, proposed_gold={content_motivation,answer}. AE must not use claim "
-            "or relation fields and must not claim a real audience profile, real conversion result, "
-            "or facts about actual viewers."
-        ),
-    }
-    examples = {
-        "cm_proposer": (
-            '{"task_type":"CM","task_subtype":"CLAIM_EVIDENCE_RELATION",'
-            '"target":{"claim":"the cable uses braided material","observation_window":"cited speech and frames"},'
-            '"proposed_gold":{"relation":"SUPPORTED","modality_pair":["asr","visual"],'
-            '"answer":"The speech claims braided material and the visible outer weave supports the claim."},'
-            '"evidence_ids":["existing_id_1","existing_id_2"],'
-            '"reasoning_edges":[["existing_id_1","speech states the material claim","SUPPORTED"],'
-            '["existing_id_2","the frame shows a woven outer layer","SUPPORTED"]],'
-            '"proposal_confidence":0.85}'
-        ),
-        "ss_proposer": (
-            '{"task_type":"SS","task_subtype":"HOOK_MECHANISM",'
-            '"target":{"segment":"opening","mechanism":"result first"},'
-            '"proposed_gold":{"label":"result-first hook",'
-            '"answer":"The opening states the desired result before showing the corresponding product."},'
-            '"evidence_ids":["existing_id_1","existing_id_2"],'
-            '"reasoning_edges":[["existing_id_1","the opening states the intended result","SUPPORTED"],'
-            '["existing_id_2","the frame shows the corresponding product","SUPPORTED"]],'
-            '"proposal_confidence":0.85}'
-        ),
-        "ae_proposer": (
-            '{"task_type":"AE","task_subtype":"USAGE_CONTEXT",'
-            '"target":{"scenario":"home organization"},'
-            '"proposed_gold":{"usage_context":"kitchen and bathroom organization",'
-            '"answer":"The content shows a storage rack and names kitchen and bathroom uses."},'
-            '"evidence_ids":["existing_id_1","existing_id_2"],'
-            '"reasoning_edges":[["existing_id_1","the frame shows the rack in use","SUPPORTED"],'
-            '["existing_id_2","speech names the bathroom use","SUPPORTED"]],'
-            '"proposal_confidence":0.85}'
+            "Generate AE candidates only. Allowed capabilities are CONTENT_IMPLIED_NEED, USAGE_CONTEXT, "
+            "FIT_CONSTRAINT, QUALITY_UNCERTAINTY, USAGE_UNCERTAINTY, PRICE_UNCERTAINTY, "
+            "SERVICE_OR_RISK_CONCERN, DECISION_BARRIER, and OFFER_NEED_ALIGNMENT. Interpret only "
+            "needs, contexts, constraints, objections, or offer alignment explicitly represented by "
+            "the content. The answer must not claim a real audience profile. Never infer a real "
+            "demographic audience, viewer psychology, purchase "
+            "intention, conversion, or popularity."
         ),
     }
     if generator not in contracts:
         raise ValueError(f"Unknown task generator: {generator}")
+    task_type = {"cm_proposer": "CM", "ss_proposer": "SS", "ae_proposer": "AE"}[generator]
+    example = (
+        '{"task_type":"' + task_type + '","task_subtype":"<allowed capability>",'
+        '"capability":"<same allowed capability>","reasoning_operator":"<controlled operator>",'
+        '"target":{"specific_focus":"English content-specific focus"},'
+        '"proposed_gold":{"answer":"A concise English answer bounded by the cited graph."},'
+        '"evidence_ids":["existing_evidence_1","existing_evidence_2"],'
+        '"commerce_cue_ids":["existing_cue_1","existing_cue_2"],'
+        '"commercial_relation_ids":["existing_relation_1"],'
+        '"reasoning_edges":[["existing_evidence_1","specific supported claim","SUPPORTED"]],'
+        '"question_intent":"Ask a specific question about the cited product, offer, claim, or sequence.",'
+        '"forbidden_inferences":["Do not infer consumer outcomes."],"proposal_confidence":0.85}'
+    )
     system = (
         f"You are the SalesBench-QA {generator}. {contracts[generator]} "
-        "Return strict JSON with exactly two top-level arrays: proposals and abstentions. Output no "
-        "more than three high-quality proposals. A valid example for this generator is: "
-        f"{examples[generator]}. task_type and task_subtype must use the controlled English values "
-        "above. target and proposed_gold must be non-empty objects. Do not output proposal_id; local "
-        "code creates the canonical proposal ID. Every proposal must cite at least two distinct "
-        "evidence_ids copied exactly from the input, and the first item in each reasoning_edges entry "
-        "must be one of those cited IDs. All natural-language values in target, proposed_gold, "
-        "reasoning_edges, and abstentions.reason must use English. JSON keys, task/subtype, relation, "
-        "and modality enums remain the controlled English tokens. Do not use informal wrappers such as "
-        "annotation, proposal_type, hook, value, trust, strategy, or content_structure. "
-        "proposal_confidence must be a JSON number from 0 to 1. Never invent evidence or IDs. Never "
+        "Return strict JSON with exactly two top-level arrays: proposals and abstentions, with no more "
+        f"than three proposals. Every proposal must use task_type={task_type}, set capability equal to "
+        "task_subtype, and contain all fields shown in this schema: "
+        f"{example}. target and proposed_gold must be non-empty objects, and proposed_gold must contain "
+        "answer. Do not output proposal_id; local code creates it. Every proposal must cite at least "
+        "two distinct evidence_ids copied exactly from the input and at least one existing CommerceCue. "
+        "Capabilities that require a relation or "
+        "path must cite existing commercial_relation_ids; never invent IDs. The first value of every "
+        "reasoning_edges entry must be a cited EvidenceUnit ID. All natural-language values must be "
+        "English. proposal_confidence must be a JSON number from 0 to 1. Never "
         "use titles, follower counts, interaction metrics, private metadata, or external knowledge. "
-        "Never discuss popularity, sales, conversion, propagation effects, or causal performance. If "
-        "there are fewer than two distinct EvidenceUnits, the schema would be incomplete, the claim "
-        "has a reasonable alternative interpretation, or the conclusion exceeds observable evidence, "
-        "place task_type, task_subtype, and an English reason in abstentions instead of forcing a proposal."
+        "Never claim content caused trust, purchase, sales, conversion, interaction, or reduced viewer "
+        "uncertainty. If a graph path is incomplete or the conclusion has a reasonable alternative, "
+        "place task_type, task_subtype, and an English reason in abstentions."
     )
-    user = _json({"video_id": video_id, "evidence_units": evidence_units})
+    user = _json(
+        {
+            "video_id": video_id,
+            "evidence_units": evidence_units,
+            "commerce_cues": commerce_cues or [],
+            "commercial_relations": commercial_relations or [],
+        }
+    )
     return system, user
 
 
@@ -237,20 +223,22 @@ def build_challenger_prompt(
     video_id: str,
     proposals: list[dict[str, object]],
     evidence_units: list[dict[str, object]],
+    commerce_cues: list[dict[str, object]] | None = None,
+    commercial_relations: list[dict[str, object]] | None = None,
 ) -> tuple[str, str]:
     system = (
         "You are the SalesBench-QA Gold Challenger. Return strict JSON whose only top-level key is "
         "reviews. Return exactly one review for every input proposal and copy proposal_id exactly. You "
         "must not default to PASS when evidence is missing, ambiguous, or schema-invalid. Check that "
-        "Evidence IDs exist, cited evidence supports each claim, fact and inference are separated, "
+        "Evidence, CommerceCue, and CommercialRelation IDs exist, graph endpoints support each claim, "
+        "fact and inference are separated, "
         "reasonable alternatives are addressed, candidates do not duplicate or conflict, no title, "
         "interaction metric, private metadata, or external knowledge is used, and no sales or "
         "interaction causation is claimed. Task rubrics: BP must be a directly localizable fact and a "
-        "spoken effect claim is not a verified product fact. CM must use two distinct modalities and "
-        "must validate claim, relation, modality_pair, observation window, temporal alignment, and the "
-        "complete-window requirement for NOT_SHOWN. SS needs at least two observable evidence units for "
-        "a specific persuasion mechanism and must not inflate generic description into strategy or "
-        "performance prediction. AE must be a bounded interpretation of needs, contexts, or decision "
+        "spoken effect claim is not a verified product fact. CM must use two distinct modalities and a "
+        "valid claim relation, including the complete observation-window requirement for NOT_DEMONSTRATED. "
+        "SS needs a specific commercial relation or ordered path and must not inflate generic description "
+        "into sales logic or performance prediction. AE must be a bounded interpretation of needs, contexts, or decision "
         "barriers represented by the content, never a real audience profile or conversion conclusion. "
         "Each review must follow this schema: "
         '{"review_id":"unique string","proposal_id":"exact input proposal_id",'
@@ -263,7 +251,15 @@ def build_challenger_prompt(
         "suggested_revision must use English. suggested_revision must be an object or null. Identify "
         "problems only; do not add Evidence or generate GroundedAnnotations."
     )
-    user = _json({"video_id": video_id, "proposals": proposals, "evidence_units": evidence_units})
+    user = _json(
+        {
+            "video_id": video_id,
+            "proposals": proposals,
+            "evidence_units": evidence_units,
+            "commerce_cues": commerce_cues or [],
+            "commercial_relations": commercial_relations or [],
+        }
+    )
     return system, user
 
 
@@ -272,6 +268,8 @@ def build_adjudicator_prompt(
     proposals: list[dict[str, object]],
     reviews: list[dict[str, object]],
     evidence_units: list[dict[str, object]],
+    commerce_cues: list[dict[str, object]] | None = None,
+    commercial_relations: list[dict[str, object]] | None = None,
 ) -> tuple[str, str]:
     system = (
         "You are the SalesBench-QA Evidence Adjudicator. The input contains only non-BP proposals that "
@@ -288,5 +286,14 @@ def build_adjudicator_prompt(
         "Copy every ID exactly, use English for every reason, and do not omit any input proposal. Local "
         "code reconstructs annotations deterministically and applies final quality rules."
     )
-    user = _json({"video_id": video_id, "proposals": proposals, "reviews": reviews, "evidence_units": evidence_units})
+    user = _json(
+        {
+            "video_id": video_id,
+            "proposals": proposals,
+            "reviews": reviews,
+            "evidence_units": evidence_units,
+            "commerce_cues": commerce_cues or [],
+            "commercial_relations": commercial_relations or [],
+        }
+    )
     return system, user

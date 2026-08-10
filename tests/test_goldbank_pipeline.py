@@ -8,6 +8,12 @@ import unittest
 sys.path.insert(0, "src")
 
 from salesbench.goldbank.pipeline import GoldBankPipeline  # noqa: E402
+from salesbench.goldbank.commerce_schema import (  # noqa: E402
+    CueType,
+    RelationType,
+    make_cue_id,
+    make_relation_id,
+)
 from salesbench.multiagent.context import build_context_bundle  # noqa: E402
 from salesbench.vlm.api_client import APICallResult  # noqa: E402
 
@@ -98,7 +104,7 @@ def successful_responses() -> list[dict[str, object]]:
                     "video_id": "v1",
                     "source_agent": "cm_proposer",
                     "task_type": "CM",
-                    "task_subtype": "CLAIM_EVIDENCE_RELATION",
+                    "task_subtype": "CLAIM_DEMONSTRATION_STATUS",
                     "target": {"claim": "claim"},
                     "proposed_gold": {"relation": "SUPPORTED"},
                     "evidence_ids": [evidence_id, evidence_id],
@@ -130,7 +136,7 @@ def successful_responses() -> list[dict[str, object]]:
                     "gold_id": "g_cm",
                     "video_id": "v1",
                     "task_type": "CM",
-                    "task_subtype": "CLAIM_EVIDENCE_RELATION",
+                    "task_subtype": "CLAIM_DEMONSTRATION_STATUS",
                     "target": {"claim": "claim"},
                     "gold_value": {"relation": "SUPPORTED"},
                     "evidence_ids": [evidence_id, evidence_id],
@@ -169,7 +175,69 @@ def successful_responses_with_two_evidence() -> list[dict[str, object]]:
             "timestamp_status": "available",
         }
     )
+    process_content = "The product is demonstrated in use."
+    claim_content = "The speaker claims that the product uses braided material."
+    process_cue_id = make_cue_id(
+        "v1", CueType.PROCESS_DEMONSTRATION, ("v1_visual_000_abc",), process_content
+    )
+    claim_cue_id = make_cue_id("v1", CueType.FUNCTION_CLAIM, (second_id,), claim_content)
+    relation_id = make_relation_id(
+        "v1",
+        RelationType.CLAIM_SUPPORTED_BY_DEMONSTRATION,
+        (claim_cue_id,),
+        (process_cue_id,),
+    )
+    responses[1] = {
+        "commerce_cues": [
+            {
+                "cue_type": "PROCESS_DEMONSTRATION",
+                "content_en": process_content,
+                "source_text_native": "",
+                "evidence_ids": ["v1_visual_000_abc"],
+                "attributes": {},
+                "directness": "DIRECT",
+                "theory_tags": ["product_demonstration"],
+                "confidence": 0.95,
+            },
+            {
+                "cue_type": "FUNCTION_CLAIM",
+                "content_en": claim_content,
+                "source_text_native": "这款产品采用编织材质",
+                "evidence_ids": [second_id],
+                "attributes": {},
+                "directness": "DIRECT",
+                "theory_tags": ["product_claim"],
+                "confidence": 0.95,
+            },
+        ],
+        "abstentions": [],
+    }
+    responses[2] = {
+        "commercial_relations": [
+            {
+                "relation_type": "CLAIM_SUPPORTED_BY_DEMONSTRATION",
+                "source_cue_ids": [claim_cue_id],
+                "target_cue_ids": [process_cue_id],
+                "evidence_ids": [second_id, "v1_visual_000_abc"],
+                "status": "SUPPORTED",
+                "rationale_en": "The spoken product claim is paired with a distinct visual demonstration.",
+                "directness": "DIRECT",
+                "confidence": 0.9,
+            }
+        ],
+        "abstentions": [],
+    }
     responses[3]["proposals"][0]["evidence_ids"] = ["v1_visual_000_abc", second_id]
+    responses[3]["proposals"][0].update(
+        {
+            "capability": "CLAIM_DEMONSTRATION_STATUS",
+            "reasoning_operator": "CLASSIFY_CLAIM_SUPPORT",
+            "commerce_cue_ids": [claim_cue_id, process_cue_id],
+            "commercial_relation_ids": [relation_id],
+            "question_intent": "Ask how the visible demonstration relates to the spoken product claim.",
+            "forbidden_inferences": ["Do not treat repeated wording as independent proof."],
+        }
+    )
     responses[7]["grounded_annotations"][0]["evidence_ids"] = ["v1_visual_000_abc", second_id]
     return responses
 
@@ -302,7 +370,7 @@ class GoldBankPipelineTest(unittest.TestCase):
         responses[4]["abstentions"] = [
             {
                 "task_type": "SS",
-                "task_subtype": "TRUST_MECHANISM",
+                "task_subtype": "PROCESS_DEMONSTRATION",
                 "reason": "Fewer than two evidence units support this mechanism.",
             }
         ]
@@ -339,7 +407,7 @@ class GoldBankPipelineTest(unittest.TestCase):
                 "annotation_id": "g_bp_injected",
                 "video_id": "v1",
                 "task_type": "BP",
-                "task_subtype": "ENTITY_ATTRIBUTE",
+                "task_subtype": "PRODUCT_IDENTITY",
                 "target": {"subject": "product"},
                 "gold_value": {"value": True},
                 "evidence_refs": ["v1_visual_000_abc"],
@@ -411,7 +479,7 @@ class GoldBankPipelineTest(unittest.TestCase):
             {
                 "proposal_id": "bad_cm",
                 "task_type": "CM",
-                "task_subtype": "CONTENT_MOTIVATION",
+                "task_subtype": "OFFER_NEED_ALIGNMENT",
                 "target": {"claim": "claim"},
                 "proposed_gold": {"answer": "bad task pairing"},
                 "evidence_ids": ["v1_visual_000_abc", "v1_asr_001_def"],

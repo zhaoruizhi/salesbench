@@ -11,6 +11,9 @@ from salesbench.goldbank.ontology import (  # noqa: E402
     CM_SUBTYPES,
     SS_SUBTYPES,
     TASK_MIN_EVIDENCE,
+    allowed_subtypes,
+    capability_level,
+    default_reasoning_operator,
 )
 from salesbench.goldbank.schema import (  # noqa: E402
     EvidenceModality,
@@ -32,7 +35,7 @@ class GoldBankSchemaTest(unittest.TestCase):
             gold_id="g1",
             video_id="v1",
             task_type=GoldTaskType.BP,
-            task_subtype="ACTION",
+            task_subtype="USAGE_STEP",
             target={"subject": "hand"},
             gold_value={"action": "opens box"},
             evidence_ids=("v1_visual_000_abcdef123456",),
@@ -42,6 +45,12 @@ class GoldBankSchemaTest(unittest.TestCase):
             gold_tier=GoldTier.GOLD_A,
             review_status="verified",
             confidence=0.91,
+            capability="USAGE_STEP",
+            reasoning_operator="SEQUENCE_ACTION",
+            commerce_cue_ids=("cue1",),
+            commercial_relation_ids=(),
+            question_intent="Identify the concrete action performed with the product.",
+            forbidden_inferences=("Do not infer sales outcomes.",),
         )
 
         payload = item.to_dict()
@@ -50,26 +59,37 @@ class GoldBankSchemaTest(unittest.TestCase):
         self.assertEqual(payload["quality_status"], QualityStatus.DIRECT.value)
         self.assertIsInstance(payload["evidence_refs"], list)
         self.assertEqual(payload["annotation_id"], "g1")
+        self.assertEqual(payload["capability"], "USAGE_STEP")
+        self.assertEqual(payload["commerce_cue_ids"], ["cue1"])
 
     def test_every_task_has_allowed_subtypes_and_question_formats(self):
-        self.assertIn("ACTION", BP_SUBTYPES)
-        self.assertIn("CLAIM_EVIDENCE_RELATION", CM_SUBTYPES)
-        self.assertIn("URGENCY_CTA", SS_SUBTYPES)
-        self.assertIn("DECISION_STATE", AE_SUBTYPES)
+        self.assertIn("USAGE_STEP", BP_SUBTYPES)
+        self.assertIn("CLAIM_DEMONSTRATION_STATUS", CM_SUBTYPES)
+        self.assertIn("CTA_SEQUENCE", SS_SUBTYPES)
+        self.assertIn("DECISION_BARRIER", AE_SUBTYPES)
         self.assertEqual(set(TASK_MIN_EVIDENCE), set(GoldTaskType))
+
+    def test_plan_b_capabilities_use_expected_graph_levels(self):
+        self.assertEqual(capability_level("BP", "OFFER_CONDITION"), "RELATION_OPTIONAL")
+        self.assertEqual(capability_level("CM", "CLAIM_DEMONSTRATION_STATUS"), "RELATION_REQUIRED")
+        self.assertEqual(capability_level("SS", "PROBLEM_SOLUTION"), "RELATION_PATH_REQUIRED")
+        self.assertEqual(capability_level("AE", "FIT_CONSTRAINT"), "CUE_OR_RELATION")
+        self.assertNotIn("TRUST_MECHANISM", allowed_subtypes("SS"))
+        self.assertNotIn("AUDIENCE_NEED_FIT", allowed_subtypes("AE"))
+        self.assertEqual(default_reasoning_operator("CM", "PARTIAL_SUPPORT"), "DECOMPOSE_CLAIM")
 
     def test_gold_id_is_stable_for_same_semantics(self):
         first = make_gold_id(
             "v1",
             GoldTaskType.CM,
-            "CLAIM_EVIDENCE_RELATION",
+            "CLAIM_DEMONSTRATION_STATUS",
             {"claim": " 450g ", "atoms": ["9个", "450g"]},
             {"relation": "SUPPORTED"},
         )
         second = make_gold_id(
             "v1",
             GoldTaskType.CM,
-            "CLAIM_EVIDENCE_RELATION",
+            "CLAIM_DEMONSTRATION_STATUS",
             {"atoms": ["9个", "450g"], "claim": "450g"},
             {"relation": "SUPPORTED"},
         )
@@ -106,7 +126,7 @@ class GoldBankSchemaTest(unittest.TestCase):
             "gold_id": "g1",
             "video_id": "v1",
             "task_type": "BP",
-            "task_subtype": "ACTION",
+            "task_subtype": "USAGE_STEP",
             "target": {},
             "gold_value": {},
             "evidence_ids": [],

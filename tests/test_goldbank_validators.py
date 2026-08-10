@@ -38,7 +38,7 @@ def gold_item(
     *,
     gold_id: str = "g1",
     task_type: GoldTaskType = GoldTaskType.BP,
-    subtype: str = "ACTION",
+    subtype: str = "USAGE_STEP",
     value: dict[str, object] | None = None,
     evidence_ids: tuple[str, ...] = ("v1_visual_000_abc",),
     tier: GoldTier = GoldTier.GOLD_A,
@@ -96,7 +96,7 @@ class GoldBankValidatorTest(unittest.TestCase):
     def test_ss_single_evidence_cannot_be_gold_b(self):
         item = gold_item(
             task_type=GoldTaskType.SS,
-            subtype="HOOK_MECHANISM",
+            subtype="PROBLEM_SOLUTION",
             value={"strategy": "question"},
             evidence_ids=("v1_visual_000_abc",),
             tier=GoldTier.GOLD_B,
@@ -121,7 +121,7 @@ class GoldBankValidatorTest(unittest.TestCase):
     def test_private_performance_fields_never_enter_public_record(self):
         item = gold_item(
             task_type=GoldTaskType.SS,
-            subtype="HOOK_MECHANISM",
+            subtype="PROBLEM_SOLUTION",
             value={"strategy": "question", "likes": 100, "thresholds": {"q33": 1}},
             evidence_ids=("v1_visual_000_abc", "v1_visual_001_def"),
             tier=GoldTier.GOLD_B,

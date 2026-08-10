@@ -25,6 +25,12 @@ class GoldBankReviewIOTest(unittest.TestCase):
                     "evidence_ids": ["e1", "e2"],
                     "reasoning_edges": [],
                     "proposal_confidence": 0.8,
+                    "capability": "USAGE_CONTEXT",
+                    "reasoning_operator": "LOCALIZE_USAGE_CONTEXT",
+                    "commerce_cue_ids": ["cue1"],
+                    "commercial_relation_ids": [],
+                    "question_intent": "Ask which usage context is represented by the content.",
+                    "forbidden_inferences": ["Do not infer a real viewer profile."],
                 },
             }
         ]
@@ -79,6 +85,8 @@ class GoldBankReviewIOTest(unittest.TestCase):
         item = reviewed[0]["grounded_annotations"][0]
         self.assertEqual(item["quality_status"], "INFERRED")
         self.assertEqual(item["review_status"], "human_accepted")
+        self.assertEqual(item["capability"], "USAGE_CONTEXT")
+        self.assertEqual(item["commerce_cue_ids"], ["cue1"])
 
     def test_unknown_review_item_is_rejected(self):
         with self.assertRaises(ValueError):

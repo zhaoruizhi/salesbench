@@ -9,7 +9,13 @@ from ..utils import clean_text, contains_cjk
 from .commerce_ontology import relation_rule
 from .commerce_schema import CommerceCue, CommercialRelation
 from .normalizer import semantic_key, semantic_target_key
-from .ontology import CM_RELATIONS, TASK_MIN_EVIDENCE, allowed_subtypes
+from .ontology import (
+    CM_RELATIONS,
+    TASK_MIN_EVIDENCE,
+    allowed_subtypes,
+    capability_level,
+    default_reasoning_operator,
+)
 from .schema import EvidenceUnit, GoldItem, GoldProposal, GoldTaskType, GoldTier
 
 
@@ -305,6 +311,8 @@ def _validate_common(
     item: GoldItem | GoldProposal,
     evidence: dict[str, EvidenceUnit],
     evidence_ids: tuple[str, ...],
+    commerce_cues: dict[str, CommerceCue] | None = None,
+    commercial_relations: dict[str, CommercialRelation] | None = None,
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     item_id = _item_id(item)
@@ -323,11 +331,63 @@ def _validate_common(
         if unit.video_id != item.video_id:
             issues.append(ValidationIssue("EVIDENCE_VIDEO_MISMATCH", "ERROR", item_id, f"Evidence {evidence_id} belongs to {unit.video_id}"))
 
+    if commerce_cues is not None and commercial_relations is not None:
+        capability = clean_text(item.capability or item.task_subtype).upper()
+        if capability != item.task_subtype:
+            issues.append(
+                ValidationIssue(
+                    "CAPABILITY_SUBTYPE_MISMATCH",
+                    "ERROR",
+                    item_id,
+                    f"Capability {capability} differs from subtype {item.task_subtype}",
+                )
+            )
+        expected_operator = default_reasoning_operator(item.task_type, item.task_subtype)
+        if clean_text(item.reasoning_operator).upper() != expected_operator:
+            issues.append(
+                ValidationIssue(
+                    "INVALID_REASONING_OPERATOR",
+                    "ERROR",
+                    item_id,
+                    f"Expected {expected_operator}",
+                )
+            )
+        for cue_id in item.commerce_cue_ids:
+            cue = commerce_cues.get(cue_id)
+            if cue is None:
+                issues.append(ValidationIssue("CUE_NOT_FOUND", "ERROR", item_id, cue_id))
+            elif cue.video_id != item.video_id:
+                issues.append(ValidationIssue("CUE_VIDEO_MISMATCH", "ERROR", item_id, cue_id))
+        for relation_id in item.commercial_relation_ids:
+            relation = commercial_relations.get(relation_id)
+            if relation is None:
+                issues.append(ValidationIssue("RELATION_NOT_FOUND", "ERROR", item_id, relation_id))
+            elif relation.video_id != item.video_id:
+                issues.append(ValidationIssue("RELATION_VIDEO_MISMATCH", "ERROR", item_id, relation_id))
+        level = capability_level(item.task_type, item.task_subtype)
+        if level in {"CUE", "RELATION_OPTIONAL"} and not item.commerce_cue_ids:
+            issues.append(ValidationIssue("MISSING_COMMERCE_CUE", "ERROR", item_id, level))
+        if level in {"RELATION_REQUIRED", "RELATION_PATH_REQUIRED"} and not item.commercial_relation_ids:
+            issues.append(ValidationIssue("MISSING_COMMERCIAL_RELATION", "ERROR", item_id, level))
+        if level == "CUE_OR_RELATION" and not (item.commerce_cue_ids or item.commercial_relation_ids):
+            issues.append(ValidationIssue("MISSING_COMMERCE_GRAPH_REF", "ERROR", item_id, level))
+
     return issues
 
 
-def validate_gold_proposal(proposal: GoldProposal, evidence: dict[str, EvidenceUnit]) -> list[ValidationIssue]:
-    issues = _validate_common(proposal, evidence, proposal.evidence_ids)
+def validate_gold_proposal(
+    proposal: GoldProposal,
+    evidence: dict[str, EvidenceUnit],
+    commerce_cues: dict[str, CommerceCue] | None = None,
+    commercial_relations: dict[str, CommercialRelation] | None = None,
+) -> list[ValidationIssue]:
+    issues = _validate_common(
+        proposal,
+        evidence,
+        proposal.evidence_ids,
+        commerce_cues,
+        commercial_relations,
+    )
     if len(proposal.evidence_ids) < TASK_MIN_EVIDENCE.get(proposal.task_type, 1):
         issues.append(ValidationIssue("INSUFFICIENT_EVIDENCE", "WARNING", proposal.proposal_id, "Proposal has too little evidence"))
     if proposal.task_type == GoldTaskType.CM:
@@ -344,8 +404,19 @@ def validate_gold_proposal(proposal: GoldProposal, evidence: dict[str, EvidenceU
     return issues
 
 
-def validate_gold_item(item: GoldItem, evidence: dict[str, EvidenceUnit]) -> list[ValidationIssue]:
-    issues = _validate_common(item, evidence, item.evidence_ids)
+def validate_gold_item(
+    item: GoldItem,
+    evidence: dict[str, EvidenceUnit],
+    commerce_cues: dict[str, CommerceCue] | None = None,
+    commercial_relations: dict[str, CommercialRelation] | None = None,
+) -> list[ValidationIssue]:
+    issues = _validate_common(
+        item,
+        evidence,
+        item.evidence_ids,
+        commerce_cues,
+        commercial_relations,
+    )
     item_id = item.gold_id
     min_evidence = TASK_MIN_EVIDENCE.get(item.task_type, 1)
     if len(set(item.evidence_ids)) < min_evidence:

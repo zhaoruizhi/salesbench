@@ -9,6 +9,7 @@ from ..multiagent.context import public_observation_context
 from ..multiagent.schema import VideoContextBundle
 from ..utils import clean_text
 from ..vlm.api_client import APICallResult, VLMClient
+from .commerce_schema import CommerceCue, CommercialRelation, CueType
 from .normalizer import (
     normalize_commerce_cues,
     normalize_commercial_relations,
@@ -16,7 +17,7 @@ from .normalizer import (
     normalize_proposals,
     semantic_key,
 )
-from .ontology import eligible_question_formats
+from .ontology import default_reasoning_operator, eligible_question_formats
 from .parsing import (
     ModelOutputError,
     parse_adjudication_response,
@@ -54,6 +55,7 @@ from .validators import (
     validate_commerce_cue,
     validate_commercial_relation,
     validate_evidence_unit,
+    validate_gold_proposal,
     validate_gold_item,
 )
 
@@ -111,21 +113,41 @@ def _empty_result(video_id: str, status: str, traces: list[dict[str, object]]) -
     )
 
 
-def build_bp_proposals_from_evidence(video_id: str, evidence_units: list[EvidenceUnit]) -> list[GoldProposal]:
+_BP_CUE_CAPABILITIES = {
+    CueType.PRODUCT_IDENTITY: "PRODUCT_IDENTITY",
+    CueType.PRODUCT_ATTRIBUTE: "ATTRIBUTE_AND_VARIANT",
+    CueType.PRODUCT_VARIANT: "ATTRIBUTE_AND_VARIANT",
+    CueType.QUANTITY: "QUANTITY_AND_BUNDLE",
+    CueType.BUNDLE: "QUANTITY_AND_BUNDLE",
+    CueType.PRICE: "PRICE_AND_DISCOUNT",
+    CueType.DISCOUNT: "PRICE_AND_DISCOUNT",
+    CueType.OFFER_CONDITION: "OFFER_CONDITION",
+    CueType.PROCESS_DEMONSTRATION: "USAGE_STEP",
+    CueType.OUTCOME_DISPLAY: "DEMONSTRATED_STATE_CHANGE",
+    CueType.BEFORE_AFTER: "DEMONSTRATED_STATE_CHANGE",
+    CueType.USAGE_SCENARIO: "USAGE_SCENARIO",
+}
+
+
+def build_bp_proposals_from_graph(
+    video_id: str,
+    evidence_units: list[EvidenceUnit],
+    commerce_cues: list[CommerceCue],
+    commercial_relations: list[CommercialRelation],
+) -> list[GoldProposal]:
     proposals: list[GoldProposal] = []
-    for idx, unit in enumerate(evidence_units):
-        if not unit.subject or unit.value in (None, ""):
+    evidence_by_id = {unit.evidence_id: unit for unit in evidence_units}
+    for idx, cue in enumerate(commerce_cues):
+        subtype = _BP_CUE_CAPABILITIES.get(cue.cue_type)
+        if subtype is None:
             continue
-        if unit.modality.value == "asr":
-            subtype = "ASR_FACT"
-        elif unit.modality.value == "ocr":
-            subtype = "OCR_FACT"
-        elif clean_text(unit.predicate).lower() in {"count", "数量"}:
-            subtype = "COUNT_SPATIAL"
-        elif clean_text(unit.predicate).lower() in {"action", "does", "do"}:
-            subtype = "ACTION"
-        else:
-            subtype = "ENTITY_ATTRIBUTE"
+        if not cue.evidence_ids or any(evidence_id not in evidence_by_id for evidence_id in cue.evidence_ids):
+            continue
+        related = [
+            relation
+            for relation in commercial_relations
+            if cue.cue_id in {*relation.source_cue_ids, *relation.target_cue_ids}
+        ]
         proposal_id = f"{video_id}_local_bp_{idx:03d}"
         proposals.append(
             GoldProposal(
@@ -134,11 +156,23 @@ def build_bp_proposals_from_evidence(video_id: str, evidence_units: list[Evidenc
                 source_agent="bp_compiler",
                 task_type=GoldTaskType.BP,
                 task_subtype=subtype,
-                target={"subject": unit.subject, "predicate": unit.predicate},
-                proposed_gold={"value": unit.value},
-                evidence_ids=(unit.evidence_id,),
-                reasoning_edges=((unit.evidence_id, f"{unit.subject}:{unit.predicate}", "SUPPORTED"),),
-                proposal_confidence=unit.confidence,
+                target={"cue_type": cue.cue_type.value, "specific_focus": cue.content_en},
+                proposed_gold={"answer": cue.content_en},
+                evidence_ids=cue.evidence_ids,
+                reasoning_edges=tuple(
+                    (evidence_id, cue.content_en, "SUPPORTED") for evidence_id in cue.evidence_ids
+                ),
+                proposal_confidence=cue.confidence,
+                capability=subtype,
+                reasoning_operator=default_reasoning_operator(GoldTaskType.BP, subtype),
+                commerce_cue_ids=(cue.cue_id,),
+                commercial_relation_ids=tuple(relation.relation_id for relation in related),
+                question_intent=(
+                    f"Ask what the video specifically presents about {subtype.lower().replace('_', ' ')}."
+                ),
+                forbidden_inferences=(
+                    "Do not infer sales, interaction, conversion, or unshown product properties.",
+                ),
             )
         )
     return proposals
@@ -169,6 +203,12 @@ def _bp_items_from_proposals(proposals: list[GoldProposal]) -> list[GoldItem]:
                 gold_tier=GoldTier.GOLD_A,
                 review_status="verified",
                 confidence=proposal.proposal_confidence,
+                capability=proposal.capability,
+                reasoning_operator=proposal.reasoning_operator,
+                commerce_cue_ids=proposal.commerce_cue_ids,
+                commercial_relation_ids=proposal.commercial_relation_ids,
+                question_intent=proposal.question_intent,
+                forbidden_inferences=proposal.forbidden_inferences,
             )
         )
     return items
@@ -586,7 +626,12 @@ class GoldBankPipeline:
                 status="partial",
             )
 
-        bp_proposals = build_bp_proposals_from_evidence(video_id, evidence_units)
+        bp_proposals = build_bp_proposals_from_graph(
+            video_id,
+            evidence_units,
+            commerce_cues,
+            commercial_relations,
+        )
         all_proposals = list(bp_proposals)
         used_proposal_ids = {proposal.proposal_id for proposal in bp_proposals}
 
@@ -595,7 +640,13 @@ class GoldBankPipeline:
             ("ss_proposer", "task_proposal"),
             ("ae_proposer", "task_proposal"),
         ):
-            system, user = build_proposer_prompt(generator, video_id, [unit.to_dict() for unit in evidence_units])
+            system, user = build_proposer_prompt(
+                generator,
+                video_id,
+                [unit.to_dict() for unit in evidence_units],
+                [cue.to_dict() for cue in commerce_cues],
+                [relation.to_dict() for relation in commercial_relations],
+            )
             call = self.llm_client.call_text_only(system, user, response_format="json_object")
             if not call.success:
                 status = "partial"
@@ -606,7 +657,13 @@ class GoldBankPipeline:
                 proposals: list[GoldProposal] = []
                 for ordinal, raw_proposal in enumerate(proposals_raw):
                     try:
-                        proposal = normalize_proposals(video_id, generator, [raw_proposal])[0]
+                        proposal = normalize_proposals(
+                            video_id,
+                            generator,
+                            [raw_proposal],
+                            set(cue_dict),
+                            {relation.relation_id for relation in commercial_relations},
+                        )[0]
                     except (ValueError, IndexError) as exc:
                         status = "partial"
                         human_review_queue.append(
@@ -635,12 +692,35 @@ class GoldBankPipeline:
 
         proposal_dicts = [proposal.to_dict() for proposal in all_proposals]
         eligible_proposal_dicts: list[dict[str, object]] = []
+        relation_dict = {relation.relation_id: relation for relation in commercial_relations}
         for proposal in all_proposals:
             if proposal.proposal_confidence < self.min_confidence:
                 human_review_queue.append(_review_queue_item(video_id, "below_min_confidence", proposal.to_dict()))
                 continue
+            proposal_issues = validate_gold_proposal(
+                proposal,
+                evidence_dict,
+                cue_dict,
+                relation_dict,
+            )
+            if any(issue.severity == "ERROR" for issue in proposal_issues):
+                human_review_queue.append(
+                    _review_queue_item(
+                        video_id,
+                        "proposal_graph_validation_failed",
+                        proposal.to_dict(),
+                        proposal_issues,
+                    )
+                )
+                continue
             eligible_proposal_dicts.append(proposal.to_dict())
-        system, user = build_challenger_prompt(video_id, eligible_proposal_dicts, [unit.to_dict() for unit in evidence_units])
+        system, user = build_challenger_prompt(
+            video_id,
+            eligible_proposal_dicts,
+            [unit.to_dict() for unit in evidence_units],
+            [cue.to_dict() for cue in commerce_cues],
+            [relation.to_dict() for relation in commercial_relations],
+        )
         challenge_call = self.llm_client.call_text_only(system, user, response_format="json_object")
         if not challenge_call.success:
             traces.append(_trace("challenge", "gold_challenger", challenge_call, error=challenge_call.error))
@@ -708,6 +788,8 @@ class GoldBankPipeline:
             ],
             [review.to_dict() for review in reviews],
             [unit.to_dict() for unit in evidence_units],
+            [cue.to_dict() for cue in commerce_cues],
+            [relation.to_dict() for relation in commercial_relations],
         )
         adjudication_call = self.llm_client.call_text_only(system, user, response_format="json_object")
         if not adjudication_call.success:
@@ -781,6 +863,12 @@ class GoldBankPipeline:
                             "eligible_question_formats": list(eligible_question_formats(source.task_type, source.task_subtype)),
                             "source_proposal_ids": sorted(source_ids),
                             "confidence": source.proposal_confidence,
+                            "capability": source.capability,
+                            "reasoning_operator": source.reasoning_operator,
+                            "commerce_cue_ids": list(source.commerce_cue_ids),
+                            "commercial_relation_ids": list(source.commercial_relation_ids),
+                            "question_intent": source.question_intent,
+                            "forbidden_inferences": list(source.forbidden_inferences),
                             "annotation_id": make_gold_id(
                                 video_id,
                                 source.task_type,
@@ -838,7 +926,7 @@ class GoldBankPipeline:
             if item.confidence < self.min_confidence:
                 human_review_queue.append(_review_queue_item(video_id, "below_min_confidence", item.to_dict()))
                 continue
-            issues = validate_gold_item(item, evidence_dict)
+            issues = validate_gold_item(item, evidence_dict, cue_dict, relation_dict)
             errors = [issue for issue in issues if issue.severity == "ERROR"]
             if errors or item.gold_tier not in {GoldTier.GOLD_A, GoldTier.GOLD_B}:
                 human_review_queue.append(_review_queue_item(video_id, "validation_failed", item.to_dict(), issues))

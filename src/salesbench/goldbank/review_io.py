@@ -66,6 +66,16 @@ def _proposal_to_gold_item(queue_item: dict[str, object], decision: dict[str, ob
         "quality_status": "INFERRED",
         "review_status": "human_accepted",
         "confidence": float(proposal.get("proposal_confidence", 0.8) or 0.8),
+        "capability": clean_text(proposal.get("capability")) or task_subtype,
+        "reasoning_operator": clean_text(proposal.get("reasoning_operator")).upper(),
+        "commerce_cue_ids": [clean_text(value) for value in proposal.get("commerce_cue_ids") or []],
+        "commercial_relation_ids": [
+            clean_text(value) for value in proposal.get("commercial_relation_ids") or []
+        ],
+        "question_intent": clean_text(proposal.get("question_intent")),
+        "forbidden_inferences": [
+            clean_text(value) for value in proposal.get("forbidden_inferences") or []
+        ],
         "human_review": {
             "review_item_id": clean_text(decision.get("review_item_id")),
             "reviewer_id": clean_text(decision.get("reviewer_id")),

@@ -17,7 +17,7 @@ from .commerce_schema import (
     parse_commerce_cue,
     parse_commercial_relation,
 )
-from .ontology import allowed_subtypes
+from .ontology import allowed_subtypes, default_reasoning_operator
 from .schema import (
     EvidenceModality,
     EvidenceUnit,
@@ -42,26 +42,26 @@ _CONFIDENCE_LABELS = {
     "very_low": 0.25,
     "very low": 0.25,
 }
-_PROPOSER_ALLOWED_SUBTYPES = {
-    "ae_proposer": {
-        (GoldTaskType.AE, "AUDIENCE_NEED_FIT"),
-        (GoldTaskType.AE, "USAGE_CONTEXT"),
-        (GoldTaskType.AE, "DECISION_STATE"),
-        (GoldTaskType.AE, "CONTENT_MOTIVATION"),
-    },
-    "cm_proposer": {
-        (GoldTaskType.CM, "CLAIM_EVIDENCE_RELATION"),
-        (GoldTaskType.CM, "CLAIM_PARTIAL_SUPPORT"),
-        (GoldTaskType.CM, "TEXT_VISUAL_CONSISTENCY"),
-    },
-    "ss_proposer": {
-        (GoldTaskType.SS, "HOOK_MECHANISM"),
-        (GoldTaskType.SS, "VALUE_PROPOSITION"),
-        (GoldTaskType.SS, "TRUST_MECHANISM"),
-        (GoldTaskType.SS, "OBJECTION_HANDLING"),
-        (GoldTaskType.SS, "URGENCY_CTA"),
-        (GoldTaskType.SS, "FUNNEL_ROLE"),
-    },
+_PROPOSER_TASKS = {
+    "cm_proposer": GoldTaskType.CM,
+    "ss_proposer": GoldTaskType.SS,
+    "ae_proposer": GoldTaskType.AE,
+}
+
+_DEFAULT_FORBIDDEN_INFERENCES = {
+    GoldTaskType.BP: (
+        "Do not infer interaction, sales, conversion, or unshown product properties.",
+    ),
+    GoldTaskType.CM: (
+        "Do not treat repeated promotional wording as independent visual proof.",
+        "Do not infer outcomes beyond the cited observation window.",
+    ),
+    GoldTaskType.SS: (
+        "Do not claim that the content caused trust, purchase, conversion, or interaction.",
+    ),
+    GoldTaskType.AE: (
+        "Do not infer a real viewer profile, purchase intention, conversion, or popularity.",
+    ),
 }
 
 
@@ -298,14 +298,22 @@ def normalize_commercial_relations(
     return relations
 
 
-def normalize_proposals(video_id: str, generator: str, raw: list[dict[str, object]]) -> list[GoldProposal]:
+def normalize_proposals(
+    video_id: str,
+    generator: str,
+    raw: list[dict[str, object]],
+    commerce_cue_ids: set[str] | None = None,
+    commercial_relation_ids: set[str] | None = None,
+) -> list[GoldProposal]:
     proposals: list[GoldProposal] = []
     generator = normalize_text(generator).lower()
+    if generator not in _PROPOSER_TASKS:
+        raise ValueError(f"Unknown task generator: {generator}")
     for idx, record in enumerate(raw):
         payload = dict(record)
         task_type = GoldTaskType(normalize_text(payload.get("task_type")).upper())
         subtype = normalize_task_subtype(task_type, payload.get("task_subtype"))
-        if (task_type, subtype) not in _PROPOSER_ALLOWED_SUBTYPES.get(generator, set()):
+        if task_type != _PROPOSER_TASKS[generator]:
             raise ValueError(f"{generator} cannot emit {task_type.value}/{subtype}")
         target = payload.get("target")
         proposed_gold = payload.get("proposed_gold")
@@ -313,11 +321,59 @@ def normalize_proposals(video_id: str, generator: str, raw: list[dict[str, objec
             raise ValueError("Proposal target must be a non-empty object")
         if not isinstance(proposed_gold, dict) or not proposed_gold:
             raise ValueError("Proposal proposed_gold must be a non-empty object")
-        if contains_cjk((target, proposed_gold, payload.get("reasoning_edges", []))):
+        capability = normalize_text(payload.get("capability") or subtype).upper()
+        if capability != subtype:
+            raise ValueError("Proposal capability must equal task_subtype")
+        reasoning_operator = normalize_text(
+            payload.get("reasoning_operator") or default_reasoning_operator(task_type, subtype)
+        ).upper()
+        cue_ids = tuple(
+            dict.fromkeys(
+                normalize_text(value)
+                for value in payload.get("commerce_cue_ids", []) or []
+                if normalize_text(value)
+            )
+        )
+        relation_ids = tuple(
+            dict.fromkeys(
+                normalize_text(value)
+                for value in payload.get("commercial_relation_ids", []) or []
+                if normalize_text(value)
+            )
+        )
+        if commerce_cue_ids is not None and any(cue_id not in commerce_cue_ids for cue_id in cue_ids):
+            raise ValueError("Proposal references an unknown CommerceCue")
+        if commercial_relation_ids is not None and any(
+            relation_id not in commercial_relation_ids for relation_id in relation_ids
+        ):
+            raise ValueError("Proposal references an unknown CommercialRelation")
+        question_intent = normalize_text(payload.get("question_intent")) or (
+            f"Ask a specific evidence-grounded question about {subtype.lower().replace('_', ' ')}."
+        )
+        forbidden_inferences = tuple(
+            normalize_text(value)
+            for value in payload.get("forbidden_inferences", []) or _DEFAULT_FORBIDDEN_INFERENCES[task_type]
+            if normalize_text(value)
+        )
+        if contains_cjk(
+            (
+                target,
+                proposed_gold,
+                payload.get("reasoning_edges", []),
+                question_intent,
+                forbidden_inferences,
+            )
+        ):
             raise ValueError("Proposal normalized natural-language fields must use English")
         payload["task_subtype"] = subtype
         payload["video_id"] = video_id
         payload["source_agent"] = generator
+        payload["capability"] = capability
+        payload["reasoning_operator"] = reasoning_operator
+        payload["commerce_cue_ids"] = list(cue_ids)
+        payload["commercial_relation_ids"] = list(relation_ids)
+        payload["question_intent"] = question_intent
+        payload["forbidden_inferences"] = list(forbidden_inferences)
         proposal_id = normalize_text(payload.get("proposal_id"))
         if proposal_id.lower() in {"optional", "optional string", "none", "null", "n/a"}:
             proposal_id = ""

@@ -1,4 +1,4 @@
-"""Controlled ontology for the four public SalesBench VQA tasks."""
+"""Controlled capability ontology for the four public SalesBench tasks."""
 
 from __future__ import annotations
 
@@ -6,13 +6,14 @@ from .schema import GoldTaskType
 
 
 BP_SUBTYPES = {
-    "ENTITY_ATTRIBUTE",
-    "COUNT_SPATIAL",
-    "ACTION",
-    "STATE_CHANGE",
-    "TEMPORAL_ORDER",
-    "OCR_FACT",
-    "ASR_FACT",
+    "PRODUCT_IDENTITY",
+    "ATTRIBUTE_AND_VARIANT",
+    "QUANTITY_AND_BUNDLE",
+    "PRICE_AND_DISCOUNT",
+    "OFFER_CONDITION",
+    "USAGE_STEP",
+    "DEMONSTRATED_STATE_CHANGE",
+    "USAGE_SCENARIO",
 }
 
 CM_RELATIONS = {
@@ -24,44 +25,43 @@ CM_RELATIONS = {
 }
 
 CM_SUBTYPES = {
-    "CLAIM_EVIDENCE_RELATION",
-    "CLAIM_PARTIAL_SUPPORT",
-    "TEXT_VISUAL_CONSISTENCY",
-}
-
-SS_ONTOLOGY = {
-    "hook": {"pain_problem", "result_first", "question", "contrast", "surprise"},
-    "value": {"function", "price_value", "convenience", "health", "aesthetics", "education"},
-    "trust": {"demonstration", "comparison", "authority", "social_proof", "process", "guarantee"},
-    "objection": {"price", "authenticity", "effectiveness", "difficulty", "risk"},
-    "urgency": {"time_limit", "stock_limit", "price_window"},
-    "cta": {"purchase", "comment", "collect", "share"},
-    "funnel": {"attention", "comprehension", "trust", "action"},
+    "SPEECH_VISUAL_COREFERENCE",
+    "OCR_SPEECH_OFFER_ALIGNMENT",
+    "CLAIM_DEMONSTRATION_STATUS",
+    "REPETITION_VS_INDEPENDENT_EVIDENCE",
+    "PARTIAL_SUPPORT",
+    "CONTRADICTION",
+    "TEMPORAL_MISALIGNMENT",
+    "NOT_DEMONSTRATED",
 }
 
 SS_SUBTYPES = {
-    "HOOK_MECHANISM",
-    "VALUE_PROPOSITION",
-    "TRUST_MECHANISM",
+    "PROBLEM_SOLUTION",
+    "FEATURE_BENEFIT",
+    "PROCESS_DEMONSTRATION",
+    "OUTCOME_DISPLAY",
+    "BEFORE_AFTER_COMPARISON",
+    "VICARIOUS_TRIAL",
+    "PRICE_VALUE_FRAMING",
+    "REFERENCE_PRICE_ANCHORING",
+    "CREDIBILITY_SIGNAL",
+    "SOCIAL_PROOF",
+    "LIMITATION_DISCLOSURE",
     "OBJECTION_HANDLING",
-    "URGENCY_CTA",
-    "FUNNEL_ROLE",
-}
-
-AE_FIELDS = {
-    "audience_need",
-    "usage_context",
-    "decision_state",
-    "content_motivation",
-    "supporting_evidence",
-    "uncertainty",
+    "SCARCITY_AND_URGENCY",
+    "CTA_SEQUENCE",
 }
 
 AE_SUBTYPES = {
-    "AUDIENCE_NEED_FIT",
+    "CONTENT_IMPLIED_NEED",
     "USAGE_CONTEXT",
-    "DECISION_STATE",
-    "CONTENT_MOTIVATION",
+    "FIT_CONSTRAINT",
+    "QUALITY_UNCERTAINTY",
+    "USAGE_UNCERTAINTY",
+    "PRICE_UNCERTAINTY",
+    "SERVICE_OR_RISK_CONCERN",
+    "DECISION_BARRIER",
+    "OFFER_NEED_ALIGNMENT",
 }
 
 TASK_SUBTYPES = {
@@ -78,46 +78,99 @@ TASK_MIN_EVIDENCE = {
     GoldTaskType.AE: 2,
 }
 
+CAPABILITY_LEVELS = {
+    **{(GoldTaskType.BP, subtype): "CUE" for subtype in BP_SUBTYPES},
+    **{(GoldTaskType.CM, subtype): "RELATION_REQUIRED" for subtype in CM_SUBTYPES},
+    **{(GoldTaskType.SS, subtype): "RELATION_PATH_REQUIRED" for subtype in SS_SUBTYPES},
+    **{(GoldTaskType.AE, subtype): "CUE_OR_RELATION" for subtype in AE_SUBTYPES},
+    (GoldTaskType.BP, "OFFER_CONDITION"): "RELATION_OPTIONAL",
+    (GoldTaskType.BP, "DEMONSTRATED_STATE_CHANGE"): "RELATION_OPTIONAL",
+}
+
+REASONING_OPERATORS = {
+    (GoldTaskType.BP, "PRODUCT_IDENTITY"): "IDENTIFY_PRODUCT",
+    (GoldTaskType.BP, "ATTRIBUTE_AND_VARIANT"): "EXTRACT_ATTRIBUTE",
+    (GoldTaskType.BP, "QUANTITY_AND_BUNDLE"): "AGGREGATE_OFFER",
+    (GoldTaskType.BP, "PRICE_AND_DISCOUNT"): "EXTRACT_OFFER",
+    (GoldTaskType.BP, "OFFER_CONDITION"): "EXTRACT_CONDITION",
+    (GoldTaskType.BP, "USAGE_STEP"): "SEQUENCE_ACTION",
+    (GoldTaskType.BP, "DEMONSTRATED_STATE_CHANGE"): "COMPARE_STATE",
+    (GoldTaskType.BP, "USAGE_SCENARIO"): "LOCALIZE_SCENARIO",
+    (GoldTaskType.CM, "SPEECH_VISUAL_COREFERENCE"): "ALIGN_COREFERENCE",
+    (GoldTaskType.CM, "OCR_SPEECH_OFFER_ALIGNMENT"): "COMPARE_OFFER",
+    (GoldTaskType.CM, "CLAIM_DEMONSTRATION_STATUS"): "CLASSIFY_CLAIM_SUPPORT",
+    (GoldTaskType.CM, "REPETITION_VS_INDEPENDENT_EVIDENCE"): "DISTINGUISH_REPETITION",
+    (GoldTaskType.CM, "PARTIAL_SUPPORT"): "DECOMPOSE_CLAIM",
+    (GoldTaskType.CM, "CONTRADICTION"): "DETECT_CONTRADICTION",
+    (GoldTaskType.CM, "TEMPORAL_MISALIGNMENT"): "ALIGN_TEMPORAL_STATE",
+    (GoldTaskType.CM, "NOT_DEMONSTRATED"): "VERIFY_ABSENCE_WITH_SCOPE",
+    (GoldTaskType.SS, "PROBLEM_SOLUTION"): "RECONSTRUCT_PROBLEM_SOLUTION",
+    (GoldTaskType.SS, "FEATURE_BENEFIT"): "MAP_FEATURE_TO_BENEFIT",
+    (GoldTaskType.SS, "PROCESS_DEMONSTRATION"): "INTERPRET_PROCESS_ROLE",
+    (GoldTaskType.SS, "OUTCOME_DISPLAY"): "INTERPRET_OUTCOME_ROLE",
+    (GoldTaskType.SS, "BEFORE_AFTER_COMPARISON"): "COMPARE_PRESENTED_STATES",
+    (GoldTaskType.SS, "VICARIOUS_TRIAL"): "RECONSTRUCT_VICARIOUS_TRIAL",
+    (GoldTaskType.SS, "PRICE_VALUE_FRAMING"): "LINK_PRICE_TO_VALUE",
+    (GoldTaskType.SS, "REFERENCE_PRICE_ANCHORING"): "COMPARE_PRICE_ANCHOR",
+    (GoldTaskType.SS, "CREDIBILITY_SIGNAL"): "IDENTIFY_CREDIBILITY_CUE",
+    (GoldTaskType.SS, "SOCIAL_PROOF"): "IDENTIFY_INTERNAL_SOCIAL_PROOF",
+    (GoldTaskType.SS, "LIMITATION_DISCLOSURE"): "IDENTIFY_LIMITATION",
+    (GoldTaskType.SS, "OBJECTION_HANDLING"): "TRACE_OBJECTION_RESPONSE",
+    (GoldTaskType.SS, "SCARCITY_AND_URGENCY"): "EXTRACT_URGENCY_CONDITION",
+    (GoldTaskType.SS, "CTA_SEQUENCE"): "ORDER_CONTENT_BEFORE_CTA",
+    (GoldTaskType.AE, "CONTENT_IMPLIED_NEED"): "INFER_BOUNDED_NEED",
+    (GoldTaskType.AE, "USAGE_CONTEXT"): "LOCALIZE_USAGE_CONTEXT",
+    (GoldTaskType.AE, "FIT_CONSTRAINT"): "MATCH_FIT_CONSTRAINT",
+    (GoldTaskType.AE, "QUALITY_UNCERTAINTY"): "TRACE_QUALITY_CONCERN",
+    (GoldTaskType.AE, "USAGE_UNCERTAINTY"): "TRACE_USAGE_CONCERN",
+    (GoldTaskType.AE, "PRICE_UNCERTAINTY"): "TRACE_PRICE_CONCERN",
+    (GoldTaskType.AE, "SERVICE_OR_RISK_CONCERN"): "TRACE_RISK_RESPONSE",
+    (GoldTaskType.AE, "DECISION_BARRIER"): "IDENTIFY_DECISION_BARRIER",
+    (GoldTaskType.AE, "OFFER_NEED_ALIGNMENT"): "ALIGN_OFFER_TO_NEED",
+}
+
 SUBTYPE_QUESTION_FORMATS = {
-    (GoldTaskType.BP, "ENTITY_ATTRIBUTE"): ("direct_question",),
-    (GoldTaskType.BP, "COUNT_SPATIAL"): ("direct_question",),
-    (GoldTaskType.BP, "ACTION"): ("direct_question",),
-    (GoldTaskType.BP, "STATE_CHANGE"): ("direct_question",),
-    (GoldTaskType.BP, "TEMPORAL_ORDER"): ("direct_question",),
-    (GoldTaskType.BP, "OCR_FACT"): ("direct_question",),
-    (GoldTaskType.BP, "ASR_FACT"): ("direct_question",),
-    (GoldTaskType.CM, "CLAIM_EVIDENCE_RELATION"): ("relation_choice",),
-    (GoldTaskType.CM, "CLAIM_PARTIAL_SUPPORT"): ("supported_missing",),
-    (GoldTaskType.CM, "TEXT_VISUAL_CONSISTENCY"): ("relation_choice",),
-    (GoldTaskType.SS, "HOOK_MECHANISM"): ("mechanism_with_evidence",),
-    (GoldTaskType.SS, "VALUE_PROPOSITION"): ("mechanism_with_evidence",),
-    (GoldTaskType.SS, "TRUST_MECHANISM"): ("mechanism_with_evidence",),
-    (GoldTaskType.SS, "OBJECTION_HANDLING"): ("mechanism_with_evidence",),
-    (GoldTaskType.SS, "URGENCY_CTA"): ("mechanism_with_evidence",),
-    (GoldTaskType.SS, "FUNNEL_ROLE"): ("mechanism_with_evidence",),
-    (GoldTaskType.AE, "AUDIENCE_NEED_FIT"): ("need_with_evidence",),
-    (GoldTaskType.AE, "USAGE_CONTEXT"): ("need_with_evidence",),
-    (GoldTaskType.AE, "DECISION_STATE"): ("need_with_evidence",),
-    (GoldTaskType.AE, "CONTENT_MOTIVATION"): ("need_with_evidence",),
+    (task, subtype): ("grounded_question",)
+    for task, subtypes in TASK_SUBTYPES.items()
+    for subtype in subtypes
 }
 
 
+def _task(task_type: GoldTaskType | str) -> GoldTaskType:
+    return task_type if isinstance(task_type, GoldTaskType) else GoldTaskType(str(task_type).upper())
+
+
 def allowed_subtypes(task_type: GoldTaskType | str) -> set[str]:
-    task = task_type if isinstance(task_type, GoldTaskType) else GoldTaskType(str(task_type).upper())
-    return set(TASK_SUBTYPES[task])
+    return set(TASK_SUBTYPES[_task(task_type)])
+
+
+def capability_level(task_type: GoldTaskType | str, subtype: str) -> str:
+    task = _task(task_type)
+    normalized = str(subtype).strip().upper()
+    if normalized not in TASK_SUBTYPES[task]:
+        raise ValueError(f"Unknown capability for {task.value}: {normalized}")
+    return CAPABILITY_LEVELS[(task, normalized)]
+
+
+def default_reasoning_operator(task_type: GoldTaskType | str, subtype: str) -> str:
+    task = _task(task_type)
+    normalized = str(subtype).strip().upper()
+    try:
+        return REASONING_OPERATORS[(task, normalized)]
+    except KeyError as exc:
+        raise ValueError(f"Unknown capability for {task.value}: {normalized}") from exc
 
 
 def eligible_question_formats(task_type: GoldTaskType | str, subtype: str) -> tuple[str, ...]:
-    task = task_type if isinstance(task_type, GoldTaskType) else GoldTaskType(str(task_type).upper())
-    return SUBTYPE_QUESTION_FORMATS.get((task, str(subtype).upper()), ())
+    return SUBTYPE_QUESTION_FORMATS.get((_task(task_type), str(subtype).upper()), ())
 
 
 def task_description(task_type: GoldTaskType | str) -> str:
-    task = task_type if isinstance(task_type, GoldTaskType) else GoldTaskType(str(task_type).upper())
+    task = _task(task_type)
     if task == GoldTaskType.BP:
-        return "BP captures directly observable facts in the video."
+        return "BP grounds products, offers, usage steps, state changes, and usage scenarios."
     if task == GoldTaskType.CM:
-        return "CM captures relations between spoken/text claims and visible or textual evidence."
+        return "CM verifies whether claims are demonstrated, repeated, partial, contradictory, or misaligned."
     if task == GoldTaskType.SS:
-        return "SS captures controlled marketing strategy mechanisms grounded in evidence."
-    return "AE captures audience need and scenario fit grounded in evidence."
+        return "SS reconstructs observable persuasion and sales logic from commercial relation paths."
+    return "AE aligns represented needs, constraints, objections, and offer responses without profiling viewers."

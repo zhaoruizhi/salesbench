@@ -176,7 +176,7 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 [
                     {
                         "task_type": "CM",
-                        "task_subtype": "CLAIM_EVIDENCE_RELATION",
+                        "task_subtype": "CLAIM_DEMONSTRATION_STATUS",
                         "target": {"claim": "claim"},
                         "proposed_gold": {"relation": "SUPPORTED"},
                         "evidence_ids": ["e1", "e2"],
@@ -193,7 +193,7 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 [
                     {
                         "task_type": "SS",
-                        "task_subtype": "VALUE_PROPOSITION",
+                        "task_subtype": "FEATURE_BENEFIT",
                         "target": {"segment": "opening"},
                         "proposed_gold": {"label": "value proposition"},
                         "evidence_ids": ["e1", "e2"],
@@ -210,7 +210,7 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 [
                     {
                         "task_type": "SS",
-                        "task_subtype": "HOOK_MECHANISM",
+                        "task_subtype": "PROBLEM_SOLUTION",
                         "target": {"segment": "opening"},
                         "proposed_gold": {"label": "question hook"},
                         "evidence_ids": ["e1", "e2"],
@@ -228,7 +228,7 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 {
                     "proposal_id": "optional",
                     "task_type": "SS",
-                    "task_subtype": "HOOK_MECHANISM",
+                    "task_subtype": "PROBLEM_SOLUTION",
                     "target": {"segment": "opening"},
                     "proposed_gold": {"label": "result-first hook"},
                     "evidence_ids": ["e1", "e2"],
@@ -267,7 +267,7 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 [
                     {
                         "task_type": "SS",
-                        "task_subtype": "HOOK_MECHANISM",
+                    "task_subtype": "PROBLEM_SOLUTION",
                         "target": {"segment": "开场", "mechanism": "result first"},
                         "proposed_gold": {"label": "result-first", "answer": "The opening shows the result."},
                         "evidence_ids": ["e1", "e2"],
