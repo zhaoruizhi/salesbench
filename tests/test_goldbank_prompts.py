@@ -24,6 +24,7 @@ from salesbench.goldbank.prompts import (  # noqa: E402
     build_language_evidence_prompt,
     build_proposer_prompt,
     build_visual_evidence_prompt,
+    build_visual_evidence_repair_prompt,
     build_visual_commerce_cue_prompt,
 )
 
@@ -67,6 +68,22 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn("modality=visual", visual_system)
         self.assertNotIn("asr_subtitles", str(visual_user))
         self.assertNotRegex(language_system + visual_system, r"[\u4e00-\u9fff]")
+
+    def test_visual_evidence_repair_prompt_is_visual_only_and_preserves_local_rejections(self):
+        repair_system, repair_user = build_visual_evidence_repair_prompt(
+            "v1",
+            {"sampled_frames": [{"frame_index": 4, "timestamp_s": 1.5}]},
+            [{"content_en": "A product 商品 is visible.", "frame_indices": [4]}],
+            [{"code": "NON_ENGLISH_NORMALIZED_TEXT", "item_id": "candidate-1"}],
+        )
+
+        self.assertIn("Visual Evidence Repairer", repair_system)
+        self.assertIn('modality="visual"', repair_system)
+        self.assertIn("three to eight", repair_system)
+        self.assertIn("Do not output OCR", repair_system)
+        self.assertNotRegex(repair_system, r"[\u4e00-\u9fff]")
+        self.assertIn("NON_ENGLISH_NORMALIZED_TEXT", str(repair_user))
+        self.assertIn("frame_index", str(repair_user))
 
     def test_v9_commerce_prompts_are_english_and_forbid_outcome_claims(self):
         evidence = [{

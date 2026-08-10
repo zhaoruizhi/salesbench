@@ -126,4 +126,5 @@ def test_prompt_translation_jobs_include_split_evidence_prompts(tmp_path: Path):
 
     assert "language_evidence_extractor" in prompt_ids
     assert "visual_evidence_extractor" in prompt_ids
+    assert "visual_evidence_repairer" in prompt_ids
     assert "visual_commerce_cue_extractor" in prompt_ids

@@ -140,6 +140,39 @@ def build_visual_evidence_prompt(
     return system, [{"type": "text", "text": user}]
 
 
+def build_visual_evidence_repair_prompt(
+    video_id: str,
+    content_context: dict[str, object],
+    rejected_candidates: list[dict[str, object]],
+    local_rejection_reasons: list[dict[str, object]],
+) -> tuple[str, list[dict]]:
+    system = (
+        "You are the SalesBench Visual Evidence Repairer. A previous frame-grounded response was "
+        "rejected by deterministic local validation. Reinspect the supplied frames and return three to "
+        "eight corrected atomic EvidenceUnits. Every item must use modality=\"visual\" exactly and must "
+        "describe a concrete visible product, person, action, state, comparison, demonstration, package, "
+        "or usage scene. Every item must contain start_s, end_s, frame_indices, content_en, "
+        "source_text_native, subject, predicate, value, attributes, and numeric confidence. Use one or "
+        "more exact supplied frame indices, keep source_text_native empty, and write content_en, subject, "
+        "predicate, value, and every descriptive attribute in English only. Translate a visible product "
+        "category into English instead of copying CJK characters into normalized fields. Do not output OCR, "
+        "ASR, subtitles, creator handles, account IDs, watermarks, platform logos, or engagement counters. "
+        "Do not infer product effects, audience response, sales, or external facts. Rejected candidates are "
+        "diagnostic hints, not trusted facts: retain a candidate only if the supplied frames independently "
+        "show it. Return strict JSON with exactly one top-level key, evidence_units, and do not generate "
+        "questions."
+    )
+    user = _json(
+        {
+            "video_id": video_id,
+            "sampled_frames": content_context.get("sampled_frames") or [],
+            "rejected_candidates": rejected_candidates,
+            "local_rejection_reasons": local_rejection_reasons,
+        }
+    )
+    return system, [{"type": "text", "text": user}]
+
+
 def _enum_values(enum_type: type) -> str:
     return ", ".join(item.value for item in enum_type)
 

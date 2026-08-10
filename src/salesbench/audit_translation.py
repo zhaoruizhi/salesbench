@@ -24,6 +24,7 @@ from .goldbank.prompts import (
     build_language_evidence_prompt,
     build_proposer_prompt,
     build_visual_evidence_prompt,
+    build_visual_evidence_repair_prompt,
     build_visual_commerce_cue_prompt,
 )
 from .io_utils import read_json, read_jsonl, write_jsonl
@@ -138,6 +139,7 @@ def _prompt_jobs() -> list[TranslationJob]:
     evidence_system, _ = build_evidence_extractor_prompt("video", {})
     language_evidence_system, _ = build_language_evidence_prompt("video", {})
     visual_evidence_system, _ = build_visual_evidence_prompt("video", {})
+    visual_evidence_repair_system, _ = build_visual_evidence_repair_prompt("video", {}, [], [])
     visual_commerce_cue_system, _ = build_visual_commerce_cue_prompt("video", [])
     cue_system, _ = build_commerce_cue_prompt("video", [])
     relation_system, _ = build_commercial_relation_prompt("video", [], [])
@@ -145,6 +147,7 @@ def _prompt_jobs() -> list[TranslationJob]:
         "evidence_extractor": evidence_system,
         "language_evidence_extractor": language_evidence_system,
         "visual_evidence_extractor": visual_evidence_system,
+        "visual_evidence_repairer": visual_evidence_repair_system,
         "visual_commerce_cue_extractor": visual_commerce_cue_system,
         "bp_compiler": BP_COMPILER_CONTRACT,
         "commerce_cue_extractor": cue_system,

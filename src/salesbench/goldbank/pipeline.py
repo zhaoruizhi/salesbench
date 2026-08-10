@@ -37,6 +37,7 @@ from .prompts import (
     build_language_evidence_prompt,
     build_proposer_prompt,
     build_visual_evidence_prompt,
+    build_visual_evidence_repair_prompt,
     build_visual_commerce_cue_prompt,
 )
 from .schema import (
@@ -397,12 +398,10 @@ class GoldBankPipeline:
             agent_name: str,
             call: APICallResult,
             allowed_modalities: set[EvidenceModality],
-        ) -> None:
-            nonlocal evidence_stage_failed
+        ) -> tuple[list[EvidenceUnit], list[dict[str, object]], list[dict[str, object]]]:
             if not call.success:
-                evidence_stage_failed = True
                 traces.append(_trace(stage, agent_name, call, error=call.error))
-                return
+                return [], [], []
             try:
                 raw_units = parse_evidence_response(call.raw_response)
                 normalized = normalize_evidence_units(video_id, raw_units)
@@ -422,20 +421,23 @@ class GoldBankPipeline:
                     validation_issues.extend(issue.to_dict() for issue in issues)
                     if not any(issue.severity == "ERROR" for issue in issues):
                         accepted.append(unit)
-                if not accepted:
-                    evidence_stage_failed = True
                 evidence_units.extend(accepted)
                 traces.append(
                     _trace(
                         stage,
                         agent_name,
                         call,
-                        {"evidence_units": raw_units, "validation_issues": validation_issues},
+                        {
+                            "evidence_units": raw_units,
+                            "accepted_evidence_units": [unit.to_dict() for unit in accepted],
+                            "validation_issues": validation_issues,
+                        },
                     )
                 )
+                return accepted, raw_units, validation_issues
             except (ModelOutputError, ValueError) as exc:
-                evidence_stage_failed = True
                 traces.append(_trace(stage, agent_name, call, error=str(exc)))
+                return [], [], []
 
         asr_subtitles = content_context.get("asr_subtitles") or {}
         if asr_subtitles:
@@ -445,12 +447,14 @@ class GoldBankPipeline:
                 language_user,
                 response_format="json_object",
             )
-            collect_evidence(
+            language_accepted, _, _ = collect_evidence(
                 "language_evidence_extraction",
                 "asr_evidence_extractor",
                 language_call,
                 {EvidenceModality.ASR},
             )
+            if not any(unit.modality == EvidenceModality.ASR for unit in language_accepted):
+                evidence_stage_failed = True
 
         if image_blocks:
             visual_system, visual_user = build_visual_evidence_prompt(video_id, content_context)
@@ -459,22 +463,44 @@ class GoldBankPipeline:
                 [*image_blocks, *visual_user],
                 response_format="json_object",
             )
-            collect_evidence(
+            visual_accepted, rejected_visual, visual_validation_issues = collect_evidence(
                 "visual_evidence_extraction",
                 "visual_ocr_evidence_extractor",
                 visual_call,
                 {EvidenceModality.VISUAL, EvidenceModality.OCR},
             )
+            if not any(unit.modality == EvidenceModality.VISUAL for unit in visual_accepted):
+                repair_system, repair_user = build_visual_evidence_repair_prompt(
+                    video_id,
+                    content_context,
+                    rejected_visual,
+                    visual_validation_issues,
+                )
+                repair_call = self.vlm_client.call(
+                    repair_system,
+                    [*image_blocks, *repair_user],
+                    response_format="json_object",
+                )
+                repaired, _, _ = collect_evidence(
+                    "visual_evidence_repair",
+                    "visual_evidence_repairer",
+                    repair_call,
+                    {EvidenceModality.VISUAL},
+                )
+                if not any(unit.modality == EvidenceModality.VISUAL for unit in repaired):
+                    evidence_stage_failed = True
 
         if not asr_subtitles and not image_blocks:
             system, user_blocks = build_evidence_extractor_prompt(video_id, content_context)
             evidence_call = self.vlm_client.call(system, user_blocks, response_format="json_object")
-            collect_evidence(
+            fallback_accepted, _, _ = collect_evidence(
                 "evidence_extraction",
                 "objective_evidence_extractor",
                 evidence_call,
                 {EvidenceModality.VISUAL, EvidenceModality.OCR, EvidenceModality.ASR},
             )
+            if not fallback_accepted:
+                evidence_stage_failed = True
 
         evidence_units = list({unit.evidence_id: unit for unit in evidence_units}.values())
 

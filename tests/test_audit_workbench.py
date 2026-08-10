@@ -215,9 +215,11 @@ def test_prompt_snapshot_includes_split_language_and_visual_evidence_stages() ->
 
     assert "language_evidence_extractor" in prompts
     assert "visual_evidence_extractor" in prompts
+    assert "visual_evidence_repairer" in prompts
     assert "visual_commerce_cue_extractor" in prompts
     assert "ASR Evidence Extractor" in prompts["language_evidence_extractor"]["system"]
     assert "Visual and OCR Evidence Extractor" in prompts["visual_evidence_extractor"]["system"]
+    assert "Visual Evidence Repairer" in prompts["visual_evidence_repairer"]["system"]
 
 
 def test_compact_preview_prioritizes_structural_risks_over_systemic_missing_time() -> None:

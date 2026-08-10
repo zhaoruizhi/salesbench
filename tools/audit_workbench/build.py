@@ -27,6 +27,7 @@ from salesbench.goldbank.prompts import (
     build_language_evidence_prompt,
     build_proposer_prompt,
     build_visual_evidence_prompt,
+    build_visual_evidence_repair_prompt,
     build_visual_commerce_cue_prompt,
 )
 from salesbench.goldbank.validators import PRIVATE_KEYS
@@ -289,6 +290,26 @@ def collect_prompt_snapshot() -> list[dict[str, Any]]:
             )[1],
             "observed": ["独立处理帧与 OCR，并要求至少一条可见事实。"],
             "recommendations": ["核对 OCR 是否排除了重复字幕、账号水印和互动计数。"],
+        },
+        {
+            "id": "visual_evidence_repairer",
+            "name": "Visual Evidence Repairer",
+            "stage": "Evidence / Local-validation repair",
+            "version": PROMPT_VERSION,
+            "system": build_visual_evidence_repair_prompt(
+                "{{video_id}}",
+                {"sampled_frames": "{{image parts with frame labels}}"},
+                [{"content_en": "{{rejected candidate}}"}],
+                [{"code": "{{local validation issue}}"}],
+            )[0],
+            "user_template": build_visual_evidence_repair_prompt(
+                "{{video_id}}",
+                {"sampled_frames": "{{image parts with frame labels}}"},
+                [{"content_en": "{{rejected candidate}}"}],
+                [{"code": "{{local validation issue}}"}],
+            )[1],
+            "observed": ["仅在有采样帧但首轮没有任何 visual EvidenceUnit 通过本地验证时触发。"],
+            "recommendations": ["修复输出仍须重新看帧，并再次通过英文、模态与帧定位规则。"],
         },
         {
             "id": "visual_commerce_cue_extractor",
