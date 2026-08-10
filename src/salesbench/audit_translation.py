@@ -1,0 +1,343 @@
+"""Audit-only translation job collection, caching, and OpenAI-compatible runner."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
+
+from .audit_translation_prompts import (
+    AUDIT_TRANSLATION_PROMPT_VERSION,
+    build_audit_translation_prompt,
+)
+from .goldbank.parsing import ModelOutputError, parse_json_object
+from .goldbank.prompts import (
+    BP_COMPILER_CONTRACT,
+    build_adjudicator_prompt,
+    build_challenger_prompt,
+    build_commerce_cue_prompt,
+    build_commercial_relation_prompt,
+    build_evidence_extractor_prompt,
+    build_proposer_prompt,
+)
+from .io_utils import read_json, read_jsonl, write_jsonl
+from .utils import clean_text, contains_cjk
+from .vlm.api_client import VLMClient
+from .vqa.prompts import QUESTION_REALIZER_SYSTEM_PROMPT
+from .vqa_evaluate.prompts import JUDGE_SYSTEM_PROMPT
+
+
+_NUMBER_RE = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
+_CONTROLLED_TOKEN_RE = re.compile(r"\b[A-Z][A-Z0-9_]{2,}\b")
+
+
+@dataclass(frozen=True)
+class TranslationJob:
+    translation_id: str
+    object_type: str
+    object_id: str
+    source_field: str
+    source_text: str
+    source_language: str
+    target_language: str
+    source_sha256: str
+    audit_only: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "translation_id": self.translation_id,
+            "object_type": self.object_type,
+            "object_id": self.object_id,
+            "source_field": self.source_field,
+            "source_text": self.source_text,
+            "source_language": self.source_language,
+            "target_language": self.target_language,
+            "source_sha256": self.source_sha256,
+            "audit_only": self.audit_only,
+        }
+
+
+@dataclass(frozen=True)
+class AuditTranslation:
+    translation_id: str
+    object_type: str
+    object_id: str
+    source_field: str
+    source_language: str
+    target_language: str
+    source_sha256: str
+    translated_text: str
+    translation_method: str
+    prompt_version: str
+    audit_only: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "translation_id": self.translation_id,
+            "object_type": self.object_type,
+            "object_id": self.object_id,
+            "source_field": self.source_field,
+            "source_language": self.source_language,
+            "target_language": self.target_language,
+            "source_sha256": self.source_sha256,
+            "translated_text": self.translated_text,
+            "translation_method": self.translation_method,
+            "prompt_version": self.prompt_version,
+            "audit_only": self.audit_only,
+        }
+
+
+def build_translation_job(
+    *,
+    object_type: str,
+    object_id: str,
+    source_field: str,
+    source_text: str,
+) -> TranslationJob:
+    normalized_text = clean_text(source_text)
+    if not normalized_text:
+        raise ValueError("Audit translation source text cannot be empty")
+    normalized_type = clean_text(object_type).lower()
+    normalized_id = clean_text(object_id)
+    normalized_field = clean_text(source_field)
+    if not normalized_type or not normalized_id or not normalized_field:
+        raise ValueError("Audit translation requires object type, id, and source field")
+    return TranslationJob(
+        translation_id=f"audit_translation::{normalized_type}::{normalized_id}::{normalized_field}",
+        object_type=normalized_type,
+        object_id=normalized_id,
+        source_field=normalized_field,
+        source_text=normalized_text,
+        source_language="en",
+        target_language="zh-CN",
+        source_sha256=hashlib.sha256(normalized_text.encode("utf-8")).hexdigest(),
+        audit_only=True,
+    )
+
+
+def validate_translation(source_text: str, translated_text: str) -> list[str]:
+    issues: list[str] = []
+    if not clean_text(translated_text) or not contains_cjk(translated_text):
+        issues.append("MISSING_CHINESE_TRANSLATION")
+    if Counter(_NUMBER_RE.findall(source_text)) != Counter(_NUMBER_RE.findall(translated_text)):
+        issues.append("NUMBER_MISMATCH")
+    source_tokens = set(_CONTROLLED_TOKEN_RE.findall(source_text))
+    target_tokens = set(_CONTROLLED_TOKEN_RE.findall(translated_text))
+    if not source_tokens <= target_tokens:
+        issues.append("CONTROLLED_TOKEN_MISSING")
+    return issues
+
+
+def _prompt_jobs() -> list[TranslationJob]:
+    evidence_system, _ = build_evidence_extractor_prompt("video", {})
+    cue_system, _ = build_commerce_cue_prompt("video", [])
+    relation_system, _ = build_commercial_relation_prompt("video", [], [])
+    prompts = {
+        "evidence_extractor": evidence_system,
+        "bp_compiler": BP_COMPILER_CONTRACT,
+        "commerce_cue_extractor": cue_system,
+        "commercial_relation_builder": relation_system,
+        "cm_proposer": build_proposer_prompt("cm_proposer", "video", [])[0],
+        "ss_proposer": build_proposer_prompt("ss_proposer", "video", [])[0],
+        "ae_proposer": build_proposer_prompt("ae_proposer", "video", [])[0],
+        "challenger": build_challenger_prompt("video", [], [])[0],
+        "adjudicator": build_adjudicator_prompt("video", [], [], [])[0],
+        "question_realizer": QUESTION_REALIZER_SYSTEM_PROMPT,
+        "judge": JUDGE_SYSTEM_PROMPT,
+    }
+    return [
+        build_translation_job(
+            object_type="prompt",
+            object_id=prompt_id,
+            source_field="system",
+            source_text=text,
+        )
+        for prompt_id, text in prompts.items()
+    ]
+
+
+def _path(raw: object, repo_root: Path) -> Path:
+    candidate = Path(clean_text(raw))
+    return candidate if candidate.is_absolute() else repo_root / candidate
+
+
+def _existing_rows(path: Path) -> list[dict[str, object]]:
+    return read_jsonl(path) if path.is_file() else []
+
+
+def _add_jobs(
+    jobs: list[TranslationJob],
+    rows: list[dict[str, object]],
+    object_type: str,
+    id_fields: tuple[str, ...],
+    text_fields: tuple[str, ...],
+) -> None:
+    for row in rows:
+        object_id = next((clean_text(row.get(field)) for field in id_fields if clean_text(row.get(field))), "")
+        if not object_id:
+            continue
+        for field in text_fields:
+            text = clean_text(row.get(field))
+            if text:
+                jobs.append(
+                    build_translation_job(
+                        object_type=object_type,
+                        object_id=object_id,
+                        source_field=field,
+                        source_text=text,
+                    )
+                )
+
+
+def collect_audit_translation_jobs(
+    manifest_path: Path,
+    *,
+    repo_root: Path,
+    include_prompts: bool = True,
+) -> list[TranslationJob]:
+    manifest = read_json(manifest_path)
+    if not isinstance(manifest, dict):
+        raise ValueError("Audit delivery manifest must be an object")
+    jobs = _prompt_jobs() if include_prompts else []
+    for section in manifest.values():
+        if not isinstance(section, dict) or not isinstance(section.get("artifacts"), dict):
+            continue
+        artifacts = section["artifacts"]
+        evidence_source = artifacts.get("evidence", {}).get("source") if isinstance(artifacts.get("evidence"), dict) else None
+        if evidence_source:
+            root = _path(evidence_source, repo_root)
+            _add_jobs(jobs, _existing_rows(root / "evidence_units.jsonl"), "evidence_unit", ("evidence_id",), ("content_en",))
+            _add_jobs(jobs, _existing_rows(root / "commerce_cues.jsonl"), "commerce_cue", ("cue_id",), ("content_en",))
+            _add_jobs(jobs, _existing_rows(root / "commercial_relations.jsonl"), "commercial_relation", ("relation_id",), ("rationale_en",))
+        qa_source = artifacts.get("qa", {}).get("source") if isinstance(artifacts.get("qa"), dict) else None
+        if qa_source:
+            root = _path(qa_source, repo_root)
+            _add_jobs(jobs, _existing_rows(root / "qa_specs.jsonl"), "question_spec", ("spec_id",), ("question_intent", "gold_answer"))
+            _add_jobs(jobs, _existing_rows(root / "qa_realizations.jsonl"), "question_realization", ("spec_id",), ("question",))
+            _add_jobs(jobs, _existing_rows(root / "vqa_gold_private.jsonl"), "qa", ("vqa_id",), ("question", "gold_answer"))
+        evaluation_source = artifacts.get("evaluation", {}).get("source") if isinstance(artifacts.get("evaluation"), dict) else None
+        if evaluation_source:
+            root = _path(evaluation_source, repo_root)
+            _add_jobs(
+                jobs,
+                _existing_rows(root / "predictions_judge_details.jsonl"),
+                "judge_result",
+                ("vqa_id",),
+                ("reason", "evidence_alignment"),
+            )
+    unique: dict[tuple[str, str, str, str], TranslationJob] = {}
+    for job in jobs:
+        unique[(job.object_type, job.object_id, job.source_field, job.source_sha256)] = job
+    return sorted(unique.values(), key=lambda item: (item.object_type, item.object_id, item.source_field))
+
+
+def _parse_translation(record: dict[str, object]) -> AuditTranslation:
+    return AuditTranslation(
+        translation_id=clean_text(record.get("translation_id")),
+        object_type=clean_text(record.get("object_type")),
+        object_id=clean_text(record.get("object_id")),
+        source_field=clean_text(record.get("source_field")),
+        source_language=clean_text(record.get("source_language")),
+        target_language=clean_text(record.get("target_language")),
+        source_sha256=clean_text(record.get("source_sha256")),
+        translated_text=clean_text(record.get("translated_text")),
+        translation_method=clean_text(record.get("translation_method")),
+        prompt_version=clean_text(record.get("prompt_version")),
+        audit_only=bool(record.get("audit_only")),
+    )
+
+
+def load_audit_translations(path: Path) -> list[AuditTranslation]:
+    if not path.exists():
+        return []
+    return [_parse_translation(record) for record in read_jsonl(path)]
+
+
+def run_audit_translations(
+    jobs: list[TranslationJob],
+    output_path: Path,
+    client: VLMClient,
+    *,
+    batch_size: int = 20,
+) -> dict[str, object]:
+    existing = load_audit_translations(output_path)
+    cache = {
+        (row.object_type, row.object_id, row.source_field, row.source_sha256): row
+        for row in existing
+        if row.audit_only and row.prompt_version == AUDIT_TRANSLATION_PROMPT_VERSION
+    }
+    current: dict[tuple[str, str, str, str], AuditTranslation] = {}
+    pending: list[TranslationJob] = []
+    reused = 0
+    for job in jobs:
+        key = (job.object_type, job.object_id, job.source_field, job.source_sha256)
+        if key in cache:
+            current[key] = cache[key]
+            reused += 1
+        else:
+            pending.append(job)
+
+    failures: list[dict[str, object]] = []
+    translated = 0
+    size = max(1, int(batch_size))
+    for offset in range(0, len(pending), size):
+        batch = pending[offset : offset + size]
+        system, user = build_audit_translation_prompt([job.to_dict() for job in batch])
+        call = client.call_text_only(system, user, response_format="json_object")
+        if not call.success:
+            failures.extend({"translation_id": job.translation_id, "error": call.error or "api_call_failed"} for job in batch)
+            continue
+        try:
+            payload = parse_json_object(call.raw_response, "translations")
+            rows = payload["translations"]
+            if not isinstance(rows, list):
+                raise ModelOutputError("translations must be a list")
+            returned = {
+                clean_text(row.get("translation_id")): clean_text(row.get("translated_text"))
+                for row in rows
+                if isinstance(row, dict)
+            }
+        except (ModelOutputError, ValueError) as exc:
+            failures.extend({"translation_id": job.translation_id, "error": str(exc)} for job in batch)
+            continue
+        for job in batch:
+            translated_text = returned.get(job.translation_id, "")
+            issues = validate_translation(job.source_text, translated_text)
+            if issues:
+                failures.append({"translation_id": job.translation_id, "error": ",".join(issues)})
+                continue
+            record = AuditTranslation(
+                translation_id=job.translation_id,
+                object_type=job.object_type,
+                object_id=job.object_id,
+                source_field=job.source_field,
+                source_language=job.source_language,
+                target_language=job.target_language,
+                source_sha256=job.source_sha256,
+                translated_text=translated_text,
+                translation_method=call.model,
+                prompt_version=AUDIT_TRANSLATION_PROMPT_VERSION,
+                audit_only=True,
+            )
+            current[(job.object_type, job.object_id, job.source_field, job.source_sha256)] = record
+            translated += 1
+
+    ordered = sorted(current.values(), key=lambda item: (item.object_type, item.object_id, item.source_field))
+    write_jsonl(output_path, [row.to_dict() for row in ordered])
+    return {
+        "output": str(output_path),
+        "prompt_version": AUDIT_TRANSLATION_PROMPT_VERSION,
+        "model": client.model,
+        "counts": {
+            "jobs": len(jobs),
+            "translated": translated,
+            "reused": reused,
+            "failed": len(failures),
+            "written": len(ordered),
+            "stale_removed": len(existing) - reused,
+        },
+        "failures": failures,
+    }

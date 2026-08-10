@@ -60,6 +60,20 @@ class GoldBankCLITest(unittest.TestCase):
         self.assertEqual(args.dataset_file, "video_evidence_dataset.jsonl")
         self.assertTrue(args.resume)
 
+    def test_build_audit_translations_command_parses(self):
+        args = build_parser().parse_args(
+            [
+                "build-audit-translations",
+                "--manifest",
+                "configs/pilot64_gpt4o_v9_delivery.json",
+                "--output",
+                "outputs/audit/translations.jsonl",
+            ]
+        )
+
+        self.assertEqual(args.model, "gpt-4o")
+        self.assertEqual(args.batch_size, 20)
+
 
 if __name__ == "__main__":
     unittest.main()

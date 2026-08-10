@@ -137,6 +137,35 @@ def realize_qa_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def build_audit_translations_command(args: argparse.Namespace) -> int:
+    from .audit_translation import collect_audit_translation_jobs, run_audit_translations
+    from .vlm.api_client import VLMClient
+
+    api_key = args.api_key or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("Audit translation requires --api-key or OPENAI_API_KEY")
+    manifest = Path(args.manifest)
+    client = VLMClient(
+        api_key=api_key,
+        model=args.model,
+        base_url=args.base_url or os.environ.get("OPENAI_BASE_URL"),
+        max_tokens=4096,
+    )
+    jobs = collect_audit_translation_jobs(
+        manifest,
+        repo_root=manifest.resolve().parent.parent,
+        include_prompts=not args.skip_prompts,
+    )
+    summary = run_audit_translations(
+        jobs,
+        Path(args.output),
+        client,
+        batch_size=args.batch_size,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
+
+
 def compile_vqa_command(args: argparse.Namespace) -> int:
     from .vqa.compiler import CompilePolicy, compile_vqa_from_gold
 
@@ -271,6 +300,16 @@ def build_parser() -> argparse.ArgumentParser:
     realize.add_argument("--max-workers", type=int, default=2)
     realize.add_argument("--no-resume", action="store_false", dest="resume")
     realize.set_defaults(func=realize_qa_command, resume=True)
+
+    translations = sub.add_parser("build-audit-translations", help="生成仅供人工审计的中文翻译 sidecar")
+    translations.add_argument("--manifest", required=True)
+    translations.add_argument("--output", required=True)
+    translations.add_argument("--api-key", default=None)
+    translations.add_argument("--base-url", default=None)
+    translations.add_argument("--model", default="gpt-4o")
+    translations.add_argument("--batch-size", type=int, default=20)
+    translations.add_argument("--skip-prompts", action="store_true")
+    translations.set_defaults(func=build_audit_translations_command)
 
     compile_parser = sub.add_parser("compile-vqa", help="从 EvidenceDataset 编译 BP/CM/SS/AE")
     compile_parser.add_argument("--evidence-dir", required=True)
