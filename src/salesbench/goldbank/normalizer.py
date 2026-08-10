@@ -80,6 +80,15 @@ def normalize_text(value: object) -> str:
 def normalize_task_subtype(task_type: GoldTaskType, value: object) -> str:
     subtype = normalize_text(value).upper()
     if subtype not in allowed_subtypes(task_type):
+        subtype = next(
+            (
+                candidate
+                for candidate in allowed_subtypes(task_type)
+                if default_reasoning_operator(task_type, candidate) == subtype
+            ),
+            subtype,
+        )
+    if subtype not in allowed_subtypes(task_type):
         raise ValueError(f"Unknown subtype for {task_type.value}: {subtype}")
     return subtype
 

@@ -83,6 +83,63 @@ def build_evidence_extractor_prompt(video_id: str, content_context: dict[str, ob
     return system, [{"type": "text", "text": user_text}]
 
 
+def build_language_evidence_prompt(
+    video_id: str,
+    content_context: dict[str, object],
+) -> tuple[str, str]:
+    system = (
+        "You are the SalesBench ASR Evidence Extractor. Convert only the supplied ASR or subtitle "
+        "transcript into three to ten high-information atomic EvidenceUnits. Every item must use "
+        "modality=asr and contain start_s, end_s, frame_indices as an empty array, content_en, "
+        "source_text_native, subject, predicate, value, attributes, and numeric confidence. "
+        "source_text_native must be a verbatim span copied from the supplied transcript. subject, "
+        "predicate, value, content_en, and attributes must use English only; CJK characters are "
+        "allowed only in source_text_native. Preserve claim-versus-fact boundaries: seller statements "
+        "about performance, effects, compatibility, scarcity, popularity, or usage must use "
+        "subject='speaker' and predicate='claims' or 'states'. Prioritize product identity, variants, "
+        "offer terms, claims, described demonstrations, comparisons, objections, limitations, and CTAs. "
+        "Do not extract titles, creator identity, follower or interaction data, or external knowledge. "
+        "Return strict JSON with exactly one top-level key, evidence_units, and do not generate questions."
+    )
+    user = _json(
+        {
+            "video_id": video_id,
+            "asr_subtitles": content_context.get("asr_subtitles") or {},
+        }
+    )
+    return system, user
+
+
+def build_visual_evidence_prompt(
+    video_id: str,
+    content_context: dict[str, object],
+) -> tuple[str, list[dict]]:
+    system = (
+        "You are the SalesBench Visual and OCR Evidence Extractor. Inspect only the supplied sampled "
+        "video frames and return six to sixteen localized EvidenceUnits. When at least one frame is "
+        "supplied, return at least one visual EvidenceUnit describing a concrete visible product, "
+        "person, action, state, comparison, demonstration, or usage scene. Use modality=visual for "
+        "visible non-text facts and modality=ocr only for independent commercially material in-frame "
+        "text such as product labels, variants, prices, quantities, offer conditions, or measurements. "
+        "Do not enumerate burned-in speech subtitles as OCR. Exclude creator handles, account IDs, "
+        "watermarks, platform logos, and engagement counters. Every item must contain start_s, end_s, "
+        "frame_indices, content_en, source_text_native, subject, predicate, value, attributes, and "
+        "numeric confidence. visual items require one or more exact supplied frame indices and an empty "
+        "source_text_native. ocr items require exact supplied frame indices and verbatim source_text_native. "
+        "All normalized semantic fields must use English; CJK characters are allowed only in OCR "
+        "source_text_native. Describe observable content only, preserve claim-versus-proof boundaries, "
+        "and do not infer product effects, audience response, sales, or external facts. Return strict "
+        "JSON with exactly one top-level key, evidence_units, and do not generate questions."
+    )
+    user = _json(
+        {
+            "video_id": video_id,
+            "sampled_frames": content_context.get("sampled_frames") or [],
+        }
+    )
+    return system, [{"type": "text", "text": user}]
+
+
 def _enum_values(enum_type: type) -> str:
     return ", ".join(item.value for item in enum_type)
 

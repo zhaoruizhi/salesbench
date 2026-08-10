@@ -54,7 +54,7 @@ class FakeGoldClient:
 def bundle():
     return build_context_bundle(
         "v1",
-        raw_video={"video_id": "v1", "title": "T", "video_text": "claim", "likes": 99},
+        raw_video={"video_id": "v1", "title": "T", "video_text": "", "likes": 99},
         text_language={"title": "T"},
     )
 
@@ -254,6 +254,25 @@ def successful_v7_responses() -> list[dict[str, object]]:
 
 
 class GoldBankPipelineTest(unittest.TestCase):
+    def test_pipeline_extracts_language_and_visual_evidence_in_separate_stages(self):
+        responses = successful_responses_with_two_evidence()
+        visual_raw, asr_raw = responses[0]["evidence_units"]
+        vlm = FakeGoldClient([{"evidence_units": [visual_raw]}])
+        llm = FakeGoldClient([{"evidence_units": [asr_raw]}, *responses[1:]])
+        split_bundle = build_context_bundle(
+            "v1",
+            raw_video={"video_id": "v1", "video_text": "这款产品采用编织材质"},
+            frames=[{"frame_index": 0, "timestamp_s": 0.0, "path": "/tmp/f0.jpg"}],
+        )
+
+        result = GoldBankPipeline(vlm, llm).run_video(split_bundle, frames_b64=["AAA"])
+
+        stages = [trace["stage"] for trace in result.agent_traces]
+        self.assertEqual(stages[:2], ["language_evidence_extraction", "visual_evidence_extraction"])
+        self.assertLess(stages.index("visual_evidence_extraction"), stages.index("commerce_cue_extraction"))
+        self.assertEqual({unit["modality"] for unit in result.evidence_units}, {"asr", "visual"})
+        self.assertEqual(vlm.calls[0]["user_content"][0]["text"], "[FRAME frame_index=0 timestamp_s=0.0]")
+
     def test_bp_preserves_spoken_claim_boundary_and_requires_visual_demonstration(self):
         evidence = EvidenceUnit(
             evidence_id="v1_asr_000_claim",
@@ -329,7 +348,7 @@ class GoldBankPipelineTest(unittest.TestCase):
         llm = FakeGoldClient(successful_responses()[1:])
         frame_bundle = build_context_bundle(
             "v1",
-            raw_video={"video_id": "v1", "video_text": "claim"},
+            raw_video={"video_id": "v1", "video_text": ""},
             frames=[
                 {"frame_index": 4, "timestamp_s": 1.5, "path": "/tmp/f4.jpg"},
                 {"frame_index": 9, "timestamp_s": 4.0, "path": "/tmp/f9.jpg"},

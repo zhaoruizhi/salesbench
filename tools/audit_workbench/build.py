@@ -24,7 +24,9 @@ from salesbench.goldbank.prompts import (
     build_commerce_cue_prompt,
     build_commercial_relation_prompt,
     build_evidence_extractor_prompt,
+    build_language_evidence_prompt,
     build_proposer_prompt,
+    build_visual_evidence_prompt,
 )
 from salesbench.goldbank.validators import PRIVATE_KEYS
 from salesbench.vqa_evaluate.prompts import JUDGE_PROMPT_VERSION, JUDGE_SYSTEM_PROMPT, build_judge_user_prompt
@@ -260,9 +262,37 @@ def collect_prompt_snapshot() -> list[dict[str, Any]]:
     )
     prompts: list[dict[str, Any]] = [
         {
+            "id": "language_evidence_extractor",
+            "name": "ASR Evidence Extractor",
+            "stage": "Evidence / ASR",
+            "version": PROMPT_VERSION,
+            "system": build_language_evidence_prompt(
+                "{{video_id}}", {"asr_subtitles": {"video_text": "{{ASR/subtitles}}"}}
+            )[0],
+            "user_template": build_language_evidence_prompt(
+                "{{video_id}}", {"asr_subtitles": {"video_text": "{{ASR/subtitles}}"}}
+            )[1],
+            "observed": ["独立处理 ASR，避免长帧输入挤占语言证据输出。"],
+            "recommendations": ["核对 source_text_native 是否逐字来自 ASR，英文语义是否保持 claim 边界。"],
+        },
+        {
+            "id": "visual_evidence_extractor",
+            "name": "Visual and OCR Evidence Extractor",
+            "stage": "Evidence / Frames",
+            "version": PROMPT_VERSION,
+            "system": build_visual_evidence_prompt(
+                "{{video_id}}", {"sampled_frames": "{{image parts with frame labels}}"}
+            )[0],
+            "user_template": build_visual_evidence_prompt(
+                "{{video_id}}", {"sampled_frames": "{{image parts with frame labels}}"}
+            )[1],
+            "observed": ["独立处理帧与 OCR，并要求至少一条可见事实。"],
+            "recommendations": ["核对 OCR 是否排除了重复字幕、账号水印和互动计数。"],
+        },
+        {
             "id": "evidence_extractor",
-            "name": "Objective Evidence Extractor",
-            "stage": "Evidence",
+            "name": "Fallback Combined Evidence Extractor",
+            "stage": "Evidence / Fallback",
             "version": PROMPT_VERSION,
             "system": evidence_system,
             "user_template": evidence_user,

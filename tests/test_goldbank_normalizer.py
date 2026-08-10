@@ -15,12 +15,19 @@ from salesbench.goldbank.normalizer import (  # noqa: E402
     normalize_commercial_relations,
     normalize_evidence_units,
     normalize_proposals,
+    normalize_task_subtype,
 )
-from salesbench.goldbank.schema import EvidenceModality  # noqa: E402
+from salesbench.goldbank.schema import EvidenceModality, GoldTaskType  # noqa: E402
 from salesbench.goldbank.validators import validate_evidence_unit  # noqa: E402
 
 
 class EvidenceNormalizerTest(unittest.TestCase):
+    def test_reasoning_operator_in_subtype_field_maps_back_to_capability(self):
+        self.assertEqual(
+            normalize_task_subtype(GoldTaskType.SS, "MAP_FEATURE_TO_BENEFIT"),
+            "FEATURE_BENEFIT",
+        )
+
     def test_normalizes_common_vlm_visual_aliases_and_frame_locator(self):
         unit = normalize_evidence_units(
             "v1",

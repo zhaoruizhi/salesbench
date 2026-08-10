@@ -210,6 +210,15 @@ def test_prompt_snapshot_uses_current_judge_prompt_version() -> None:
     assert judge["version"] == JUDGE_PROMPT_VERSION
 
 
+def test_prompt_snapshot_includes_split_language_and_visual_evidence_stages() -> None:
+    prompts = {item["id"]: item for item in collect_prompt_snapshot()}
+
+    assert "language_evidence_extractor" in prompts
+    assert "visual_evidence_extractor" in prompts
+    assert "ASR Evidence Extractor" in prompts["language_evidence_extractor"]["system"]
+    assert "Visual and OCR Evidence Extractor" in prompts["visual_evidence_extractor"]["system"]
+
+
 def test_compact_preview_prioritizes_structural_risks_over_systemic_missing_time() -> None:
     data = {
         "evidence": {

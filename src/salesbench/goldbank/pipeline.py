@@ -33,10 +33,13 @@ from .prompts import (
     build_commerce_cue_prompt,
     build_commercial_relation_prompt,
     build_evidence_extractor_prompt,
+    build_language_evidence_prompt,
     build_proposer_prompt,
+    build_visual_evidence_prompt,
 )
 from .schema import (
     SCHEMA_VERSION,
+    EvidenceModality,
     EvidenceUnit,
     GoldItem,
     GoldProposal,
@@ -371,8 +374,6 @@ class GoldBankPipeline:
         video_id = bundle.video_id
         traces: list[dict[str, object]] = []
         content_context = public_observation_context(bundle)
-
-        system, user_blocks = build_evidence_extractor_prompt(video_id, content_context)
         frame_metadata = list(content_context.get("sampled_frames") or [])
         image_blocks: list[dict[str, object]] = []
         for position, image_b64 in enumerate(frames_b64 or []):
@@ -385,32 +386,102 @@ class GoldBankPipeline:
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
                 ]
             )
-        user_blocks = [*image_blocks, *user_blocks]
-        evidence_call = self.vlm_client.call(system, user_blocks, response_format="json_object")
-        if not evidence_call.success:
-            traces.append(_trace("evidence_extraction", "objective_evidence_extractor", evidence_call, error=evidence_call.error))
-            return _empty_result(video_id, "failed", traces)
-        try:
-            evidence_raw = parse_evidence_response(evidence_call.raw_response)
-            evidence_units = normalize_evidence_units(video_id, evidence_raw)
-            valid_evidence_units: list[EvidenceUnit] = []
-            for unit in evidence_units:
-                issues = validate_evidence_unit(unit)
-                if any(issue.severity == "ERROR" for issue in issues):
-                    continue
-                valid_evidence_units.append(unit)
-            evidence_units = valid_evidence_units
-            traces.append(_trace("evidence_extraction", "objective_evidence_extractor", evidence_call, {"evidence_units": evidence_raw}))
-        except (ModelOutputError, ValueError) as exc:
-            traces.append(_trace("evidence_extraction", "objective_evidence_extractor", evidence_call, error=str(exc)))
-            return _empty_result(video_id, "failed", traces)
+
+        evidence_units: list[EvidenceUnit] = []
+        evidence_stage_failed = False
+
+        def collect_evidence(
+            stage: str,
+            agent_name: str,
+            call: APICallResult,
+            allowed_modalities: set[EvidenceModality],
+        ) -> None:
+            nonlocal evidence_stage_failed
+            if not call.success:
+                evidence_stage_failed = True
+                traces.append(_trace(stage, agent_name, call, error=call.error))
+                return
+            try:
+                raw_units = parse_evidence_response(call.raw_response)
+                normalized = normalize_evidence_units(video_id, raw_units)
+                validation_issues: list[dict[str, object]] = []
+                accepted: list[EvidenceUnit] = []
+                for unit in normalized:
+                    issues = validate_evidence_unit(unit)
+                    if unit.modality not in allowed_modalities:
+                        issues.append(
+                            ValidationIssue(
+                                "WRONG_EVIDENCE_STAGE_MODALITY",
+                                "ERROR",
+                                unit.evidence_id,
+                                f"{stage} cannot emit {unit.modality.value}",
+                            )
+                        )
+                    validation_issues.extend(issue.to_dict() for issue in issues)
+                    if not any(issue.severity == "ERROR" for issue in issues):
+                        accepted.append(unit)
+                if not accepted:
+                    evidence_stage_failed = True
+                evidence_units.extend(accepted)
+                traces.append(
+                    _trace(
+                        stage,
+                        agent_name,
+                        call,
+                        {"evidence_units": raw_units, "validation_issues": validation_issues},
+                    )
+                )
+            except (ModelOutputError, ValueError) as exc:
+                evidence_stage_failed = True
+                traces.append(_trace(stage, agent_name, call, error=str(exc)))
+
+        asr_subtitles = content_context.get("asr_subtitles") or {}
+        if asr_subtitles:
+            language_system, language_user = build_language_evidence_prompt(video_id, content_context)
+            language_call = self.llm_client.call_text_only(
+                language_system,
+                language_user,
+                response_format="json_object",
+            )
+            collect_evidence(
+                "language_evidence_extraction",
+                "asr_evidence_extractor",
+                language_call,
+                {EvidenceModality.ASR},
+            )
+
+        if image_blocks:
+            visual_system, visual_user = build_visual_evidence_prompt(video_id, content_context)
+            visual_call = self.vlm_client.call(
+                visual_system,
+                [*image_blocks, *visual_user],
+                response_format="json_object",
+            )
+            collect_evidence(
+                "visual_evidence_extraction",
+                "visual_ocr_evidence_extractor",
+                visual_call,
+                {EvidenceModality.VISUAL, EvidenceModality.OCR},
+            )
+
+        if not asr_subtitles and not image_blocks:
+            system, user_blocks = build_evidence_extractor_prompt(video_id, content_context)
+            evidence_call = self.vlm_client.call(system, user_blocks, response_format="json_object")
+            collect_evidence(
+                "evidence_extraction",
+                "objective_evidence_extractor",
+                evidence_call,
+                {EvidenceModality.VISUAL, EvidenceModality.OCR, EvidenceModality.ASR},
+            )
+
+        evidence_units = list({unit.evidence_id: unit for unit in evidence_units}.values())
 
         if not evidence_units:
             return _empty_result(video_id, "failed", traces)
 
         evidence_dict = {unit.evidence_id: unit for unit in evidence_units}
         human_review_queue: list[dict[str, object]] = []
-        status = "ok"
+        status = "partial" if evidence_stage_failed else "ok"
 
         cue_system, cue_user = build_commerce_cue_prompt(
             video_id,

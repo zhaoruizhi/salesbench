@@ -115,3 +115,14 @@ def test_collect_and_run_translations_from_delivery_manifest(tmp_path: Path):
     assert all(row.audit_only for row in translations)
     assert "likes" not in serialized
     assert "translated_text" in serialized
+
+
+def test_prompt_translation_jobs_include_split_evidence_prompts(tmp_path: Path):
+    manifest_path = tmp_path / "manifest.json"
+    write_json(manifest_path, {})
+
+    prompt_jobs = collect_audit_translation_jobs(manifest_path, repo_root=tmp_path)
+    prompt_ids = {job.object_id for job in prompt_jobs if job.object_type == "prompt"}
+
+    assert "language_evidence_extractor" in prompt_ids
+    assert "visual_evidence_extractor" in prompt_ids

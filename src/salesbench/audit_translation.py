@@ -21,7 +21,9 @@ from .goldbank.prompts import (
     build_commerce_cue_prompt,
     build_commercial_relation_prompt,
     build_evidence_extractor_prompt,
+    build_language_evidence_prompt,
     build_proposer_prompt,
+    build_visual_evidence_prompt,
 )
 from .io_utils import read_json, read_jsonl, write_jsonl
 from .utils import clean_text, contains_cjk
@@ -133,10 +135,14 @@ def validate_translation(source_text: str, translated_text: str) -> list[str]:
 
 def _prompt_jobs() -> list[TranslationJob]:
     evidence_system, _ = build_evidence_extractor_prompt("video", {})
+    language_evidence_system, _ = build_language_evidence_prompt("video", {})
+    visual_evidence_system, _ = build_visual_evidence_prompt("video", {})
     cue_system, _ = build_commerce_cue_prompt("video", [])
     relation_system, _ = build_commercial_relation_prompt("video", [], [])
     prompts = {
         "evidence_extractor": evidence_system,
+        "language_evidence_extractor": language_evidence_system,
+        "visual_evidence_extractor": visual_evidence_system,
         "bp_compiler": BP_COMPILER_CONTRACT,
         "commerce_cue_extractor": cue_system,
         "commercial_relation_builder": relation_system,

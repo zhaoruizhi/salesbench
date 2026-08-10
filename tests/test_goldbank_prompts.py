@@ -21,7 +21,9 @@ from salesbench.goldbank.prompts import (  # noqa: E402
     build_commerce_cue_prompt,
     build_commercial_relation_prompt,
     build_evidence_extractor_prompt,
+    build_language_evidence_prompt,
     build_proposer_prompt,
+    build_visual_evidence_prompt,
 )
 
 
@@ -47,6 +49,23 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn("creator handle", system)
         self.assertNotIn("EvidenceUnit.text_span", system)
         self.assertNotRegex(system, r"[\u4e00-\u9fff]")
+
+    def test_language_and_visual_evidence_prompts_have_separate_modality_contracts(self):
+        language_system, language_user = build_language_evidence_prompt(
+            "v1", {"asr_subtitles": {"video_text": "native transcript"}}
+        )
+        visual_system, visual_user = build_visual_evidence_prompt(
+            "v1", {"sampled_frames": [{"frame_index": 0, "timestamp_s": 0.0}]}
+        )
+
+        self.assertIn("ASR Evidence Extractor", language_system)
+        self.assertIn("modality=asr", language_system)
+        self.assertNotIn("modality=visual", language_system)
+        self.assertIn("Visual and OCR Evidence Extractor", visual_system)
+        self.assertIn("at least one visual EvidenceUnit", visual_system)
+        self.assertIn("modality=visual", visual_system)
+        self.assertNotIn("asr_subtitles", str(visual_user))
+        self.assertNotRegex(language_system + visual_system, r"[\u4e00-\u9fff]")
 
     def test_v9_commerce_prompts_are_english_and_forbid_outcome_claims(self):
         evidence = [{

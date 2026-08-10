@@ -297,7 +297,7 @@ class EvidenceVQAE2ETest(unittest.TestCase):
             run_dir = root / "run"
             eval_dir = root / "evaluation"
             run_gold_bank_records(
-                [{"video_id": "v1", "video_text": "适合通勤，画面现场演示。"}],
+                [{"video_id": "v1", "video_text": ""}],
                 cohort,
                 evidence_dir,
                 pipeline,
