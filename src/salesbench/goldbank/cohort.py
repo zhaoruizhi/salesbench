@@ -8,6 +8,7 @@ from typing import Any
 
 from ..utils import clean_text
 from .prompts import PROMPT_VERSION
+from .schema import SCHEMA_VERSION
 
 
 DEFAULT_ALPHA_ANCHOR_IDS = (
@@ -126,12 +127,12 @@ def select_goldbank_cohort(
     selected_records = [lookup[video_id] for video_id in selected]
     cell_counts = Counter("|".join(_cell(record)) for record in selected_records)
     return {
-        "version": "evidence-alpha-v2",
+        "version": "evidence-alpha-v3",
         "video_ids": selected,
         "frame_strategy": "hook_plus_uniform",
         "frames_per_video": 16,
         "prompt_version": PROMPT_VERSION,
-        "schema_version": "evidence-dataset-schema-v2",
+        "schema_version": SCHEMA_VERSION,
         "min_confidence": 0.70,
         "seed": seed,
         "selection": {

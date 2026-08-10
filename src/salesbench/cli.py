@@ -51,6 +51,7 @@ def build_inputs_command(args: argparse.Namespace) -> int:
 def select_evidence_cohort_command(args: argparse.Namespace) -> int:
     from .goldbank.cohort import select_goldbank_cohort
     from .goldbank.prompts import PROMPT_VERSION
+    from .goldbank.schema import SCHEMA_VERSION
 
     config = load_config(args.config)
     cohort = select_goldbank_cohort(
@@ -59,9 +60,9 @@ def select_evidence_cohort_command(args: argparse.Namespace) -> int:
         seed=args.seed,
         require_video_asset=not args.allow_missing_video_asset,
     )
-    cohort["version"] = "evidence-cohort-v2"
+    cohort["version"] = "evidence-cohort-v3"
     cohort["prompt_version"] = PROMPT_VERSION
-    cohort["schema_version"] = "evidence-dataset-schema-v2"
+    cohort["schema_version"] = SCHEMA_VERSION
     output = _path(args.output, config.repo_root)
     write_json(output, cohort)
     print(json.dumps({"output": str(output), "video_count": len(cohort["video_ids"])}, ensure_ascii=False, indent=2))
@@ -75,7 +76,7 @@ def build_evidence_dataset_command(args: argparse.Namespace) -> int:
     ensure_output_dirs(config)
     default_key = _env_or_arg(args, "api_key", "OPENAI_API_KEY")
     vision_key = args.vision_api_key or os.environ.get("VISION_API_KEY") or default_key
-    text_key = args.text_api_key or os.environ.get("DEEPSEEK_API_KEY") or default_key
+    text_key = args.text_api_key or os.environ.get("TEXT_API_KEY") or default_key
     if not vision_key or not text_key:
         raise ValueError("Evidence generation requires vision and text provider API keys")
     summary = build_gold_bank_dataset(
@@ -91,8 +92,8 @@ def build_evidence_dataset_command(args: argparse.Namespace) -> int:
         vision_model=args.vision_model or os.environ.get("VISION_MODEL") or args.model,
         vision_base_url=args.vision_base_url or os.environ.get("VISION_BASE_URL"),
         text_api_key=text_key,
-        text_model=args.text_model or os.environ.get("DEEPSEEK_MODEL") or args.model,
-        text_base_url=args.text_base_url or os.environ.get("DEEPSEEK_BASE_URL"),
+        text_model=args.text_model or os.environ.get("TEXT_MODEL") or args.model,
+        text_base_url=args.text_base_url or os.environ.get("TEXT_BASE_URL") or _env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

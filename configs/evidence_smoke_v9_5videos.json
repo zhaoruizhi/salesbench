@@ -1,0 +1,21 @@
+{
+  "version": "evidence-smoke-v9",
+  "video_ids": [
+    "7362856271365606683",
+    "7360594186715909416",
+    "7360565413341613348",
+    "7359538830657064192",
+    "7365054535036849420"
+  ],
+  "frame_strategy": "hook_plus_uniform",
+  "frames_per_video": 16,
+  "prompt_version": "evidence-prompt-v9",
+  "schema_version": "evidence-dataset-schema-v3",
+  "pipeline_version": "evidence-first-pipeline-v8",
+  "compiler_version": "evidence-qa-compiler-v5",
+  "judge_prompt_version": "judge-prompt-v4",
+  "audit_translation_prompt_version": "audit-translation-prompt-v1",
+  "min_confidence": 0.7,
+  "seed": 42,
+  "run_class": "smoke_only"
+}

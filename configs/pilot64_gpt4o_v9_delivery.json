@@ -1,0 +1,57 @@
+{
+  "version": "pilot64-gpt4o-v9-candidate",
+  "release_status": "candidate_requires_human_review",
+  "tested_model": "gpt-4o",
+  "frame_cache_root": "outputs/cache/frames",
+  "versions": {
+    "schema": "evidence-dataset-schema-v3",
+    "prompt": "evidence-prompt-v9",
+    "pipeline": "evidence-first-pipeline-v8",
+    "compiler": "evidence-qa-compiler-v5",
+    "question_realizer": "question-realizer-prompt-v1",
+    "judge": "judge-prompt-v4",
+    "audit_translation": "audit-translation-prompt-v1"
+  },
+  "formal": {
+    "root": "outputs/formal/pilot64_gpt4o_v9_candidate",
+    "artifacts": {
+      "evidence": {
+        "source": "outputs/evidence/v9_pilot64_gpt4o_yunwu"
+      },
+      "qa": {
+        "source": "outputs/vqa/v9_pilot64_gpt4o_yunwu",
+        "exclude": ["run_*", "evaluation_*"]
+      },
+      "model_run": {
+        "source": "outputs/vqa/v9_pilot64_gpt4o_yunwu/run_gpt4o"
+      },
+      "evaluation": {
+        "source": "outputs/vqa/v9_pilot64_gpt4o_yunwu/evaluation_gpt4o"
+      },
+      "audit_translations": {
+        "source": "outputs/audit/translations/v9_pilot64/audit_translations.jsonl"
+      }
+    }
+  },
+  "smoke": {
+    "root": "outputs/smoke/gpt4o_v9_candidate",
+    "artifacts": {
+      "evidence": {
+        "source": "outputs/evidence/v9_smoke5_gpt4o_yunwu"
+      },
+      "qa": {
+        "source": "outputs/vqa/v9_smoke5_gpt4o_yunwu",
+        "exclude": ["run_*", "evaluation_*"]
+      },
+      "model_run": {
+        "source": "outputs/vqa/v9_smoke5_gpt4o_yunwu/run_gpt4o"
+      },
+      "evaluation": {
+        "source": "outputs/vqa/v9_smoke5_gpt4o_yunwu/evaluation_gpt4o"
+      },
+      "audit_translations": {
+        "source": "outputs/audit/translations/v9_smoke/audit_translations.jsonl"
+      }
+    }
+  }
+}
