@@ -7,13 +7,15 @@ import unittest
 
 sys.path.insert(0, "src")
 
-from salesbench.goldbank.pipeline import GoldBankPipeline  # noqa: E402
+from salesbench.goldbank.pipeline import GoldBankPipeline, build_bp_proposals_from_graph  # noqa: E402
 from salesbench.goldbank.commerce_schema import (  # noqa: E402
+    CommerceCue,
     CueType,
     RelationType,
     make_cue_id,
     make_relation_id,
 )
+from salesbench.goldbank.schema import EvidenceModality, EvidenceUnit  # noqa: E402
 from salesbench.multiagent.context import build_context_bundle  # noqa: E402
 from salesbench.vlm.api_client import APICallResult  # noqa: E402
 
@@ -252,6 +254,62 @@ def successful_v7_responses() -> list[dict[str, object]]:
 
 
 class GoldBankPipelineTest(unittest.TestCase):
+    def test_bp_preserves_spoken_claim_boundary_and_requires_visual_demonstration(self):
+        evidence = EvidenceUnit(
+            evidence_id="v1_asr_000_claim",
+            video_id="v1",
+            modality=EvidenceModality.ASR,
+            start_s=0.0,
+            end_s=1.0,
+            frame_indices=(),
+            text_span="支持六十瓦快充",
+            subject="speaker",
+            predicate="claims",
+            value="the cable supports 60W fast charging",
+            attributes={},
+            source_domains=("C2_audio_speech",),
+            extractor="test",
+            confidence=0.95,
+            timestamp_status="available",
+            content_en="The speaker claims that the cable supports 60W fast charging.",
+            source_text_native="支持六十瓦快充",
+        )
+        attribute = CommerceCue(
+            cue_id="cue_attribute",
+            video_id="v1",
+            cue_type=CueType.PRODUCT_ATTRIBUTE,
+            content_en="The cable supports 60W fast charging.",
+            source_text_native="支持六十瓦快充",
+            evidence_ids=(evidence.evidence_id,),
+            attributes={},
+            directness="DIRECT",
+            theory_tags=("product_claim",),
+            extractor="test",
+            confidence=0.95,
+        )
+        claimed_demo = CommerceCue(
+            cue_id="cue_demo",
+            video_id="v1",
+            cue_type=CueType.PROCESS_DEMONSTRATION,
+            content_en="The cable is tested for fast charging.",
+            source_text_native="支持六十瓦快充",
+            evidence_ids=(evidence.evidence_id,),
+            attributes={},
+            directness="DIRECT",
+            theory_tags=("product_demonstration",),
+            extractor="test",
+            confidence=0.95,
+        )
+
+        proposals = build_bp_proposals_from_graph("v1", [evidence], [attribute, claimed_demo], [])
+
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(
+            proposals[0].proposed_gold["answer"],
+            "The speaker states: The cable supports 60W fast charging.",
+        )
+        self.assertIn("what the speaker states", proposals[0].question_intent.lower())
+
     def test_v7_adjudicator_decision_reconstructs_annotation_locally(self):
         responses = successful_v7_responses()
         vlm = FakeGoldClient(responses[:1])
@@ -363,7 +421,7 @@ class GoldBankPipelineTest(unittest.TestCase):
         self.assertEqual(queue_item["item_type"], "candidate")
         self.assertEqual(queue_item["task_type"], "CM")
         self.assertEqual(queue_item["candidate_gold"], {"relation": "SUPPORTED"})
-        self.assertEqual(queue_item["evidence_refs"], ["v1_visual_000_abc", "v1_visual_000_abc"])
+        self.assertEqual(queue_item["evidence_refs"], ["v1_visual_000_abc"])
 
     def test_abstention_uses_canonical_review_queue_shape(self):
         responses = successful_responses()
@@ -519,6 +577,18 @@ class GoldBankPipelineTest(unittest.TestCase):
 
     def test_adjudicator_receives_only_non_bp_passed_proposals(self):
         responses = successful_responses_with_two_evidence()
+        responses[6]["reviews"].append(
+            {
+                "review_id": "r_bp",
+                "proposal_id": "v1_local_bp_000",
+                "video_id": "v1",
+                "reviewer": "gold_challenger",
+                "verdict": "PASS",
+                "checks": {"evidence_exists": True},
+                "issues": [],
+                "suggested_revision": None,
+            }
+        )
         vlm = FakeGoldClient(responses[:1])
         llm = FakeGoldClient(responses[1:])
 
@@ -527,6 +597,7 @@ class GoldBankPipelineTest(unittest.TestCase):
         adjudicator_payload = llm.calls[-1]["user_text"]
         self.assertIn('"task_type": "CM"', adjudicator_payload)
         self.assertNotIn('"task_type": "BP"', adjudicator_payload)
+        self.assertNotIn("v1_local_bp_000", adjudicator_payload)
 
 
 if __name__ == "__main__":

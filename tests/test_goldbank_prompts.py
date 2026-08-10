@@ -73,6 +73,8 @@ class GoldBankPromptTest(unittest.TestCase):
         )
         self.assertIn("CLAIM_REPEATED_ACROSS_MODALITIES", relation_system)
         self.assertIn("existing cue IDs", relation_system)
+        self.assertIn("source endpoint type", relation_system)
+        self.assertIn("all endpoint cues", relation_system)
 
     def test_bp_has_an_explicit_deterministic_compiler_contract(self):
         self.assertIn("BP", BP_COMPILER_CONTRACT)
@@ -118,6 +120,9 @@ class GoldBankPromptTest(unittest.TestCase):
             self.assertIn("Do not output proposal_id", prompt)
             self.assertIn("English", prompt)
             self.assertNotRegex(prompt, r"[\u4e00-\u9fff]")
+            self.assertNotIn("English content-specific focus", prompt)
+            self.assertNotIn("specific supported claim", prompt)
+            self.assertNotIn("<controlled operator>", prompt)
         self.assertIn("capability", ae)
         self.assertIn("reasoning_operator", ae)
         self.assertIn("commerce_cue_ids", ae)
@@ -128,6 +133,16 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn("two distinct modalities", cm)
         self.assertIn("NOT_DEMONSTRATED", cm)
         self.assertIn("complete observation window", cm)
+        self.assertIn("CLASSIFY_CLAIM_SUPPORT", cm)
+        self.assertIn("MAP_FEATURE_TO_BENEFIT", ss)
+        self.assertIn("INFER_BOUNDED_NEED", ae)
+
+    def test_cue_prompt_keeps_asr_only_performance_statements_as_claims(self):
+        system, _ = build_commerce_cue_prompt("v1", [])
+
+        self.assertIn("ASR-only performance", system)
+        self.assertIn("must not become PRODUCT_ATTRIBUTE", system)
+        self.assertIn("must not become PROCESS_DEMONSTRATION", system)
 
     def test_unknown_or_legacy_proposer_name_is_rejected(self):
         for name in ("consumer", "operator", "strategist", "unknown"):

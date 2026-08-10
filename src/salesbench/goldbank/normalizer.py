@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from ..utils import clean_text, contains_cjk
@@ -48,6 +49,13 @@ _PROPOSER_TASKS = {
     "ae_proposer": GoldTaskType.AE,
 }
 
+_MODEL_PLACEHOLDER_TEXT = {
+    "english content-specific focus",
+    "specific supported claim",
+    "ask a specific question about the cited product, offer, claim, or sequence.",
+    "a concise english answer bounded by the cited graph.",
+}
+
 _DEFAULT_FORBIDDEN_INFERENCES = {
     GoldTaskType.BP: (
         "Do not infer interaction, sales, conversion, or unshown product properties.",
@@ -87,6 +95,19 @@ def _normalize_confidence(value: object) -> float:
     if 1.0 < confidence <= 100.0:
         confidence /= 100.0
     return confidence if 0.0 <= confidence <= 1.0 else 0.0
+
+
+def _contains_model_placeholder(value: object) -> bool:
+    if isinstance(value, dict):
+        return any(_contains_model_placeholder(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_model_placeholder(item) for item in value)
+    if not isinstance(value, str):
+        return False
+    normalized = normalize_text(value).lower()
+    return normalized in _MODEL_PLACEHOLDER_TEXT or (
+        normalized.startswith("<") and normalized.endswith(">")
+    )
 
 
 def _normalize_modality(raw: dict[str, object]) -> EvidenceModality:
@@ -263,9 +284,8 @@ def normalize_commercial_relations(
             for item in payload.get("evidence_ids", []) or []
             if normalize_text(item)
         ]
-        evidence_ids = tuple(
-            dict.fromkeys(supplied_evidence or [item for cue in endpoint_cues for item in cue.evidence_ids])
-        )
+        endpoint_evidence = [item for cue in endpoint_cues for item in cue.evidence_ids]
+        evidence_ids = tuple(dict.fromkeys([*supplied_evidence, *endpoint_evidence]))
         for evidence_id in evidence_ids:
             unit = evidence.get(evidence_id)
             if unit is None:
@@ -302,8 +322,9 @@ def normalize_proposals(
     video_id: str,
     generator: str,
     raw: list[dict[str, object]],
-    commerce_cue_ids: set[str] | None = None,
-    commercial_relation_ids: set[str] | None = None,
+    commerce_cues: set[str] | Mapping[str, CommerceCue] | None = None,
+    commercial_relations: set[str] | Mapping[str, CommercialRelation] | None = None,
+    evidence_ids: set[str] | None = None,
 ) -> list[GoldProposal]:
     proposals: list[GoldProposal] = []
     generator = normalize_text(generator).lower()
@@ -324,9 +345,7 @@ def normalize_proposals(
         capability = normalize_text(payload.get("capability") or subtype).upper()
         if capability != subtype:
             raise ValueError("Proposal capability must equal task_subtype")
-        reasoning_operator = normalize_text(
-            payload.get("reasoning_operator") or default_reasoning_operator(task_type, subtype)
-        ).upper()
+        reasoning_operator = default_reasoning_operator(task_type, subtype)
         cue_ids = tuple(
             dict.fromkeys(
                 normalize_text(value)
@@ -341,10 +360,10 @@ def normalize_proposals(
                 if normalize_text(value)
             )
         )
-        if commerce_cue_ids is not None and any(cue_id not in commerce_cue_ids for cue_id in cue_ids):
+        if commerce_cues is not None and any(cue_id not in commerce_cues for cue_id in cue_ids):
             raise ValueError("Proposal references an unknown CommerceCue")
-        if commercial_relation_ids is not None and any(
-            relation_id not in commercial_relation_ids for relation_id in relation_ids
+        if commercial_relations is not None and any(
+            relation_id not in commercial_relations for relation_id in relation_ids
         ):
             raise ValueError("Proposal references an unknown CommercialRelation")
         question_intent = normalize_text(payload.get("question_intent")) or (
@@ -355,6 +374,8 @@ def normalize_proposals(
             for value in payload.get("forbidden_inferences", []) or _DEFAULT_FORBIDDEN_INFERENCES[task_type]
             if normalize_text(value)
         )
+        if _contains_model_placeholder((target, proposed_gold, payload.get("reasoning_edges", []), question_intent)):
+            raise ValueError("Proposal contains copied schema placeholder text")
         if contains_cjk(
             (
                 target,
@@ -365,11 +386,34 @@ def normalize_proposals(
             )
         ):
             raise ValueError("Proposal normalized natural-language fields must use English")
+        supplied_evidence_ids = [
+            normalize_text(value)
+            for value in payload.get("evidence_ids", []) or []
+            if normalize_text(value)
+        ]
+        if evidence_ids is not None:
+            resolved_evidence_ids = [value for value in supplied_evidence_ids if value in evidence_ids]
+            if isinstance(commerce_cues, Mapping):
+                resolved_evidence_ids.extend(
+                    evidence_id
+                    for cue_id in cue_ids
+                    for evidence_id in commerce_cues[cue_id].evidence_ids
+                )
+            if isinstance(commercial_relations, Mapping):
+                resolved_evidence_ids.extend(
+                    evidence_id
+                    for relation_id in relation_ids
+                    for evidence_id in commercial_relations[relation_id].evidence_ids
+                )
+            supplied_evidence_ids = [
+                value for value in dict.fromkeys(resolved_evidence_ids) if value in evidence_ids
+            ]
         payload["task_subtype"] = subtype
         payload["video_id"] = video_id
         payload["source_agent"] = generator
         payload["capability"] = capability
         payload["reasoning_operator"] = reasoning_operator
+        payload["evidence_ids"] = supplied_evidence_ids
         payload["commerce_cue_ids"] = list(cue_ids)
         payload["commercial_relation_ids"] = list(relation_ids)
         payload["question_intent"] = question_intent

@@ -128,6 +128,12 @@ _BP_CUE_CAPABILITIES = {
     CueType.USAGE_SCENARIO: "USAGE_SCENARIO",
 }
 
+_BP_VISUAL_REQUIRED_CUES = {
+    CueType.PROCESS_DEMONSTRATION,
+    CueType.OUTCOME_DISPLAY,
+    CueType.BEFORE_AFTER,
+}
+
 
 def build_bp_proposals_from_graph(
     video_id: str,
@@ -143,6 +149,18 @@ def build_bp_proposals_from_graph(
             continue
         if not cue.evidence_ids or any(evidence_id not in evidence_by_id for evidence_id in cue.evidence_ids):
             continue
+        cue_evidence = [evidence_by_id[evidence_id] for evidence_id in cue.evidence_ids]
+        if cue.cue_type in _BP_VISUAL_REQUIRED_CUES and not any(
+            unit.modality.value == "visual" for unit in cue_evidence
+        ):
+            continue
+        asr_only = all(unit.modality.value == "asr" for unit in cue_evidence)
+        answer = f"The speaker states: {cue.content_en}" if asr_only else cue.content_en
+        question_intent = (
+            f"Ask what the speaker states about {subtype.lower().replace('_', ' ')}."
+            if asr_only
+            else f"Ask what the video specifically presents about {subtype.lower().replace('_', ' ')}."
+        )
         related = [
             relation
             for relation in commercial_relations
@@ -157,7 +175,7 @@ def build_bp_proposals_from_graph(
                 task_type=GoldTaskType.BP,
                 task_subtype=subtype,
                 target={"cue_type": cue.cue_type.value, "specific_focus": cue.content_en},
-                proposed_gold={"answer": cue.content_en},
+                proposed_gold={"answer": answer},
                 evidence_ids=cue.evidence_ids,
                 reasoning_edges=tuple(
                     (evidence_id, cue.content_en, "SUPPORTED") for evidence_id in cue.evidence_ids
@@ -167,9 +185,7 @@ def build_bp_proposals_from_graph(
                 reasoning_operator=default_reasoning_operator(GoldTaskType.BP, subtype),
                 commerce_cue_ids=(cue.cue_id,),
                 commercial_relation_ids=tuple(relation.relation_id for relation in related),
-                question_intent=(
-                    f"Ask what the video specifically presents about {subtype.lower().replace('_', ' ')}."
-                ),
+                question_intent=question_intent,
                 forbidden_inferences=(
                     "Do not infer sales, interaction, conversion, or unshown product properties.",
                 ),
@@ -661,8 +677,9 @@ class GoldBankPipeline:
                             video_id,
                             generator,
                             [raw_proposal],
-                            set(cue_dict),
-                            {relation.relation_id for relation in commercial_relations},
+                            cue_dict,
+                            {relation.relation_id: relation for relation in commercial_relations},
+                            set(evidence_dict),
                         )[0]
                     except (ValueError, IndexError) as exc:
                         status = "partial"
@@ -778,15 +795,22 @@ class GoldBankPipeline:
             if proposal.proposal_id in passed_proposal_ids
         }
 
+        adjudicator_proposals = [
+            proposal
+            for proposal in eligible_proposal_dicts
+            if clean_text(proposal.get("proposal_id")) in passed_proposal_ids
+            and clean_text(proposal.get("task_type")).upper() != GoldTaskType.BP.value
+        ]
+        adjudicator_proposal_ids = {
+            clean_text(proposal.get("proposal_id")) for proposal in adjudicator_proposals
+        }
+        adjudicator_reviews = [
+            review.to_dict() for review in reviews if review.proposal_id in adjudicator_proposal_ids
+        ]
         system, user = build_adjudicator_prompt(
             video_id,
-            [
-                proposal
-                for proposal in eligible_proposal_dicts
-                if clean_text(proposal.get("proposal_id")) in passed_proposal_ids
-                and clean_text(proposal.get("task_type")).upper() != GoldTaskType.BP.value
-            ],
-            [review.to_dict() for review in reviews],
+            adjudicator_proposals,
+            adjudicator_reviews,
             [unit.to_dict() for unit in evidence_units],
             [cue.to_dict() for cue in commerce_cues],
             [relation.to_dict() for relation in commercial_relations],

@@ -133,7 +133,9 @@ class EvidenceNormalizerTest(unittest.TestCase):
                     "relation_type": "OFFER_REQUIRES_CONDITION",
                     "source_cue_ids": [price.cue_id],
                     "target_cue_ids": [condition.cue_id],
-                    "evidence_ids": [evidence_units[0].evidence_id, evidence_units[1].evidence_id],
+                    # The model may repeat only one endpoint's evidence. Local
+                    # normalization must still preserve the complete graph edge.
+                    "evidence_ids": [evidence_units[0].evidence_id],
                     "status": "SUPPORTED",
                     "rationale_en": "The 9.9-yuan offer is explicitly conditional on claiming a coupon.",
                     "provenance": "BENCHMARK_OPERATIONAL",
@@ -149,7 +151,142 @@ class EvidenceNormalizerTest(unittest.TestCase):
         self.assertTrue(price.cue_id.startswith("v1_cue_price_"))
         self.assertEqual(relation.relation_type, RelationType.OFFER_REQUIRES_CONDITION)
         self.assertEqual(relation.provenance, RelationProvenance.THEORY_OPERATIONALIZED)
+        self.assertEqual(relation.evidence_ids, tuple(unit.evidence_id for unit in evidence_units))
         self.assertTrue(relation.relation_id.startswith("v1_relation_offer_requires_condition_"))
+
+    def test_proposal_operator_is_assigned_from_the_local_ontology(self):
+        proposal = normalize_proposals(
+            "v1",
+            "ss_proposer",
+            [
+                {
+                    "task_type": "SS",
+                    "task_subtype": "FEATURE_BENEFIT",
+                    "capability": "FEATURE_BENEFIT",
+                    "reasoning_operator": "controlled operator",
+                    "target": {"specific_focus": "The braided jacket is presented as durable."},
+                    "proposed_gold": {"answer": "The material feature is framed as durability."},
+                    "evidence_ids": ["e1", "e2"],
+                    "reasoning_edges": [],
+                    "question_intent": "Ask how the braided jacket is connected to durability.",
+                    "proposal_confidence": 0.9,
+                }
+            ],
+        )[0]
+
+        self.assertEqual(proposal.reasoning_operator, "MAP_FEATURE_TO_BENEFIT")
+
+    def test_proposal_graph_nodes_are_resolved_to_underlying_evidence(self):
+        evidence_units = normalize_evidence_units(
+            "v1",
+            [
+                {
+                    "modality": "asr",
+                    "text_span": "支持快充",
+                    "subject": "speaker",
+                    "predicate": "claims",
+                    "value": "the cable supports fast charging",
+                    "confidence": 0.95,
+                },
+                {
+                    "modality": "visual",
+                    "evidence_id": "frame_003.jpg",
+                    "subject": "phone",
+                    "predicate": "shows",
+                    "value": "a charging indicator",
+                    "confidence": 0.95,
+                },
+            ],
+        )
+        evidence = {unit.evidence_id: unit for unit in evidence_units}
+        claim, demonstration = normalize_commerce_cues(
+            "v1",
+            [
+                {
+                    "cue_type": "FUNCTION_CLAIM",
+                    "content_en": "The speaker claims that the cable supports fast charging.",
+                    "source_text_native": "支持快充",
+                    "evidence_ids": [evidence_units[0].evidence_id],
+                    "attributes": {},
+                    "directness": "DIRECT",
+                    "theory_tags": ["product_claim"],
+                    "confidence": 0.9,
+                },
+                {
+                    "cue_type": "PROCESS_DEMONSTRATION",
+                    "content_en": "A phone displays a charging indicator while connected to the cable.",
+                    "source_text_native": "",
+                    "evidence_ids": [evidence_units[1].evidence_id],
+                    "attributes": {},
+                    "directness": "DIRECT",
+                    "theory_tags": ["product_demonstration"],
+                    "confidence": 0.9,
+                },
+            ],
+            evidence,
+        )
+        cues = {cue.cue_id: cue for cue in (claim, demonstration)}
+        relation = normalize_commercial_relations(
+            "v1",
+            [
+                {
+                    "relation_type": "CLAIM_SUPPORTED_BY_DEMONSTRATION",
+                    "source_cue_ids": [claim.cue_id],
+                    "target_cue_ids": [demonstration.cue_id],
+                    "evidence_ids": [evidence_units[0].evidence_id],
+                    "status": "SUPPORTED",
+                    "rationale_en": "The visible charging state addresses the spoken charging claim.",
+                    "directness": "INFERRED",
+                    "confidence": 0.9,
+                }
+            ],
+            cues,
+            evidence,
+        )[0]
+
+        proposal = normalize_proposals(
+            "v1",
+            "cm_proposer",
+            [
+                {
+                    "task_type": "CM",
+                    "task_subtype": "CLAIM_DEMONSTRATION_STATUS",
+                    "target": {"specific_focus": "The spoken fast-charging claim."},
+                    "proposed_gold": {"answer": "The claim is paired with a visible charging state."},
+                    "evidence_ids": [evidence_units[0].evidence_id, demonstration.cue_id],
+                    "commerce_cue_ids": [claim.cue_id, demonstration.cue_id],
+                    "commercial_relation_ids": [relation.relation_id],
+                    "reasoning_edges": [],
+                    "question_intent": "Ask how the visible phone state relates to the spoken claim.",
+                    "proposal_confidence": 0.9,
+                }
+            ],
+            cues,
+            {relation.relation_id: relation},
+            set(evidence),
+        )[0]
+
+        self.assertEqual(set(proposal.evidence_ids), set(evidence))
+        self.assertNotIn(demonstration.cue_id, proposal.evidence_ids)
+
+    def test_proposal_rejects_copied_schema_placeholders(self):
+        with self.assertRaisesRegex(ValueError, "placeholder"):
+            normalize_proposals(
+                "v1",
+                "ae_proposer",
+                [
+                    {
+                        "task_type": "AE",
+                        "task_subtype": "CONTENT_IMPLIED_NEED",
+                        "target": {"specific_focus": "English content-specific focus"},
+                        "proposed_gold": {"answer": "A concrete answer."},
+                        "evidence_ids": ["e1", "e2"],
+                        "reasoning_edges": [["e1", "specific supported claim", "SUPPORTED"]],
+                        "question_intent": "Ask a specific question about the cited product, offer, claim, or sequence.",
+                        "proposal_confidence": 0.9,
+                    }
+                ],
+            )
 
     def test_ambiguous_text_is_not_promoted_to_direct_evidence(self):
         unit = normalize_evidence_units(

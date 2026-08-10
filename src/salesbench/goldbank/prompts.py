@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 
+from .commerce_ontology import RELATION_RULES
 from .commerce_schema import CueType, RelationType
+from .ontology import allowed_subtypes, default_reasoning_operator
+from .schema import GoldTaskType
 from .validators import PRIVATE_KEYS
 
 
@@ -99,7 +102,10 @@ def build_commerce_cue_prompt(
         "video_id, extractor, translations, questions, or answers; local code adds canonical IDs. "
         "Keep a spoken product-effect statement as FUNCTION_CLAIM, EFFECT_CLAIM, PRICE_CLAIM, "
         "FIT_CLAIM, or EXPERIENCE_REVIEW until separate evidence demonstrates it. Do not relabel a "
-        "claim as an observed product fact. Abstain when the cue cannot be localized. "
+        "claim as an observed product fact. An ASR-only performance, compatibility, durability, or "
+        "effect statement must not become PRODUCT_ATTRIBUTE and must not become PROCESS_DEMONSTRATION; "
+        "keep it as an appropriate claim cue unless independently localized visual evidence exists. "
+        "Abstain when the cue cannot be localized. "
         f"{_NO_CONSUMER_OUTCOMES}"
     )
     user = _json({"video_id": video_id, "evidence_units": evidence_units})
@@ -111,6 +117,14 @@ def build_commercial_relation_prompt(
     evidence_units: list[dict[str, object]],
     commerce_cues: list[dict[str, object]],
 ) -> tuple[str, str]:
+    endpoint_contract = "; ".join(
+        (
+            f"{relation_type.value}: source endpoint type in "
+            f"[{', '.join(sorted(item.value for item in rule['source']))}], target endpoint type in "
+            f"[{', '.join(sorted(item.value for item in rule['target']))}]"
+        )
+        for relation_type, rule in RELATION_RULES.items()
+    )
     system = (
         "You are the SalesBench Commercial Relation Builder. Connect existing grounded CommerceCue "
         "nodes only when their cited EvidenceUnits support a controlled commercial argument relation. "
@@ -123,6 +137,9 @@ def build_commercial_relation_prompt(
         "English explanation of the cited relationship. directness must be DIRECT, INFERRED, or "
         "NEEDS_REVIEW. Do not output relation_id, provenance, extractor, translations, questions, or "
         "answers; local code generates IDs and overrides provenance from the frozen ontology. "
+        f"Use these directed endpoint contracts exactly: {endpoint_contract}. "
+        "evidence_ids must include the union of EvidenceUnit IDs cited by all endpoint cues, not only "
+        "the first or source endpoint. "
         "CLAIM_REPEATED_ACROSS_MODALITIES means two modalities repeat equivalent promotional wording; "
         "it is not independent evidence. CLAIM_SUPPORTED_BY_DEMONSTRATION requires a distinct visual "
         "demonstration of the material claim. Abstain when endpoints are ambiguous or evidence is "
@@ -179,30 +196,31 @@ def build_proposer_prompt(
     if generator not in contracts:
         raise ValueError(f"Unknown task generator: {generator}")
     task_type = {"cm_proposer": "CM", "ss_proposer": "SS", "ae_proposer": "AE"}[generator]
-    example = (
-        '{"task_type":"' + task_type + '","task_subtype":"<allowed capability>",'
-        '"capability":"<same allowed capability>","reasoning_operator":"<controlled operator>",'
-        '"target":{"specific_focus":"English content-specific focus"},'
-        '"proposed_gold":{"answer":"A concise English answer bounded by the cited graph."},'
-        '"evidence_ids":["existing_evidence_1","existing_evidence_2"],'
-        '"commerce_cue_ids":["existing_cue_1","existing_cue_2"],'
-        '"commercial_relation_ids":["existing_relation_1"],'
-        '"reasoning_edges":[["existing_evidence_1","specific supported claim","SUPPORTED"]],'
-        '"question_intent":"Ask a specific question about the cited product, offer, claim, or sequence.",'
-        '"forbidden_inferences":["Do not infer consumer outcomes."],"proposal_confidence":0.85}'
+    task = GoldTaskType(task_type)
+    operator_contract = "; ".join(
+        f"{subtype} -> {default_reasoning_operator(task, subtype)}"
+        for subtype in sorted(allowed_subtypes(task))
     )
     system = (
         f"You are the SalesBench-QA {generator}. {contracts[generator]} "
         "Return strict JSON with exactly two top-level arrays: proposals and abstentions, with no more "
         f"than three proposals. Every proposal must use task_type={task_type}, set capability equal to "
-        "task_subtype, and contain all fields shown in this schema: "
-        f"{example}. target and proposed_gold must be non-empty objects, and proposed_gold must contain "
+        f'task_subtype, and include the literal pair "task_type":"{task_type}". Each proposal must '
+        'contain "task_subtype", "capability", "reasoning_operator", "target", "proposed_gold", '
+        '"evidence_ids", "commerce_cue_ids", "commercial_relation_ids", "reasoning_edges", '
+        '"question_intent", "forbidden_inferences", and "proposal_confidence". '
+        f"Use this exact capability-to-operator mapping: {operator_contract}. "
+        "target and proposed_gold must be non-empty objects, and proposed_gold must contain "
         "answer. Do not output proposal_id; local code creates it. Every proposal must cite at least "
-        "two distinct evidence_ids copied exactly from the input and at least one existing CommerceCue. "
+        "two distinct evidence_ids copied exactly from the EvidenceUnits input and at least one existing "
+        "CommerceCue. An evidence_ids value must never be a cue ID or relation ID. "
         "Capabilities that require a relation or "
         "path must cite existing commercial_relation_ids; never invent IDs. The first value of every "
         "reasoning_edges entry must be a cited EvidenceUnit ID. All natural-language values must be "
         "English. proposal_confidence must be a JSON number from 0 to 1. Never "
+        "copy instruction wording, field descriptions, generic placeholders, or meta-text into any "
+        "proposal field; every target, answer, reasoning claim, and question intent must name content "
+        "specific to this video. "
         "use titles, follower counts, interaction metrics, private metadata, or external knowledge. "
         "Never claim content caused trust, purchase, sales, conversion, interaction, or reduced viewer "
         "uncertainty. If a graph path is incomplete or the conclusion has a reasonable alternative, "
