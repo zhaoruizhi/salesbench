@@ -149,6 +149,7 @@ def compile_vqa_command(args: argparse.Namespace) -> int:
             require_all_tasks=not args.allow_missing_tasks,
         ),
         bank_filename=args.dataset_file,
+        realizations_path=Path(args.realizations),
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
@@ -274,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
     compile_parser = sub.add_parser("compile-vqa", help="从 EvidenceDataset 编译 BP/CM/SS/AE")
     compile_parser.add_argument("--evidence-dir", required=True)
     compile_parser.add_argument("--dataset-file", default="video_evidence_dataset_reviewed.jsonl")
+    compile_parser.add_argument("--realizations", required=True)
     compile_parser.add_argument("--output-dir", required=True)
     compile_parser.add_argument("--max-questions-per-video", type=int, default=8)
     compile_parser.add_argument("--max-per-task", type=int, default=2)

@@ -33,7 +33,17 @@ class GoldBankCLITest(unittest.TestCase):
         self.assertEqual(args.decisions, "decisions.jsonl")
 
     def test_compile_and_audit_commands_parse(self):
-        compile_args = build_parser().parse_args(["compile-vqa", "--evidence-dir", "gold", "--output-dir", "qa"])
+        compile_args = build_parser().parse_args(
+            [
+                "compile-vqa",
+                "--evidence-dir",
+                "gold",
+                "--realizations",
+                "qa_realizations_reviewed.jsonl",
+                "--output-dir",
+                "qa",
+            ]
+        )
         audit_args = build_parser().parse_args(
             ["audit-evidence-dataset", "--dataset", "gold/video_evidence_dataset.jsonl", "--evidence", "gold/evidence_units.jsonl"]
         )

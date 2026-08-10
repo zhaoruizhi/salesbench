@@ -10,6 +10,7 @@ sys.path.insert(0, "src")
 
 from salesbench.vqa.compiler import CompilePolicy, compile_qa_records, compile_vqa_from_gold  # noqa: E402
 from salesbench.vqa.goldbank_loader import load_compilable_gold  # noqa: E402
+from salesbench.vqa.specs import build_question_specs  # noqa: E402
 
 
 def gold_record():
@@ -56,6 +57,63 @@ def gold_record():
 
 
 class GoldBankQACompilerTest(unittest.TestCase):
+    def test_v5_compiler_uses_reviewed_english_realization_and_graph_fields(self):
+        record = gold_record()
+        item = record["grounded_annotations"][0]
+        item.update(
+            {
+                "task_subtype": "USAGE_STEP",
+                "capability": "USAGE_STEP",
+                "reasoning_operator": "SEQUENCE_ACTION",
+                "question_intent": "Ask what concrete product-use step is shown.",
+                "commerce_cue_ids": ["c1"],
+                "commercial_relation_ids": [],
+                "forbidden_inferences": ["Do not infer outcomes."],
+                "gold_value": {"answer": "The host opens the product package."},
+                "eligible_question_formats": ["grounded_question"],
+            }
+        )
+        spec = build_question_specs([record])[0]
+        realizations = {
+            spec.spec_id: {
+                "spec_id": spec.spec_id,
+                "question": "What does the host do with the product package before showing its contents?",
+            }
+        }
+
+        qa, validation = compile_qa_records(
+            load_compilable_gold_from_records([record]),
+            CompilePolicy(require_all_tasks=False),
+            realizations,
+        )
+
+        self.assertEqual(qa[0]["question"], realizations[spec.spec_id]["question"])
+        self.assertEqual(qa[0]["capability"], "USAGE_STEP")
+        self.assertEqual(qa[0]["reasoning_operator"], "SEQUENCE_ACTION")
+        self.assertEqual(qa[0]["commerce_cue_ids"], ["c1"])
+        self.assertEqual(validation[0]["status"], "accepted")
+
+    def test_v5_compiler_rejects_missing_realization_without_forcing_tasks_per_video(self):
+        record = gold_record()
+        record["grounded_annotations"][0].update(
+            {
+                "task_subtype": "USAGE_STEP",
+                "capability": "USAGE_STEP",
+                "reasoning_operator": "SEQUENCE_ACTION",
+                "eligible_question_formats": ["grounded_question"],
+            }
+        )
+
+        qa, validation = compile_qa_records(
+            load_compilable_gold_from_records([record]),
+            CompilePolicy(require_all_tasks=False),
+            {},
+        )
+
+        self.assertEqual(qa, [])
+        self.assertEqual(validation[0]["reason"], "missing_realization")
+        self.assertFalse(any(row.get("reason") == "missing_bp_for_video" for row in validation))
+
     def test_only_gold_a_and_gold_b_are_compiled(self):
         item = load_compilable_gold_from_records([gold_record()])
 
@@ -134,6 +192,48 @@ class GoldBankQACompilerTest(unittest.TestCase):
         self.assertEqual(summary["counts"]["vqa_gold_private"], 1)
         self.assertNotIn("gold_answer", public_text)
         self.assertNotIn("thresholds", public_text)
+
+    def test_file_compiler_writes_diversity_report_for_v3_realizations(self):
+        record = gold_record()
+        record["schema_version"] = "evidence-dataset-schema-v3"
+        record["grounded_annotations"][0].update(
+            {
+                "task_subtype": "USAGE_STEP",
+                "capability": "USAGE_STEP",
+                "reasoning_operator": "SEQUENCE_ACTION",
+                "question_intent": "Ask what step is shown.",
+                "commerce_cue_ids": ["c1"],
+                "commercial_relation_ids": [],
+                "forbidden_inferences": [],
+                "gold_value": {"answer": "The host opens the package."},
+                "eligible_question_formats": ["grounded_question"],
+            }
+        )
+        spec = build_question_specs([record])[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            gold_dir = Path(tmp) / "gold"
+            out_dir = Path(tmp) / "qa"
+            gold_dir.mkdir()
+            write_jsonl(gold_dir / "video_evidence_dataset.jsonl", [record])
+            write_jsonl(gold_dir / "evidence_units.jsonl", [{"evidence_id": "e1", "video_id": "v1", "content_en": "The host opens the package."}])
+            realizations = Path(tmp) / "qa_realizations_reviewed.jsonl"
+            write_jsonl(
+                realizations,
+                [{"spec_id": spec.spec_id, "question": "What does the host open before presenting the product?"}],
+            )
+
+            summary = compile_vqa_from_gold(
+                gold_dir,
+                out_dir,
+                CompilePolicy(require_all_tasks=False),
+                bank_filename="video_evidence_dataset.jsonl",
+                realizations_path=realizations,
+            )
+            diversity = json.loads((out_dir / "qa_diversity.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(summary["compiler_version"], "evidence-qa-compiler-v5")
+        self.assertEqual(diversity["exact_duplicate_count"], 0)
+        self.assertIn("normalized_stem_clusters", diversity)
 
     def test_question_does_not_leak_answer(self):
         qa, validation = compile_qa_records(load_compilable_gold_from_records([gold_record()]), CompilePolicy())

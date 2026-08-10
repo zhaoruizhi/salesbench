@@ -19,6 +19,7 @@ from salesbench.goldbank.runner import run_gold_bank_records  # noqa: E402
 from salesbench.io_utils import read_records  # noqa: E402
 from salesbench.vlm.api_client import APICallResult  # noqa: E402
 from salesbench.vqa.compiler import CompilePolicy, compile_vqa_from_gold  # noqa: E402
+from salesbench.vqa.specs import build_question_specs  # noqa: E402
 from salesbench.vqa_baseline.runner import run_salesbench_qa_baseline_records  # noqa: E402
 from salesbench.vqa_evaluate.runner import evaluate_salesbench_qa_files  # noqa: E402
 
@@ -302,12 +303,30 @@ class EvidenceVQAE2ETest(unittest.TestCase):
                 pipeline,
                 resume=False,
             )
+            evidence_records = read_records(evidence_dir / "video_evidence_dataset.jsonl")
+            questions = {
+                "BP": "What product detail or use is directly presented in this video?",
+                "CM": "How does the visible product demonstration relate to the spoken commuting claim?",
+                "SS": "What does the product demonstration show within the sales presentation?",
+                "AE": "What usage context does the content connect to the product?",
+            }
+            realizations_path = root / "qa_realizations_reviewed.jsonl"
+            with realizations_path.open("w", encoding="utf-8") as handle:
+                for spec in build_question_specs(evidence_records):
+                    handle.write(
+                        json.dumps(
+                            {"spec_id": spec.spec_id, "question": questions[spec.task_type.value]},
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
 
             compile_meta = compile_vqa_from_gold(
                 evidence_dir,
                 qa_dir,
                 CompilePolicy(),
                 bank_filename="video_evidence_dataset.jsonl",
+                realizations_path=realizations_path,
             )
             public_items = read_records(qa_dir / "vqa_public.jsonl")
             answer_client = RepeatingClient("The answer is based on the frames and speech.", "fake-model")

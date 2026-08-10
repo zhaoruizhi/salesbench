@@ -111,7 +111,8 @@ class BenchmarkConvergenceTest(unittest.TestCase):
         records, validation = compile_qa_records([grounded_item()], CompilePolicy())
 
         self.assertEqual(validation[0]["status"], "accepted")
-        self.assertEqual(records[0]["vqa_id"], "v1_bp_00001")
+        self.assertTrue(records[0]["vqa_id"].startswith("v1_bp_"))
+        self.assertEqual(len(records[0]["vqa_id"].rsplit("_", 1)[-1]), 10)
         self.assertEqual(records[0]["task_layer"], "salesbench_qa")
         self.assertEqual(records[0]["evidence_refs"], ["e1"])
         self.assertEqual(records[0]["quality_status"], QualityStatus.DIRECT.value)
