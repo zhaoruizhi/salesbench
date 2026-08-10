@@ -1,299 +1,349 @@
-# SalesBench Plan B Commerce Graph Implementation Plan
+# SalesBench 方案 B：商业论证图实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **供智能体执行：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans`，按任务逐项实施。所有执行步骤使用复选框（`- [ ]`）跟踪。
 
-**Goal:** Upgrade SalesBench from generic frame/ASR/OCR QA generation to an evidence-first benchmark of product-and-offer grounding, claim–evidence verification, sales-logic reconstruction, and need–objection–offer alignment for presenter-led e-commerce short videos.
+**目标：** 将 SalesBench 从通用的帧/ASR/OCR 问答生成框架，升级为面向主播带货短视频的 Evidence-First Benchmark，重点测量商品与报价还原、主张—证据验证、销售论证重建和需求—顾虑—商品匹配能力。
 
-**Architecture:** Preserve raw `EvidenceUnit` as the factual layer, add theory-grounded `CommerceCue` nodes and auditable `CommercialRelation` edges, then let four task planners create semantic `QuestionSpec` records. A separate English question realizer produces natural surface questions; local validation, human review, and a frozen task-aware LLM-as-Judge remain the final quality gates.
+**架构：** 原始 `EvidenceUnit` 只保存可定位事实；在其上新增有营销理论依据的 `CommerceCue` 节点和可审计的 `CommercialRelation` 边；四个任务规划器基于同一张商业论证图生成语义 `QuestionSpec`。随后由独立英文 Question Realizer 生成自然问题，经本地规则、人工审核和冻结版 LLM-as-Judge 完成质量控制。运行数据和 Prompt 统一为英文；审计前单独生成中文翻译包，中文翻译只用于人工查看，不进入 Gold、模型输入或 Judge。
 
-**Tech Stack:** Python 3.13, dataclasses and enums, JSON/JSONL, OpenAI-compatible multimodal/text APIs, pytest, local HTML/CSS/JavaScript audit workbench, ffmpeg/ffprobe.
+**技术栈：** Python 3.13、dataclass/Enum、JSON/JSONL、OpenAI-compatible 多模态与文本 API、pytest、本地 HTML/CSS/JavaScript 审计工作台、ffmpeg/ffprobe。
 
-## Global Constraints
+## 全局约束
 
-- Public tasks remain exactly `BP`, `CM`, `SS`, and `AE`; compatibility IDs do not change.
-- Public names become Product & Offer Grounding, Claim–Evidence Verification, Persuasion & Sales Logic, and Need–Objection–Offer Alignment.
-- Public questions, Gold answers, generator prompts, and Judge prompts use English only.
-- Chinese ASR/OCR remains verbatim in `content_native`; `content_en` is an auditable English normalization.
-- `EvidenceUnit` contains directly localizable frame, OCR, or ASR facts only; marketing interpretation must not be written back into raw evidence.
-- `CommerceCue` may summarize an observable commercial presentation cue but must cite one or more valid `EvidenceUnit` IDs from the same video.
-- `CommercialRelation` may connect validated cues but must cite the supporting EvidenceUnits and declare whether it is direct, bounded inference, or needs review.
-- Never emit causal outcome relations such as `INCREASES_TRUST`, `CAUSES_PURCHASE`, `IMPROVES_CONVERSION`, or `REDUCES_INTERACTION_RISK`.
-- Interaction counts, follower counts, titles, creator metadata, and private analysis fields never enter Evidence, QA, model payloads, Gold, or Judge payloads.
-- Do not force every video to generate all four tasks; balance is enforced across the cohort.
-- The primary evaluation remains a frozen five-level LLM-as-Judge; no separate deterministic or key-fact scoring engine is required for v9.
-- Smoke and formal outputs are physically separate and never overwrite v6/v7/v8 artifacts.
-- New versions are `evidence-dataset-schema-v3`, `evidence-prompt-v9`, `evidence-first-pipeline-v8`, `evidence-qa-compiler-v5`, and `judge-prompt-v4`.
-- Every implementation task ends in focused tests and a Git commit.
+- 公开任务仍固定为 `BP`、`CM`、`SS`、`AE`，兼容 ID 不改变。
+- 四个公开名称分别为 Product & Offer Grounding、Claim–Evidence Verification、Persuasion & Sales Logic、Need–Objection–Offer Alignment。
+- 所有运行时 System/User Prompt 必须为全英文，包括 Evidence、Cue、Relation、四任务、Question Realizer、Challenger、Adjudicator、Judge 和审计翻译 Prompt。
+- `EvidenceUnit` 的规范语义字段使用英文；中文 ASR/OCR 必须在 `source_text_native` 中逐字保留。
+- `CommerceCue`、`CommercialRelation`、`QuestionSpec`、问题、Gold Answer、Judge 原始输出均使用英文。
+- 审计中文翻译保存在独立 `audit_translations.jsonl`，不得写回 EvidenceDataset 或 QA JSONL。
+- 审计工作台默认显示中文翻译，同时必须提供英文原文和中文源文本的展开入口。
+- 翻译结果不能成为 Evidence、关系判定、Gold、问题生成、Judge 或模型输入的依据。
+- `EvidenceUnit` 只能包含可从帧、OCR 或 ASR 定位的事实；营销解释不能写回原子证据。
+- `CommerceCue` 可以概括可观察的商业呈现内容，但必须引用同一视频的有效 `EvidenceUnit`。
+- `CommercialRelation` 必须连接有效 Cue、引用底层 Evidence，并标记直接事实、受限推断或待审。
+- 禁止 `INCREASES_TRUST`、`CAUSES_PURCHASE`、`IMPROVES_CONVERSION` 等消费者结果或因果关系。
+- 互动量、粉丝数、标题、创作者元数据和私有分析字段不得进入 Evidence、QA、Gold、模型或 Judge payload。
+- 不强制每个视频都生成四个任务；只在 cohort 层面平衡任务与能力。
+- v9 主评分继续使用冻结的五档 LLM-as-Judge，不增加独立确定性评分器或 key-fact scorer。
+- Smoke 与正式结果必须物理分离，不覆盖 v6/v7/v8 产物。
+- 新版本固定为 `evidence-dataset-schema-v3`、`evidence-prompt-v9`、`evidence-first-pipeline-v8`、`evidence-qa-compiler-v5`、`judge-prompt-v4`、`audit-translation-prompt-v1`。
+- 每个实施任务都必须包含失败测试、最小实现、通过测试和独立 Git 提交。
 
 ---
 
-## 1. Literature provenance and what the relation labels mean
+## 1. 语言与审计边界
 
-The commercial ontology is a benchmark operationalization informed by literature; it is not copied verbatim from one paper. Every cue and relation must record one of three provenance classes:
+### 1.1 各产物的规范语言
 
-- `THEORY_DIRECT`: the source literature explicitly studies the content construct, such as product description, product demonstration, vicarious trial, process presentation, outcome presentation, or product uncertainty.
-- `THEORY_OPERATIONALIZED`: SalesBench converts a theory construct into a video-annotation edge, such as linking a demonstrated feature to a stated benefit.
-- `BENCHMARK_OPERATIONAL`: the edge is required to test multimodal grounding or temporal reasoning, such as claim repetition versus independent visual support.
-
-### 1.1 Primary domain sources
-
-1. Guo et al., *Analyzing and Predicting Consumer Response to Short Videos in E-Commerce*, ACM TMIS 2024, identifies product description, product demonstration, pleasure, and aesthetics in 23,001 Taobao e-commerce short videos: <https://doi.org/10.1145/3690393>.
-2. *Process Reveal or Product Display?*, Journal of Retailing and Consumer Services 2026, separates process-oriented and outcome-oriented short-video product presentation: <https://doi.org/10.1016/j.jretconser.2026.104827>.
-3. *The Effects of Mini-detail Short Videos on Consumer Purchase Intention on Taobao*, Entertainment Computing 2024, motivates product details, functions, specific usage, application scenarios, multimedia presentation, and virtual experience: <https://doi.org/10.1016/j.entcom.2024.100745>.
-4. Lu and Chen, *Live Streaming Commerce and Consumers' Purchase Intention: An Uncertainty Reduction Perspective*, Information & Management 2021, supplies vicarious product trial, product-fit uncertainty, and product/social signal distinctions: <https://doi.org/10.1016/j.im.2021.103509>.
-5. *What Reduces Product Uncertainty in Live Streaming E-Commerce?*, Journal of Retailing and Consumer Services 2023, motivates anchor–product and content–product signal consistency: <https://doi.org/10.1016/j.jretconser.2023.103441>.
-6. *What Drives Taobao Live Streaming Commerce?*, Heliyon 2022, supplies source credibility, presenter–product congruence, and parasocial constructs; SalesBench uses only their observable in-video cues: <https://doi.org/10.1016/j.heliyon.2022.e09676>.
-7. *Let TikTokers Talk About Products*, Journal of Interactive Advertising 2026, distinguishes experiential verbal review from visual product demonstration in short-form influencer marketing: <https://doi.org/10.1080/15252019.2026.2642022>.
-8. E-VAds supplies e-commerce-video tasks for basic perception, cross-modal detection, marketing logic, consumer insight, and evidence-grounded QA: <https://arxiv.org/html/2602.08355>.
-
-### 1.2 Corrected cue and relation boundary
-
-The earlier draft mixed presentation events and actual graph edges. V9 corrects that boundary:
-
-| Earlier label | V9 representation | Why |
-| --- | --- | --- |
-| `DESCRIBES_PRODUCT` | `PRODUCT_DESCRIPTION` cue | A description is an observable content unit before it is linked to a product entity. |
-| `DEMONSTRATES_CLAIM` | `CLAIM_SUPPORTED_BY_DEMONSTRATION` relation | The relation connects a claim cue to a separate demonstration cue. |
-| `REPEATS_CLAIM` | `CLAIM_REPEATED_ACROSS_MODALITIES` relation | Repetition is not independent proof and must remain distinguishable from support. |
-| `PARTIALLY_SUPPORTS` | `CLAIM_PARTIALLY_SUPPORTED` relation | Only part of a composite claim is shown. |
-| `CONTRADICTS` | `CLAIM_CONTRADICTED` relation | A cited cue conflicts with a cited claim. |
-| `FRAMES_FEATURE_AS_BENEFIT` | `FEATURE_FRAMED_AS_BENEFIT` relation | Connects a concrete feature to the benefit asserted in speech/OCR. |
-| `PRESENTS_PROBLEM` | `PAIN_POINT` cue | The problem itself is a node. |
-| `ADDRESSES_PROBLEM` | `PROBLEM_ADDRESSED_BY_SOLUTION` relation | Connects a problem cue to a solution/demo cue. |
-| `RAISES_OBJECTION` | `OBJECTION` cue | The objection itself is a node. |
-| `RESPONDS_TO_OBJECTION` | `OBJECTION_RESPONDED_BY_CUE` relation | Connects the objection to the response, guarantee, comparison, or demo. |
-| `REDUCES_FIT_UNCERTAINTY` | `CONTENT_ADDRESSES_FIT_UNCERTAINTY` relation | The video can address uncertainty; it cannot prove the viewer's uncertainty was reduced. |
-| `REDUCES_USAGE_UNCERTAINTY` | `CONTENT_ADDRESSES_USAGE_UNCERTAINTY` relation | Avoids a causal consumer-outcome claim. |
-| `REDUCES_PRICE_UNCERTAINTY` | `CONTENT_ADDRESSES_PRICE_UNCERTAINTY` relation | Avoids a causal consumer-outcome claim. |
-| `ESTABLISHES_OFFER_CONDITION` | `OFFER_REQUIRES_CONDITION` relation | Connects an offer to the quantity, coupon, time, membership, or action condition. |
-| `BUILDS_CREDIBILITY_SIGNAL` | `CREDIBILITY_SIGNAL` cue | The video presents a signal; actual credibility is not observable. |
-| `PRECEDES_ACTION_PROMPT` | `CONTENT_PRECEDES_CTA` relation | A benchmark-operational temporal edge, not a marketing-outcome claim. |
-
-### 1.3 Final relation catalog
-
-| Relation | Meaning and acceptance rule | Provenance | Main task |
+| 产物 | 运行/发布语言 | 审计显示 | 是否可参与 Gold/评分 |
 | --- | --- | --- | --- |
-| `DESCRIPTION_REFERS_TO_PRODUCT` | Description/attribute cue explicitly refers to the grounded product or variant. | `THEORY_DIRECT` | BP |
-| `CLAIM_SUPPORTED_BY_DEMONSTRATION` | A distinct visual demonstration shows the material part of a spoken/OCR claim. Repeating the claim in another modality is insufficient. | `THEORY_OPERATIONALIZED` | CM |
-| `CLAIM_REPEATED_ACROSS_MODALITIES` | Speech and OCR/visual text repeat semantically equivalent promotional wording without independent demonstration. | `BENCHMARK_OPERATIONAL` | CM |
-| `CLAIM_PARTIALLY_SUPPORTED` | Evidence supports a separable subset of a composite claim and leaves another subset unshown. | `BENCHMARK_OPERATIONAL` | CM |
-| `CLAIM_CONTRADICTED` | A localized cue is incompatible with the claim under the same product, condition, and time window. | `BENCHMARK_OPERATIONAL` | CM |
-| `CLAIM_TEMPORALLY_MISALIGNED` | Claim and proposed evidence refer to different temporal stages or product states. | `BENCHMARK_OPERATIONAL` | CM |
-| `FEATURE_FRAMED_AS_BENEFIT` | Speech/OCR explicitly connects a visible or described feature to a buyer-facing benefit. | `THEORY_OPERATIONALIZED` | SS |
-| `DEMONSTRATION_SHOWS_STATE_CHANGE` | Before/process/after cues establish an observable state change. | `THEORY_DIRECT` | BP/SS |
-| `PROBLEM_ADDRESSED_BY_SOLUTION` | The content presents a problem and subsequently presents the product, feature, or demo as its response. | `THEORY_OPERATIONALIZED` | SS |
-| `OBJECTION_RESPONDED_BY_CUE` | An explicit concern is followed by a relevant explanation, demo, comparison, guarantee, or service cue. | `THEORY_OPERATIONALIZED` | SS/AE |
-| `CONTENT_ADDRESSES_FIT_UNCERTAINTY` | Try-on, dimensions, physical comparison, or stated constraints clarify whether the product fits a represented use/person/object. | `THEORY_OPERATIONALIZED` | AE |
-| `CONTENT_ADDRESSES_USAGE_UNCERTAINTY` | Instructions or process demonstration clarify how, where, or how difficult the product is to use. | `THEORY_OPERATIONALIZED` | AE |
-| `CONTENT_ADDRESSES_PRICE_UNCERTAINTY` | Price composition, bundle quantity, discount comparison, or conditions clarify what the buyer receives and pays. | `THEORY_OPERATIONALIZED` | BP/AE |
-| `OFFER_REQUIRES_CONDITION` | A price, gift, or discount depends on a localized and explicit condition. | `THEORY_OPERATIONALIZED` | BP/AE |
-| `CONTENT_PRECEDES_CTA` | A cited hook, problem, demo, offer, or guarantee occurs before a cited purchase/action prompt. | `BENCHMARK_OPERATIONAL` | SS |
+| System/User Prompt | 英文 | 英文原文 + 中文翻译 | 英文原文参与运行；中文翻译不参与 |
+| Visual Evidence 语义 | 英文 | 中文翻译为主 + 英文原文 | 英文参与 |
+| ASR/OCR 原文 | 视频原语言，通常中文 | 中文原文 + 英文规范语义 | 原文用于定位，英文语义参与 |
+| CommerceCue | 英文 | 中文翻译 + 英文原文 | 英文参与 |
+| CommercialRelation | 英文 | 中文翻译 + 英文原文 | 英文参与 |
+| QuestionSpec | 英文 | 中文翻译 + 英文原文 | 英文参与 |
+| Public Question | 英文 | 中文问题 + 英文原题 | 英文参与模型评测 |
+| Gold Answer | 英文 | 中文答案 + 英文原答案 | 英文参与 Judge |
+| Judge 原始结果 | 英文 | 中文理由 + 英文原理由 | 英文分数/标签参与统计 |
+| Audit translation | 中文 | 中文 | 永远不参与 |
 
-The schema must reject any relation that silently changes “content addresses X” into “consumer becomes less uncertain,” “consumer trusts the host,” or “consumer purchases.”
+### 1.2 为什么翻译必须独立保存
 
----
+如果把中文翻译直接写入 EvidenceDataset 或 QA，后续很容易出现三个问题：
 
-## 2. CommerceCue catalog
+1. 翻译模型把“声称有效”改写成“产品有效”，导致事实边界污染。
+2. 中英文数字、数量、优惠条件或否定词不一致，Gold 来源不唯一。
+3. 被测模型或 Judge 可能意外看到中文翻译，形成额外输入或泄漏。
 
-`CommerceCue` is a grounded semantic node, not a consumer-effect label.
-
-| Family | Cue types | Observable boundary |
-| --- | --- | --- |
-| Product | `PRODUCT_IDENTITY`, `PRODUCT_ATTRIBUTE`, `PRODUCT_VARIANT`, `QUANTITY`, `BUNDLE` | Product, variant, attribute, count, or bundle visible/stated in supplied evidence. |
-| Offer | `PRICE`, `DISCOUNT`, `GIFT`, `OFFER_CONDITION`, `SERVICE_GUARANTEE` | Exact offer and its explicit conditions; no inferred market value. |
-| Presentation | `PRODUCT_DESCRIPTION`, `PROCESS_DEMONSTRATION`, `OUTCOME_DISPLAY`, `BEFORE_AFTER`, `VICARIOUS_TRIAL`, `USAGE_SCENARIO` | What the presenter says/shows and whether process or outcome is visible. |
-| Claim | `FUNCTION_CLAIM`, `EFFECT_CLAIM`, `PRICE_CLAIM`, `FIT_CLAIM`, `EXPERIENCE_REVIEW` | A statement remains a claim until separately demonstrated. |
-| Need and barrier | `PAIN_POINT`, `NEED`, `OBJECTION`, `FIT_CONSTRAINT`, `USAGE_DIFFICULTY`, `PRICE_CONCERN`, `RISK_CONCERN` | Explicitly represented problem, question, limitation, or concern. |
-| Sales signal | `BENEFIT`, `COMPARISON_ANCHOR`, `CREDIBILITY_SIGNAL`, `SOCIAL_PROOF`, `SCARCITY`, `URGENCY`, `CTA` | Observable presentation cue only; no claim that it changes behavior. |
-
-Every cue stores `content_en`, optional `content_native`, `evidence_refs`, `attributes`, `directness`, `confidence`, and `theory_tags`.
-
----
-
-## 3. How the four tasks consume evidence, cues, and relations
-
-The four task layers do not duplicate evidence extraction. Their inputs form a hierarchy:
+因此翻译采用只读旁路：
 
 ```text
-BP: EvidenceUnit -> CommerceCue, with optional single relation
-CM: two or more EvidenceUnits -> two or more CommerceCues -> one claim relation
-SS: multiple CommerceCues -> one relation or an ordered relation path
-AE: represented need/constraint/objection cues -> bounded alignment relation path
+canonical English artifacts
+  -> audit translation runner
+  -> audit_translations.jsonl
+  -> audit workbench join by object_id + source_field + source_sha256
 ```
 
-### 3.1 BP — Product & Offer Grounding
+规范数据发生变化时，`source_sha256` 不再匹配，旧翻译必须显示为 stale，不能继续使用。
 
-| Sub-capability | What it asks | Required source |
-| --- | --- | --- |
-| `PRODUCT_IDENTITY` | What product is being presented? | Product cue plus visual/ASR/OCR grounding. |
-| `ATTRIBUTE_AND_VARIANT` | Which material, size, flavor, model, color, or variant is specified? | Attribute/variant cue linked to the product. |
-| `QUANTITY_AND_BUNDLE` | How many units or what bundle is included? | Quantity/bundle cue; reconcile OCR and speech when both exist. |
-| `PRICE_AND_DISCOUNT` | What price or explicit discount is presented? | Price/discount cue; do not infer savings without an explicit comparator. |
-| `OFFER_CONDITION` | What condition must hold for the offer? | Offer cue plus `OFFER_REQUIRES_CONDITION`. |
-| `USAGE_STEP` | What observable step does the presenter perform? | Process-demonstration cue with localized frames. |
-| `DEMONSTRATED_STATE_CHANGE` | What visible before/after change occurs? | `DEMONSTRATION_SHOWS_STATE_CHANGE`. |
-| `USAGE_SCENARIO` | In what represented scenario is the product used? | Usage-scenario cue; no real-audience inference. |
+### 1.3 审计翻译记录格式
 
-BP is primarily cue-level. It should no longer compile every raw EvidenceUnit into a generic fact question.
+```json
+{
+  "translation_id": "audit_translation::evidence_unit::E001::content_en",
+  "object_type": "evidence_unit",
+  "object_id": "E001",
+  "source_field": "content_en",
+  "source_language": "en",
+  "target_language": "zh-CN",
+  "source_sha256": "6e2f5d8b4bd1",
+  "translated_text": "主播将清洁剂喷在污渍上并进行擦拭。",
+  "translation_method": "gpt-4o",
+  "prompt_version": "audit-translation-prompt-v1",
+  "audit_only": true
+}
+```
 
-### 3.2 CM — Claim–Evidence Verification
-
-| Sub-capability | What it tests | Required relation |
-| --- | --- | --- |
-| `SPEECH_VISUAL_COREFERENCE` | Whether speech and frames refer to the same product, part, or action. | Grounded cue references under one observation window. |
-| `OCR_SPEECH_OFFER_ALIGNMENT` | Whether spoken and displayed offer information agree. | Offer cues from two modalities. |
-| `CLAIM_DEMONSTRATION_STATUS` | Whether a claim is demonstrated, repeated, partially supported, contradicted, or unshown in the available window. | One controlled claim relation. |
-| `REPETITION_VS_INDEPENDENT_EVIDENCE` | Whether a second modality adds proof or merely repeats promotional language. | `CLAIM_SUPPORTED_BY_DEMONSTRATION` or `CLAIM_REPEATED_ACROSS_MODALITIES`. |
-| `PARTIAL_SUPPORT` | Which part of a composite claim is supported and which is not. | `CLAIM_PARTIALLY_SUPPORTED`. |
-| `CONTRADICTION` | What localized evidence conflicts with the claim. | `CLAIM_CONTRADICTED`. |
-| `TEMPORAL_MISALIGNMENT` | Whether claim and evidence concern different stages/states. | `CLAIM_TEMPORALLY_MISALIGNED`. |
-| `NOT_DEMONSTRATED` | What is stated but not demonstrated in a complete observation window. | Complete-window metadata plus absence rule; sampled-frame absence alone is insufficient. |
-
-CM is relation-level and requires a genuine information gap across modalities.
-
-### 3.3 SS — Persuasion & Sales Logic
-
-| Sub-capability | What it reconstructs | Cue/relation path |
-| --- | --- | --- |
-| `PROBLEM_SOLUTION` | How the content moves from a represented problem to a product response. | Pain-point cue -> `PROBLEM_ADDRESSED_BY_SOLUTION`. |
-| `FEATURE_BENEFIT` | How a feature is explicitly presented as useful to the buyer. | Attribute cue -> `FEATURE_FRAMED_AS_BENEFIT` -> benefit cue. |
-| `PROCESS_DEMONSTRATION` | Why showing the process matters to the sales explanation. | Process cue plus steps and result; no effectiveness prediction. |
-| `OUTCOME_DISPLAY` | What result is foregrounded and how it relates to the offer/claim. | Outcome cue plus claim or sequence relation. |
-| `BEFORE_AFTER_COMPARISON` | What changed and what comparison the video asks the viewer to make. | Before/after cues -> state-change relation. |
-| `VICARIOUS_TRIAL` | What the presenter tries on/uses/tastes on behalf of the viewer. | Vicarious-trial cue plus fit/use evidence. |
-| `PRICE_VALUE_FRAMING` | How quantity, feature, or service is used to contextualize price. | Price cue plus bundle/benefit/service cue. |
-| `REFERENCE_PRICE_ANCHORING` | Which explicit comparator is presented before/with the offer. | Comparison-anchor cue plus price cue. |
-| `CREDIBILITY_SIGNAL` | What in-video expertise, first-person use, guarantee, or limitation signal is presented. | Credibility-signal cue; never “the host is trustworthy.” |
-| `SOCIAL_PROOF` | What reviews, counts, testimonials, or quoted users are shown inside the video. | Social-proof cue; platform snapshot interactions remain private and forbidden. |
-| `LIMITATION_DISCLOSURE` | What limitation or applicable boundary the presenter acknowledges. | Objection/constraint cue plus response. |
-| `OBJECTION_HANDLING` | How an explicit buyer concern is addressed. | `OBJECTION_RESPONDED_BY_CUE`. |
-| `SCARCITY_AND_URGENCY` | What time, stock, or price-window cue is presented. | Scarcity/urgency cue plus offer. |
-| `CTA_SEQUENCE` | What content precedes the call to action. | One or more `CONTENT_PRECEDES_CTA` edges. |
-
-SS is relation/path-level. Questions must refer to the concrete claim, demonstration, comparison, or sequence rather than ask for an abstract “mechanism.”
-
-### 3.4 AE — Need–Objection–Offer Alignment
-
-| Sub-capability | What it infers within bounds | Cue/relation path |
-| --- | --- | --- |
-| `CONTENT_IMPLIED_NEED` | What need is represented by the demonstrated problem/use, without asserting a real audience profile. | Need/pain-point cue plus product response. |
-| `USAGE_CONTEXT` | Where or when the content presents the product being used. | Usage-scenario cue. |
-| `FIT_CONSTRAINT` | What size, body, object, compatibility, or environment constraint is made visible/stated. | Fit-constraint cue. |
-| `QUALITY_UNCERTAINTY` | What represented quality concern the demo/comparison attempts to address. | Objection cue plus response relation. |
-| `USAGE_UNCERTAINTY` | What “how to use/how difficult” question the process clarifies. | `CONTENT_ADDRESSES_USAGE_UNCERTAINTY`. |
-| `PRICE_UNCERTAINTY` | What price, bundle, or condition ambiguity is clarified. | `CONTENT_ADDRESSES_PRICE_UNCERTAINTY`. |
-| `SERVICE_OR_RISK_CONCERN` | What guarantee, return, safety, or service concern is addressed in-video. | Risk concern plus guarantee/response cue. |
-| `DECISION_BARRIER` | What explicit obstacle to considering the offer is represented. | Objection/constraint plus response. |
-| `OFFER_NEED_ALIGNMENT` | How the stated offer conditions or bundle correspond to the represented use/need. | Need cue -> offer/condition relation path. |
-
-AE is bounded interpretation. It must not infer actual viewer demographics, purchase intention, conversion, or popularity.
+中文 ASR/OCR 原文直接展示，不需要再次翻译；其英文规范语义仍需要中文审计翻译，以便核对两者是否一致。
 
 ---
 
-## 4. Target artifact flow
+## 2. 文献来源与关系标签的性质
+
+商业本体是基于文献进行的 benchmark 操作化，不是从某一篇论文逐字复制的标签集合。每个 Cue 和 Relation 必须记录以下来源类型之一：
+
+- `THEORY_DIRECT`：文献直接研究该内容构念，例如商品描述、商品演示、替代试用、过程呈现、结果呈现和商品不确定性。
+- `THEORY_OPERATIONALIZED`：SalesBench 将理论构念转为可审计的视频关系，例如“可见特征被口播解释为消费者利益”。
+- `BENCHMARK_OPERATIONAL`：为测试跨模态或时间推理而设计，例如区分跨模态重复与独立视觉证明。
+
+### 2.1 强相关领域文献
+
+1. Guo 等，*Analyzing and Predicting Consumer Response to Short Videos in E-Commerce*，ACM TMIS 2024：在 23,001 个淘宝电商短视频中研究 product description、product demonstration、pleasure 和 aesthetics。<https://doi.org/10.1145/3690393>
+2. *Process Reveal or Product Display?*，Journal of Retailing and Consumer Services 2026：区分短视频中的过程导向和结果导向商品呈现。<https://doi.org/10.1016/j.jretconser.2026.104827>
+3. *The Effects of Mini-detail Short Videos on Consumer Purchase Intention on Taobao*，Entertainment Computing 2024：支持商品细节、功能、具体用法、应用场景、虚拟体验等标注。<https://doi.org/10.1016/j.entcom.2024.100745>
+4. Lu 和 Chen，*Live Streaming Commerce and Consumers' Purchase Intention: An Uncertainty Reduction Perspective*，Information & Management 2021：提供替代试用、商品适配不确定性和商品/社交信号区分。<https://doi.org/10.1016/j.im.2021.103509>
+5. *What Reduces Product Uncertainty in Live Streaming E-Commerce?*，Journal of Retailing and Consumer Services 2023：支持主播—商品、内容—商品信号一致性的理论来源。<https://doi.org/10.1016/j.jretconser.2023.103441>
+6. *What Drives Taobao Live Streaming Commerce?*，Heliyon 2022：提供来源可信度、主播—商品契合和拟社会关系理论；SalesBench 只使用视频内可观察信号。<https://doi.org/10.1016/j.heliyon.2022.e09676>
+7. *Let TikTokers Talk About Products*，Journal of Interactive Advertising 2026：区分短视频主播的体验口述和视觉商品演示。<https://doi.org/10.1080/15252019.2026.2642022>
+8. E-VAds：提供电商短视频 BP、跨模态检测、营销逻辑、消费者洞察和证据链 QA 的直接 benchmark 参照。<https://arxiv.org/html/2602.08355>
+
+### 2.2 Cue 与 Relation 的边界修正
+
+早期草案把“呈现内容”和“内容之间的关系”混在了一起，v9 做如下修正：
+
+| 早期标签 | v9 表达 | 修正原因 |
+| --- | --- | --- |
+| `DESCRIBES_PRODUCT` | `PRODUCT_DESCRIPTION` Cue | 商品描述本身是节点。 |
+| `DEMONSTRATES_CLAIM` | `CLAIM_SUPPORTED_BY_DEMONSTRATION` Relation | 需要连接 Claim Cue 与独立 Demo Cue。 |
+| `REPEATS_CLAIM` | `CLAIM_REPEATED_ACROSS_MODALITIES` Relation | 重复不能等同于证明。 |
+| `PARTIALLY_SUPPORTS` | `CLAIM_PARTIALLY_SUPPORTED` Relation | 只支持复合主张的一部分。 |
+| `CONTRADICTS` | `CLAIM_CONTRADICTED` Relation | 关联证据与主张冲突。 |
+| `FRAMES_FEATURE_AS_BENEFIT` | `FEATURE_FRAMED_AS_BENEFIT` Relation | 连接具体特征与口播利益。 |
+| `PRESENTS_PROBLEM` | `PAIN_POINT` Cue | 痛点是节点。 |
+| `ADDRESSES_PROBLEM` | `PROBLEM_ADDRESSED_BY_SOLUTION` Relation | 连接痛点与商品/演示回应。 |
+| `RAISES_OBJECTION` | `OBJECTION` Cue | 顾虑是节点。 |
+| `RESPONDS_TO_OBJECTION` | `OBJECTION_RESPONDED_BY_CUE` Relation | 连接顾虑与解释、演示或保证。 |
+| `REDUCES_FIT_UNCERTAINTY` | `CONTENT_ADDRESSES_FIT_UNCERTAINTY` Relation | 视频只能回应不确定性，不能证明观众心理变化。 |
+| `REDUCES_USAGE_UNCERTAINTY` | `CONTENT_ADDRESSES_USAGE_UNCERTAINTY` Relation | 避免消费者结果因果断言。 |
+| `REDUCES_PRICE_UNCERTAINTY` | `CONTENT_ADDRESSES_PRICE_UNCERTAINTY` Relation | 避免消费者结果因果断言。 |
+| `ESTABLISHES_OFFER_CONDITION` | `OFFER_REQUIRES_CONDITION` Relation | 连接优惠与数量、时间、优惠券或操作条件。 |
+| `BUILDS_CREDIBILITY_SIGNAL` | `CREDIBILITY_SIGNAL` Cue | 只能观察信号，不能判断真实可信度。 |
+| `PRECEDES_ACTION_PROMPT` | `CONTENT_PRECEDES_CTA` Relation | 这是时间顺序边，不是营销效果。 |
+
+### 2.3 最终 Relation 目录
+
+| Relation | 含义与接受条件 | 来源类别 | 主要任务 |
+| --- | --- | --- | --- |
+| `DESCRIPTION_REFERS_TO_PRODUCT` | 描述/属性明确指向已定位商品或变体。 | `THEORY_DIRECT` | BP |
+| `CLAIM_SUPPORTED_BY_DEMONSTRATION` | 独立视觉演示显示了口播/OCR 主张的实质部分；文案重复不算。 | `THEORY_OPERATIONALIZED` | CM |
+| `CLAIM_REPEATED_ACROSS_MODALITIES` | ASR 与 OCR/画面文字重复同一宣传表述，但没有独立演示。 | `BENCHMARK_OPERATIONAL` | CM |
+| `CLAIM_PARTIALLY_SUPPORTED` | 复合主张只有可分割的一部分被显示。 | `BENCHMARK_OPERATIONAL` | CM |
+| `CLAIM_CONTRADICTED` | 同一商品、条件和时间窗口内的证据与主张不兼容。 | `BENCHMARK_OPERATIONAL` | CM |
+| `CLAIM_TEMPORALLY_MISALIGNED` | 主张和候选证据对应不同阶段或不同商品状态。 | `BENCHMARK_OPERATIONAL` | CM |
+| `FEATURE_FRAMED_AS_BENEFIT` | ASR/OCR 明确把可见/已描述特征连接为消费者利益。 | `THEORY_OPERATIONALIZED` | SS |
+| `DEMONSTRATION_SHOWS_STATE_CHANGE` | 前、中、后证据建立可观察状态变化。 | `THEORY_DIRECT` | BP/SS |
+| `PROBLEM_ADDRESSED_BY_SOLUTION` | 内容先呈现问题，再把商品、特征或演示作为回应。 | `THEORY_OPERATIONALIZED` | SS |
+| `OBJECTION_RESPONDED_BY_CUE` | 明确顾虑后出现相关解释、演示、比较、保证或服务。 | `THEORY_OPERATIONALIZED` | SS/AE |
+| `CONTENT_ADDRESSES_FIT_UNCERTAINTY` | 试穿、尺寸、物理比较或限制条件说明适配问题。 | `THEORY_OPERATIONALIZED` | AE |
+| `CONTENT_ADDRESSES_USAGE_UNCERTAINTY` | 教程或过程演示说明如何使用、在哪使用或操作难度。 | `THEORY_OPERATIONALIZED` | AE |
+| `CONTENT_ADDRESSES_PRICE_UNCERTAINTY` | 价格组成、套装数量、折扣比较或条件说明买到什么、付多少。 | `THEORY_OPERATIONALIZED` | BP/AE |
+| `OFFER_REQUIRES_CONDITION` | 价格、赠品或折扣依赖明确可定位的条件。 | `THEORY_OPERATIONALIZED` | BP/AE |
+| `CONTENT_PRECEDES_CTA` | Hook、问题、演示、报价或保证发生在行动提示之前。 | `BENCHMARK_OPERATIONAL` | SS |
+
+Schema 必须拒绝把“内容回应某顾虑”改写成“消费者顾虑降低”，也必须拒绝“消费者信任主播”或“消费者购买”。
+
+---
+
+## 3. CommerceCue 目录
+
+`CommerceCue` 是有 Evidence 支撑的语义节点，不是消费者效果标签。
+
+| 家族 | Cue 类型 | 可观察边界 |
+| --- | --- | --- |
+| 商品 | `PRODUCT_IDENTITY`、`PRODUCT_ATTRIBUTE`、`PRODUCT_VARIANT`、`QUANTITY`、`BUNDLE` | 视频中可见或明确说出的商品、变体、属性、数量和套装。 |
+| 报价 | `PRICE`、`DISCOUNT`、`GIFT`、`OFFER_CONDITION`、`SERVICE_GUARANTEE` | 明确报价及条件，不推断市场价值。 |
+| 呈现 | `PRODUCT_DESCRIPTION`、`PROCESS_DEMONSTRATION`、`OUTCOME_DISPLAY`、`BEFORE_AFTER`、`VICARIOUS_TRIAL`、`USAGE_SCENARIO` | 主播实际说/做了什么，是展示过程还是结果。 |
+| 主张 | `FUNCTION_CLAIM`、`EFFECT_CLAIM`、`PRICE_CLAIM`、`FIT_CLAIM`、`EXPERIENCE_REVIEW` | 在被独立演示前始终保持 Claim 身份。 |
+| 需求与障碍 | `PAIN_POINT`、`NEED`、`OBJECTION`、`FIT_CONSTRAINT`、`USAGE_DIFFICULTY`、`PRICE_CONCERN`、`RISK_CONCERN` | 视频明确呈现的问题、限制或顾虑。 |
+| 销售信号 | `BENEFIT`、`COMPARISON_ANCHOR`、`CREDIBILITY_SIGNAL`、`SOCIAL_PROOF`、`SCARCITY`、`URGENCY`、`CTA` | 只描述可见信号，不声称其改变行为。 |
+
+每个 Cue 保存 `content_en`、可选 `source_text_native`、`evidence_refs`、`attributes`、`directness`、`confidence` 和 `theory_tags`。
+
+---
+
+## 4. 四任务如何使用 Evidence、Cue 和 Relation
+
+四个任务不重复提取证据，它们消费同一层级结构：
 
 ```text
-frames + ASR + OCR
-  -> evidence_units.jsonl
-  -> commerce_cues.jsonl
-  -> commercial_relations.jsonl
-  -> video_evidence_dataset.jsonl
+BP: EvidenceUnit -> CommerceCue，可选一条 Relation
+CM: 至少两个 EvidenceUnit -> 至少两个 CommerceCue -> 一条 Claim Relation
+SS: 多个 CommerceCue -> 一条 Relation 或有序 Relation Path
+AE: Need/Constraint/Objection Cue -> 受限的 Alignment Relation Path
+```
+
+### 4.1 BP — Product & Offer Grounding
+
+| 子能力 | 具体测量 | 必要来源 |
+| --- | --- | --- |
+| `PRODUCT_IDENTITY` | 视频正在呈现什么商品。 | Product Cue + visual/ASR/OCR。 |
+| `ATTRIBUTE_AND_VARIANT` | 材质、尺寸、口味、型号、颜色或变体。 | Attribute/Variant Cue。 |
+| `QUANTITY_AND_BUNDLE` | 报价包含多少件、什么组合。 | Quantity/Bundle Cue；多模态存在时需对齐。 |
+| `PRICE_AND_DISCOUNT` | 明确价格或折扣。 | Price/Discount Cue；无显式比较不计算节省。 |
+| `OFFER_CONDITION` | 获得优惠需要满足什么条件。 | Offer Cue + `OFFER_REQUIRES_CONDITION`。 |
+| `USAGE_STEP` | 主播执行了什么具体步骤。 | Process Demo Cue + 定位帧。 |
+| `DEMONSTRATED_STATE_CHANGE` | 演示前后发生什么可见变化。 | `DEMONSTRATION_SHOWS_STATE_CHANGE`。 |
+| `USAGE_SCENARIO` | 视频呈现了什么使用场景。 | Usage Scenario Cue，不推断真实用户。 |
+
+BP 主要是 Cue 层任务，不再把每条原始 Evidence 自动编成泛化事实问题。
+
+### 4.2 CM — Claim–Evidence Verification
+
+| 子能力 | 具体测量 | 必要 Relation |
+| --- | --- | --- |
+| `SPEECH_VISUAL_COREFERENCE` | 口播与画面是否指向同一商品、部件或动作。 | 同一观察窗口内的 Cue 引用。 |
+| `OCR_SPEECH_OFFER_ALIGNMENT` | 口播报价和画面报价是否一致。 | 两种模态的 Offer Cue。 |
+| `CLAIM_DEMONSTRATION_STATUS` | 主张是被演示、重复、部分支持、冲突还是未演示。 | 一条受控 Claim Relation。 |
+| `REPETITION_VS_INDEPENDENT_EVIDENCE` | 第二模态提供独立证明还是只重复宣传语。 | Support 或 Repetition Relation。 |
+| `PARTIAL_SUPPORT` | 复合主张哪部分有证据、哪部分没有。 | `CLAIM_PARTIALLY_SUPPORTED`。 |
+| `CONTRADICTION` | 什么局部证据与主张冲突。 | `CLAIM_CONTRADICTED`。 |
+| `TEMPORAL_MISALIGNMENT` | 主张与证据是否对应不同阶段。 | `CLAIM_TEMPORALLY_MISALIGNED`。 |
+| `NOT_DEMONSTRATED` | 完整观察窗口内哪些内容只被说出而未展示。 | 完整窗口元数据；抽样帧缺失不能当全视频未出现。 |
+
+CM 是 Relation 层任务，必须有真实跨模态信息差。
+
+### 4.3 SS — Persuasion & Sales Logic
+
+| 子能力 | 具体测量 | Cue/Relation Path |
+| --- | --- | --- |
+| `PROBLEM_SOLUTION` | 视频如何从问题过渡到商品回应。 | Pain Point -> Solution Relation。 |
+| `FEATURE_BENEFIT` | 商品特征如何被解释为用户利益。 | Attribute -> Benefit Relation。 |
+| `PROCESS_DEMONSTRATION` | 过程展示在销售解释中承担什么信息作用。 | Process Cue + Steps + Result。 |
+| `OUTCOME_DISPLAY` | 视频突出什么结果，如何连接主张或报价。 | Outcome Cue + Claim/Sequence。 |
+| `BEFORE_AFTER_COMPARISON` | 前后变化及视频要求观众比较什么。 | Before/After + State Change。 |
+| `VICARIOUS_TRIAL` | 主播代替观众试穿、试用或试吃什么。 | Vicarious Trial + Fit/Use Evidence。 |
+| `PRICE_VALUE_FRAMING` | 数量、功能或服务如何为价格提供上下文。 | Price + Bundle/Benefit/Service。 |
+| `REFERENCE_PRICE_ANCHORING` | 哪个显式比较价格与当前报价同时或先出现。 | Anchor + Price Cue。 |
+| `CREDIBILITY_SIGNAL` | 视频呈现了什么专业解释、亲测、保证或限制说明。 | Credibility Cue；不判断真实可信。 |
+| `SOCIAL_PROOF` | 视频内部展示了什么评价、证言或用户内容。 | Social Proof Cue；私有互动快照禁止使用。 |
+| `LIMITATION_DISCLOSURE` | 主播承认了什么适用限制。 | Objection/Constraint + Response。 |
+| `OBJECTION_HANDLING` | 明确购买顾虑如何被回应。 | `OBJECTION_RESPONDED_BY_CUE`。 |
+| `SCARCITY_AND_URGENCY` | 视频呈现什么时间、库存或价格窗口。 | Scarcity/Urgency + Offer。 |
+| `CTA_SEQUENCE` | 哪些内容发生在行动提示之前。 | `CONTENT_PRECEDES_CTA` Path。 |
+
+SS 是关系/路径任务。问题必须指向具体主张、演示、比较或顺序，不能直接问抽象的 “What mechanism...”。
+
+### 4.4 AE — Need–Objection–Offer Alignment
+
+| 子能力 | 受限推断内容 | Cue/Relation Path |
+| --- | --- | --- |
+| `CONTENT_IMPLIED_NEED` | 视频呈现了什么需求，不声称真实人群画像。 | Need/Pain Point + Product Response。 |
+| `USAGE_CONTEXT` | 视频在何处、何时使用商品。 | Usage Scenario Cue。 |
+| `FIT_CONSTRAINT` | 尺寸、体型、兼容性或环境限制。 | Fit Constraint Cue。 |
+| `QUALITY_UNCERTAINTY` | 演示/比较试图回应什么质量顾虑。 | Objection + Response。 |
+| `USAGE_UNCERTAINTY` | 过程演示澄清什么使用方式或操作难点。 | Usage Uncertainty Relation。 |
+| `PRICE_UNCERTAINTY` | 价格、套装或条件澄清什么报价疑问。 | Price Uncertainty Relation。 |
+| `SERVICE_OR_RISK_CONCERN` | 视频回应什么保证、退换、安全或服务顾虑。 | Risk Concern + Guarantee/Response。 |
+| `DECISION_BARRIER` | 视频明确构造了什么考虑障碍。 | Objection/Constraint + Response。 |
+| `OFFER_NEED_ALIGNMENT` | 报价条件或套装如何对应视频呈现的需求。 | Need -> Offer/Condition Path。 |
+
+AE 不能推断真实人口统计、购买意愿、转化或流行程度。
+
+---
+
+## 5. 目标产物与数据流
+
+```text
+frames + native ASR + native OCR
+  -> evidence_units.jsonl                 # English semantics + native source spans
+  -> commerce_cues.jsonl                  # English
+  -> commercial_relations.jsonl           # English
+  -> video_evidence_dataset.jsonl          # English canonical Gold source
   -> Evidence/Cue/Relation human review
   -> video_evidence_dataset_reviewed.jsonl
-  -> qa_specs.jsonl
-  -> qa_realizations.jsonl
+  -> qa_specs.jsonl                        # English
+  -> qa_realizations.jsonl                 # English questions
   -> QA human review
   -> vqa_gold_private.jsonl + vqa_public.jsonl
   -> predictions.jsonl
-  -> LLM-as-Judge details + four-task macro-average
+  -> Judge details                         # English
+  -> audit_translations.jsonl              # Chinese, audit-only sidecar
+  -> bilingual audit workbench
 ```
 
-Formal delivery contains:
+正式交付包含：
 
-- EvidenceDataset v3: atomic evidence, cues, relations, reviewed grounded annotations.
-- Prompt manifest: exact extractor, cue builder, relation builder, task planner, realizer, Challenger, Adjudicator, and Judge prompts.
-- QA: public English questions and private Gold/evidence references.
-- Evaluation: predictions, per-item Judge decisions, error tags, per-task metrics, macro-average, and human calibration summary.
-
----
-
-## 5. File structure
-
-### Create
-
-- `src/salesbench/goldbank/commerce_schema.py`: cue/relation enums, dataclasses, parsers, stable IDs.
-- `src/salesbench/goldbank/commerce_ontology.py`: cue catalog, relation catalog, provenance, and allowed endpoint types.
-- `src/salesbench/vqa/specs.py`: `QuestionSpec` and `QuestionRealization` contracts.
-- `src/salesbench/vqa/prompts.py`: English question-realizer prompt.
-- `src/salesbench/vqa/realizer.py`: resumable LLM realization runner and response parser.
-- `tests/test_commerce_schema.py`: round-trip and stable-ID tests.
-- `tests/test_commerce_ontology.py`: relation endpoint and causal-label firewall tests.
-- `tests/test_vqa_specs.py`: semantic question contract tests.
-- `tests/test_vqa_realizer.py`: natural English generation and failure tests.
-- `configs/evidence_smoke_v9_5videos.json`: v9 smoke cohort fingerprint.
-- `configs/evidence_pilot_v9_64videos.json`: v9 formal pilot fingerprint.
-
-### Modify
-
-- `src/salesbench/goldbank/schema.py`: v3 record references and explicit task semantics.
-- `src/salesbench/goldbank/ontology.py`: replace generic v8 subtypes with the four Plan B capability sets.
-- `src/salesbench/goldbank/prompts.py`: add cue/relation prompts and v9 task-planner contracts.
-- `src/salesbench/goldbank/parsing.py`: parse cue and relation model responses.
-- `src/salesbench/goldbank/normalizer.py`: normalize cue/relation IDs and English/native fields.
-- `src/salesbench/goldbank/validators.py`: local cue/relation and task-capability rules.
-- `src/salesbench/goldbank/pipeline.py`: run atomic evidence -> cue -> relation -> four task planners.
-- `src/salesbench/goldbank/runner.py`: persist new JSONL outputs and v8 pipeline fingerprints.
-- `src/salesbench/goldbank/review_io.py`: apply human decisions to cues, relations, and annotations.
-- `src/salesbench/goldbank/audit.py`: coverage and provenance metrics.
-- `src/salesbench/vqa/question_programs.py`: remove fixed public templates; retain only legacy compatibility helpers.
-- `src/salesbench/vqa/compiler.py`: consume reviewed question realizations and enforce diversity/English/private-field gates.
-- `src/salesbench/vqa_evaluate/context.py`: provide reviewed evidence/cue/relation summaries to Judge.
-- `src/salesbench/vqa_evaluate/prompts.py`: task-aware v4 Judge rubric and error tags.
-- `src/salesbench/vqa_evaluate/judge.py`: parse error tags while preserving five-level main score.
-- `src/salesbench/cli.py`: add `realize-qa` and v9 input/output options.
-- `tools/audit_workbench/build.py`: render cue cards, relation paths, QuestionSpec, natural QA, and Judge error tags.
-- `tools/audit_workbench/evidence_assets.py`: attach lazy-loaded frames to cue and relation evidence.
-- Existing `tests/test_goldbank_*.py`, `tests/test_vqa_question_programs.py`, `tests/test_vqa_evaluate.py`, `tests/test_audit_workbench.py`, and `tests/test_evidence_vqa_e2e.py`: migrate fixtures and assertions to v3/v9.
-- `docs/Pilot_64_Video_Execution_Guide.md`: replace v8 commands with the reviewed v9 sequence after implementation.
-- `docs/data/EvidenceDataset_Data_Card_v3.md`: document the v3 schema; keep the v2 data card unchanged as the legacy contract.
+1. EvidenceDataset v3：Atomic Evidence、CommerceCue、CommercialRelation 和人工冻结的 GroundedAnnotation。
+2. Prompt Manifest：所有全英文 Prompt 原文、版本、模型和配置指纹。
+3. QA：全英文公开问题和私有 Gold/evidence refs。
+4. Evaluation：predictions、Judge 明细、错误标签、四任务 macro-average 和人工校准摘要。
+5. Audit Sidecar：独立中文翻译包与双语审计 HTML，不属于公开 benchmark 数据。
 
 ---
 
-### Task 1: Add CommerceCue and CommercialRelation contracts
+## 6. 文件结构
 
-**Files:**
-- Create: `src/salesbench/goldbank/commerce_schema.py`
-- Create: `tests/test_commerce_schema.py`
-- Modify: `src/salesbench/goldbank/schema.py`
+### 新建文件
 
-**Interfaces:**
-- Consumes: `stable_digest`, `QualityStatus`, and normalized `EvidenceUnit` IDs.
-- Produces: `CommerceCue`, `CommercialRelation`, `parse_commerce_cue`, `parse_commercial_relation`, `make_cue_id`, and `make_relation_id`.
+- `src/salesbench/goldbank/commerce_schema.py`：Cue/Relation Enum、dataclass、解析器和稳定 ID。
+- `src/salesbench/goldbank/commerce_ontology.py`：Cue/Relation 目录、理论来源和允许端点。
+- `src/salesbench/vqa/specs.py`：`QuestionSpec`、`QuestionRealization` 数据契约。
+- `src/salesbench/vqa/prompts.py`：全英文 Question Realizer Prompt。
+- `src/salesbench/vqa/realizer.py`：可断点续跑的 QA 实现 runner。
+- `src/salesbench/audit_translation_prompts.py`：全英文审计翻译 Prompt。
+- `src/salesbench/audit_translation.py`：翻译任务收集、缓存、来源哈希和 JSONL runner。
+- `tests/test_commerce_schema.py`。
+- `tests/test_commerce_ontology.py`。
+- `tests/test_vqa_specs.py`。
+- `tests/test_vqa_realizer.py`。
+- `tests/test_audit_translation.py`。
+- `configs/evidence_smoke_v9_5videos.json`。
+- `configs/evidence_pilot_v9_64videos.json`。
+- `configs/pilot64_gpt4o_v9_delivery.json`：正式、smoke、QA、Evaluation 和审计翻译 sidecar 的路径清单。
+- `docs/data/EvidenceDataset_Data_Card_v3.md`。
 
-- [ ] **Step 1: Write failing round-trip and stable-ID tests**
+### 修改文件
+
+- `src/salesbench/goldbank/schema.py`：v3 record 和四任务语义字段。
+- `src/salesbench/goldbank/ontology.py`：替换 v8 泛化 subtype。
+- `src/salesbench/goldbank/prompts.py`：全英文 Cue/Relation/Task Prompt v9。
+- `src/salesbench/goldbank/parsing.py`、`normalizer.py`、`validators.py`。
+- `src/salesbench/goldbank/pipeline.py`、`runner.py`、`review_io.py`、`audit.py`。
+- `src/salesbench/vqa/question_programs.py`：只保留 legacy compatibility helper。
+- `src/salesbench/vqa/compiler.py`：读取审核后的 Question Realization 并执行英文/多样性/隐私校验。
+- `src/salesbench/vqa_evaluate/context.py`、`prompts.py`、`judge.py`、`runner.py`。
+- `src/salesbench/cli.py`：新增 `realize-qa` 和 `build-audit-translations`。
+- `tools/audit_workbench/build.py`：双语 Prompt、Evidence、Cue、Relation、QA 和 Judge 审计。
+- `tools/audit_workbench/evidence_assets.py`：关联帧懒加载。
+- `tools/audit_workbench/review_queue.py`：标准化审计队列与翻译状态。
+- 对应现有测试和端到端测试。
+- `docs/Pilot_64_Video_Execution_Guide.md`。
+
+---
+
+## Task 1：新增 CommerceCue 与 CommercialRelation 契约
+
+**文件：**
+- 新建：`src/salesbench/goldbank/commerce_schema.py`
+- 新建：`tests/test_commerce_schema.py`
+- 修改：`src/salesbench/goldbank/schema.py`
+
+**接口：**
+- 输入：`EvidenceUnit` ID、`stable_digest`、`QualityStatus`。
+- 输出：`CommerceCue`、`CommercialRelation`、`parse_commerce_cue()`、`parse_commercial_relation()`、`make_cue_id()`、`make_relation_id()`。
+
+- [ ] **Step 1：先写失败测试**
 
 ```python
-from salesbench.goldbank.commerce_schema import (
-    CommerceCue,
-    CommercialRelation,
-    CueType,
-    RelationProvenance,
-    RelationType,
-    make_cue_id,
-    make_relation_id,
-    parse_commerce_cue,
-    parse_commercial_relation,
-)
-
-
-def test_commerce_contract_round_trip_and_ids_are_stable():
-    cue_id = make_cue_id("v1", CueType.PRICE, ("e1",), "price is 9.9 yuan")
+def test_commerce_contract_uses_english_semantics_and_stable_ids():
+    cue_id = make_cue_id("v1", CueType.PRICE, ("e1",), "the displayed price is 9.9 yuan")
     cue = CommerceCue(
         cue_id=cue_id,
         video_id="v1",
         cue_type=CueType.PRICE,
         content_en="The displayed price is 9.9 yuan.",
-        content_native="9.9元",
+        source_text_native="9.9元",
         evidence_ids=("e1",),
         attributes={"currency": "CNY", "amount": 9.9},
         directness="DIRECT",
@@ -302,32 +352,35 @@ def test_commerce_contract_round_trip_and_ids_are_stable():
         confidence=0.95,
     )
     assert parse_commerce_cue(cue.to_dict()) == cue
+    assert "content_zh" not in cue.to_dict()
 
-    relation_id = make_relation_id(
-        "v1", RelationType.OFFER_REQUIRES_CONDITION, (cue_id,), ("condition-cue",)
+
+def test_v3_evidence_separates_english_semantics_from_native_source():
+    unit = parse_evidence_unit(
+        {
+            "evidence_id": "e_asr",
+            "video_id": "v1",
+            "modality": "asr",
+            "content_en": "The speaker claims that the product removes stains.",
+            "source_text_native": "这个产品可以去除污渍",
+            "subject": "speaker",
+            "predicate": "claims",
+            "value": "the product removes stains",
+            "confidence": 0.9,
+        }
     )
-    relation = CommercialRelation(
-        relation_id=relation_id,
-        video_id="v1",
-        relation_type=RelationType.OFFER_REQUIRES_CONDITION,
-        source_cue_ids=(cue_id,),
-        target_cue_ids=("condition-cue",),
-        evidence_ids=("e1", "e2"),
-        rationale_en="The displayed price is explicitly limited to a two-item purchase.",
-        provenance=RelationProvenance.THEORY_OPERATIONALIZED,
-        directness="INFERRED",
-        confidence=0.9,
-    )
-    assert parse_commercial_relation(relation.to_dict()) == relation
+    assert unit.content_en.startswith("The speaker claims")
+    assert unit.source_text_native == "这个产品可以去除污渍"
+    assert "content_zh" not in unit.to_dict()
 ```
 
-- [ ] **Step 2: Run the test and verify missing-module failure**
+- [ ] **Step 2：确认测试失败**
 
-Run: `pytest tests/test_commerce_schema.py -q`
+运行：`pytest tests/test_commerce_schema.py -q`
 
-Expected: FAIL with `ModuleNotFoundError: salesbench.goldbank.commerce_schema`.
+预期：因模块尚不存在而 FAIL。
 
-- [ ] **Step 3: Implement enums, dataclasses, parsers, and stable IDs**
+- [ ] **Step 3：实现 Enum、dataclass、parser 和稳定 ID**
 
 ```python
 class RelationProvenance(str, Enum):
@@ -342,86 +395,59 @@ class CommerceCue:
     video_id: str
     cue_type: CueType
     content_en: str
-    content_native: str
+    source_text_native: str
     evidence_ids: tuple[str, ...]
     attributes: dict[str, object]
     directness: str
     theory_tags: tuple[str, ...]
     extractor: str
     confidence: float
-
-
-@dataclass(frozen=True)
-class CommercialRelation:
-    relation_id: str
-    video_id: str
-    relation_type: RelationType
-    source_cue_ids: tuple[str, ...]
-    target_cue_ids: tuple[str, ...]
-    evidence_ids: tuple[str, ...]
-    rationale_en: str
-    provenance: RelationProvenance
-    directness: str
-    confidence: float
 ```
 
-Define every cue and relation token exactly as listed in Sections 1.3 and 2. Re-export the new contracts from `goldbank/schema.py` and set `SCHEMA_VERSION = "evidence-dataset-schema-v3"`.
+按第 2.3 和第 3 节实现全部 Enum，并设置 `SCHEMA_VERSION = "evidence-dataset-schema-v3"`。同时为 `EvidenceUnit` 增加显式 `content_en` 和 `source_text_native`：v3 writer 只写新字段；v2 reader 将旧 `text_span` 映射为 `source_text_native`，并从英文 `subject/predicate/value` 生成 `content_en`，以便旧结果只读审计。Canonical schema 中不得出现 `content_zh` 或 `translated_text`。
 
-- [ ] **Step 4: Run contract tests**
+- [ ] **Step 4：运行契约测试**
 
-Run: `pytest tests/test_commerce_schema.py tests/test_goldbank_schema.py -q`
+运行：`pytest tests/test_commerce_schema.py tests/test_goldbank_schema.py -q`
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 ```bash
 git add src/salesbench/goldbank/commerce_schema.py src/salesbench/goldbank/schema.py tests/test_commerce_schema.py tests/test_goldbank_schema.py
 git commit -m "feat: add commerce cue and relation contracts"
 ```
 
-### Task 2: Encode ontology provenance and deterministic validation
+## Task 2：实现本体来源和确定性校验
 
-**Files:**
-- Create: `src/salesbench/goldbank/commerce_ontology.py`
-- Create: `tests/test_commerce_ontology.py`
-- Modify: `src/salesbench/goldbank/validators.py`
+**文件：**
+- 新建：`src/salesbench/goldbank/commerce_ontology.py`
+- 新建：`tests/test_commerce_ontology.py`
+- 修改：`src/salesbench/goldbank/validators.py`
 
-**Interfaces:**
-- Consumes: cue/relation contracts from Task 1.
-- Produces: `validate_commerce_cue(cue, evidence_by_id)` and `validate_commercial_relation(relation, cues_by_id, evidence_by_id)`.
+**接口：**
+- 输入：Task 1 的 Cue/Relation。
+- 输出：`validate_commerce_cue()`、`validate_commercial_relation()`。
 
-- [ ] **Step 1: Write failing causal-firewall and endpoint tests**
+- [ ] **Step 1：写因果越界和端点失败测试**
 
 ```python
-def test_relation_catalog_rejects_causal_outcomes_and_invalid_endpoints():
-    assert "INCREASES_TRUST" not in {item.value for item in RelationType}
-    assert "CAUSES_PURCHASE" not in {item.value for item in RelationType}
-
-    issues = validate_commercial_relation(
-        relation_fixture(
-            relation_type="FEATURE_FRAMED_AS_BENEFIT",
-            source_cue_ids=("price-cue",),
-            target_cue_ids=("cta-cue",),
-        ),
-        cues_by_id={
-            "price-cue": cue_fixture("PRICE"),
-            "cta-cue": cue_fixture("CTA"),
-        },
-        evidence_by_id={"e1": evidence_fixture()},
-    )
-    assert "INVALID_RELATION_ENDPOINT" in {issue.code for issue in issues}
+def test_relation_catalog_excludes_consumer_outcomes():
+    values = {item.value for item in RelationType}
+    assert "INCREASES_TRUST" not in values
+    assert "CAUSES_PURCHASE" not in values
+    assert "IMPROVES_CONVERSION" not in values
+    assert "CONTENT_ADDRESSES_FIT_UNCERTAINTY" in values
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [ ] **Step 2：运行失败测试**
 
-Run: `pytest tests/test_commerce_ontology.py -q`
+运行：`pytest tests/test_commerce_ontology.py -q`
 
-Expected: FAIL because the catalog and validators do not exist.
+预期：FAIL。
 
-- [ ] **Step 3: Implement relation metadata and local rules**
-
-`commerce_ontology.py` must expose `RELATION_RULES` with exact allowed endpoints and provenance. For example:
+- [ ] **Step 3：实现 `RELATION_RULES` 和本地规则**
 
 ```python
 RELATION_RULES = {
@@ -445,60 +471,57 @@ RELATION_RULES = {
 }
 ```
 
-Validators must reject missing/same-video-invalid IDs, empty English content, private fields, invalid endpoints, confidence outside `[0, 1]`, causal outcome wording, and unsupported “NOT_SHOWN” decisions without a complete observation scope.
+校验必须覆盖：ID 存在、同视频、端点类型、英文规范字段、原文定位、私有字段、置信度、因果词和完整观察窗口。
 
-- [ ] **Step 4: Run validators**
+- [ ] **Step 4：运行测试**
 
-Run: `pytest tests/test_commerce_ontology.py tests/test_goldbank_validators.py -q`
+运行：`pytest tests/test_commerce_ontology.py tests/test_goldbank_validators.py -q`
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 ```bash
 git add src/salesbench/goldbank/commerce_ontology.py src/salesbench/goldbank/validators.py tests/test_commerce_ontology.py tests/test_goldbank_validators.py
 git commit -m "feat: validate commerce graph semantics"
 ```
 
-### Task 3: Add v9 cue and relation extraction prompts
+## Task 3：实现全英文 Prompt v9
 
-**Files:**
-- Modify: `src/salesbench/goldbank/prompts.py`
-- Modify: `src/salesbench/goldbank/parsing.py`
-- Modify: `src/salesbench/goldbank/normalizer.py`
-- Modify: `tests/test_goldbank_prompts.py`
-- Modify: `tests/test_goldbank_normalizer.py`
+**文件：**
+- 修改：`src/salesbench/goldbank/prompts.py`
+- 修改：`src/salesbench/goldbank/parsing.py`
+- 修改：`src/salesbench/goldbank/normalizer.py`
+- 修改：`tests/test_goldbank_prompts.py`
+- 修改：`tests/test_goldbank_normalizer.py`
 
-**Interfaces:**
-- Consumes: validated `EvidenceUnit` dictionaries and v3 ontology.
-- Produces: `build_commerce_cue_prompt`, `build_commercial_relation_prompt`, normalized cue/relation lists.
+**接口：**
+- 输入：英文规范 Evidence + 原语言 source span。
+- 输出：`build_commerce_cue_prompt()`、`build_commercial_relation_prompt()` 和归一化结果。
 
-- [ ] **Step 1: Write prompt contract tests**
+- [ ] **Step 1：写全英文和边界测试**
 
 ```python
-def test_v9_commerce_prompts_separate_observation_from_consumer_outcomes():
+def test_v9_prompts_are_english_and_forbid_outcome_claims():
     cue_system, cue_user = build_commerce_cue_prompt("v1", [evidence_fixture()])
     relation_system, relation_user = build_commercial_relation_prompt(
         "v1", [evidence_fixture()], [cue_fixture()]
     )
     combined = cue_system + cue_user + relation_system + relation_user
     assert PROMPT_VERSION == "evidence-prompt-v9"
-    assert "content_native" in combined
-    assert "content_en" in combined
-    assert "CLAIM_REPEATED_ACROSS_MODALITIES" in combined
-    assert "CONTENT_ADDRESSES_USAGE_UNCERTAINTY" in combined
+    assert not contains_cjk(combined)
     assert "Never claim that a viewer trusted, purchased, converted, or became less uncertain" in combined
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [ ] **Step 2：确认测试失败**
 
-Run: `pytest tests/test_goldbank_prompts.py::test_v9_commerce_prompts_separate_observation_from_consumer_outcomes -q`
+运行：`pytest tests/test_goldbank_prompts.py -q`
 
-Expected: FAIL because the v9 builders do not exist.
+预期：FAIL。
 
-- [ ] **Step 3: Implement strict JSON prompt contracts**
+- [ ] **Step 3：实现严格 JSON Prompt**
 
-The cue prompt top-level output is exactly:
+Cue 输出只允许：
 
 ```json
 {
@@ -506,7 +529,7 @@ The cue prompt top-level output is exactly:
     {
       "cue_type": "PROCESS_DEMONSTRATION",
       "content_en": "The host applies the cleaner and wipes the surface.",
-      "content_native": "",
+      "source_text_native": "",
       "evidence_ids": ["existing_visual_id"],
       "attributes": {"presentation_stage": "process"},
       "directness": "DIRECT",
@@ -518,79 +541,53 @@ The cue prompt top-level output is exactly:
 }
 ```
 
-The relation prompt top-level output is exactly:
+Relation 输出只允许第 2.3 节的 Enum。所有解释字段使用英文；本地代码生成 ID，并用 ontology 覆盖模型自报 provenance。
 
-```json
-{
-  "commercial_relations": [
-    {
-      "relation_type": "CLAIM_SUPPORTED_BY_DEMONSTRATION",
-      "source_cue_ids": ["existing_claim_cue"],
-      "target_cue_ids": ["existing_demo_cue"],
-      "evidence_ids": ["existing_asr_id", "existing_visual_id"],
-      "rationale_en": "The spoken cleaning claim is supported by the visible before-and-after change.",
-      "provenance": "THEORY_OPERATIONALIZED",
-      "directness": "INFERRED",
-      "confidence": 0.88
-    }
-  ],
-  "abstentions": []
-}
-```
+- [ ] **Step 4：运行 Prompt/Parser/Normalizer 测试**
 
-Local code generates canonical IDs and overwrites model-provided provenance with the ontology catalog.
+运行：`pytest tests/test_goldbank_prompts.py tests/test_goldbank_normalizer.py -q`
 
-- [ ] **Step 4: Run prompt, parser, and normalizer tests**
+预期：PASS。
 
-Run: `pytest tests/test_goldbank_prompts.py tests/test_goldbank_normalizer.py -q`
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 ```bash
 git add src/salesbench/goldbank/prompts.py src/salesbench/goldbank/parsing.py src/salesbench/goldbank/normalizer.py tests/test_goldbank_prompts.py tests/test_goldbank_normalizer.py
-git commit -m "feat: add v9 commerce graph prompts"
+git commit -m "feat: add all-English v9 commerce prompts"
 ```
 
-### Task 4: Persist the commerce graph in the EvidenceDataset pipeline
+## Task 4：在 EvidenceDataset Pipeline 中持久化商业论证图
 
-**Files:**
-- Modify: `src/salesbench/goldbank/pipeline.py`
-- Modify: `src/salesbench/goldbank/runner.py`
-- Modify: `src/salesbench/goldbank/review_io.py`
-- Modify: `tests/test_goldbank_pipeline.py`
-- Modify: `tests/test_goldbank_runner.py`
-- Modify: `tests/test_goldbank_review_io.py`
+**文件：**
+- 修改：`src/salesbench/goldbank/pipeline.py`
+- 修改：`src/salesbench/goldbank/runner.py`
+- 修改：`src/salesbench/goldbank/review_io.py`
+- 修改：`tests/test_goldbank_pipeline.py`
+- 修改：`tests/test_goldbank_runner.py`
+- 修改：`tests/test_goldbank_review_io.py`
 
-**Interfaces:**
-- Consumes: normalized EvidenceUnits, cues, relations, and validators.
-- Produces: `GoldBankResult.commerce_cues`, `GoldBankResult.commercial_relations`, `commerce_cues.jsonl`, and `commercial_relations.jsonl`.
+**接口：**
+- 输入：Evidence、Cue、Relation、Validators。
+- 输出：新增 `GoldBankResult.commerce_cues`、`commercial_relations` 和对应 JSONL。
 
-- [ ] **Step 1: Write a failing stage-order test**
+- [ ] **Step 1：写阶段顺序失败测试**
 
 ```python
-def test_pipeline_builds_cues_and_relations_before_task_planners():
-    result = pipeline_with_v9_responses().run_video(bundle_fixture(), frames_b64=["frame"])
-    assert result.status == "ok"
-    assert len(result.evidence_units) == 2
-    assert len(result.commerce_cues) == 2
-    assert len(result.commercial_relations) == 1
+def test_v9_stage_order_is_evidence_then_cue_then_relation_then_task():
+    result = pipeline.run_video(bundle(), frames_b64=["frame"])
     stages = [trace["stage"] for trace in result.agent_traces]
     assert stages.index("evidence_extraction") < stages.index("commerce_cue_extraction")
     assert stages.index("commerce_cue_extraction") < stages.index("commercial_relation_building")
     assert stages.index("commercial_relation_building") < stages.index("task_proposal")
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [ ] **Step 2：运行失败测试**
 
-Run: `pytest tests/test_goldbank_pipeline.py::test_pipeline_builds_cues_and_relations_before_task_planners -q`
+运行：`pytest tests/test_goldbank_pipeline.py -q`
 
-Expected: FAIL because `GoldBankResult` lacks the new fields.
+预期：FAIL。
 
-- [ ] **Step 3: Implement the new stage order and output files**
-
-Use this exact order in `run_video`:
+- [ ] **Step 3：实现固定阶段顺序和持久化**
 
 ```python
 evidence_units = self._extract_evidence(bundle, frames_b64, traces)
@@ -603,57 +600,53 @@ proposals = self._build_task_proposals(
 )
 ```
 
-`runner.py` must save part-level and aggregate cue/relation rows, include their counts in `generation_meta.json`, and set `PIPELINE_VERSION = "evidence-first-pipeline-v8"`. Resume fingerprints include schema, prompt, pipeline, video hash, frame strategy, vision model, and text model.
+Runner 写出 `commerce_cues.jsonl`、`commercial_relations.jsonl`，并设置 `PIPELINE_VERSION = "evidence-first-pipeline-v8"`。Resume 指纹包含视频哈希、帧策略、模型、schema、prompt 和 pipeline 版本。
 
-- [ ] **Step 4: Run pipeline, runner, and review tests**
+- [ ] **Step 4：运行测试**
 
-Run: `pytest tests/test_goldbank_pipeline.py tests/test_goldbank_runner.py tests/test_goldbank_review_io.py -q`
+运行：`pytest tests/test_goldbank_pipeline.py tests/test_goldbank_runner.py tests/test_goldbank_review_io.py -q`
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 ```bash
 git add src/salesbench/goldbank/pipeline.py src/salesbench/goldbank/runner.py src/salesbench/goldbank/review_io.py tests/test_goldbank_pipeline.py tests/test_goldbank_runner.py tests/test_goldbank_review_io.py
 git commit -m "feat: persist v3 commerce graph outputs"
 ```
 
-### Task 5: Replace generic subtypes with Plan B capabilities
+## Task 5：将四任务改为方案 B 能力体系
 
-**Files:**
-- Modify: `src/salesbench/goldbank/ontology.py`
-- Modify: `src/salesbench/goldbank/schema.py`
-- Modify: `src/salesbench/goldbank/prompts.py`
-- Modify: `src/salesbench/goldbank/pipeline.py`
-- Modify: `tests/test_goldbank_schema.py`
-- Modify: `tests/test_goldbank_prompts.py`
-- Modify: `tests/test_goldbank_pipeline.py`
+**文件：**
+- 修改：`src/salesbench/goldbank/ontology.py`
+- 修改：`src/salesbench/goldbank/schema.py`
+- 修改：`src/salesbench/goldbank/prompts.py`
+- 修改：`src/salesbench/goldbank/pipeline.py`
+- 修改对应 schema/prompt/pipeline 测试。
 
-**Interfaces:**
-- Consumes: CommerceGraph from Task 4.
-- Produces: four task planners that emit `capability`, `reasoning_operator`, cue/relation refs, bounded Gold, and question intent.
+**接口：**
+- 输入：商业论证图。
+- 输出：包含 `capability`、`reasoning_operator`、Cue/Relation refs、Gold 边界和 question intent 的四任务候选。
 
-- [ ] **Step 1: Write task-boundary tests**
+- [ ] **Step 1：写任务层级失败测试**
 
 ```python
-def test_plan_b_capabilities_map_to_graph_levels():
+def test_plan_b_capabilities_use_expected_graph_levels():
     assert capability_level("BP", "OFFER_CONDITION") == "RELATION_OPTIONAL"
     assert capability_level("CM", "CLAIM_DEMONSTRATION_STATUS") == "RELATION_REQUIRED"
     assert capability_level("SS", "PROBLEM_SOLUTION") == "RELATION_PATH_REQUIRED"
     assert capability_level("AE", "FIT_CONSTRAINT") == "CUE_OR_RELATION"
-    assert "AUDIENCE_NEED_FIT" not in allowed_subtypes("AE")
     assert "TRUST_MECHANISM" not in allowed_subtypes("SS")
+    assert "AUDIENCE_NEED_FIT" not in allowed_subtypes("AE")
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [ ] **Step 2：运行并确认失败**
 
-Run: `pytest tests/test_goldbank_schema.py tests/test_goldbank_prompts.py -q`
+运行：`pytest tests/test_goldbank_schema.py tests/test_goldbank_prompts.py -q`
 
-Expected: FAIL against the v8 subtype catalog.
+预期：FAIL。
 
-- [ ] **Step 3: Implement the capability catalogs and proposal contract**
-
-Add these explicit fields to `GoldProposal` and `GoldItem`:
+- [ ] **Step 3：扩展 Proposal/GoldItem**
 
 ```python
 capability: str
@@ -664,68 +657,52 @@ question_intent: str
 forbidden_inferences: tuple[str, ...]
 ```
 
-The BP planner remains deterministic but consumes Product/Offer/Presentation cues rather than compiling every raw evidence row. CM, SS, and AE proposers consume the same graph with task-specific allowed capabilities from Sections 3.2–3.4. Every proposer may abstain; no per-video all-task requirement is allowed.
+BP planner 仍可确定性生成，但只消费商品、报价和演示 Cue；CM/SS/AE 使用各自全英文 proposer。所有 planner 都允许 abstain，不要求每视频四任务齐全。
 
-- [ ] **Step 4: Run schema, prompt, and pipeline tests**
+- [ ] **Step 4：运行测试**
 
-Run: `pytest tests/test_goldbank_schema.py tests/test_goldbank_prompts.py tests/test_goldbank_pipeline.py -q`
+运行：`pytest tests/test_goldbank_schema.py tests/test_goldbank_prompts.py tests/test_goldbank_pipeline.py -q`
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 ```bash
 git add src/salesbench/goldbank/ontology.py src/salesbench/goldbank/schema.py src/salesbench/goldbank/prompts.py src/salesbench/goldbank/pipeline.py tests/test_goldbank_schema.py tests/test_goldbank_prompts.py tests/test_goldbank_pipeline.py
 git commit -m "feat: align four tasks with commerce graph capabilities"
 ```
 
-### Task 6: Add QuestionSpec planning and natural English realization
+## Task 6：新增 QuestionSpec 和自然英文问题实现
 
-**Files:**
-- Create: `src/salesbench/vqa/specs.py`
-- Create: `src/salesbench/vqa/prompts.py`
-- Create: `src/salesbench/vqa/realizer.py`
-- Create: `tests/test_vqa_specs.py`
-- Create: `tests/test_vqa_realizer.py`
-- Modify: `src/salesbench/cli.py`
+**文件：**
+- 新建：`src/salesbench/vqa/specs.py`
+- 新建：`src/salesbench/vqa/prompts.py`
+- 新建：`src/salesbench/vqa/realizer.py`
+- 新建：`tests/test_vqa_specs.py`
+- 新建：`tests/test_vqa_realizer.py`
+- 修改：`src/salesbench/cli.py`
 
-**Interfaces:**
-- Consumes: reviewed v3 GroundedAnnotations and evidence/cue/relation lookup tables.
-- Produces: `qa_specs.jsonl` and resumable `qa_realizations.jsonl`.
+**接口：**
+- 输入：审核后的 GroundedAnnotation 和证据图。
+- 输出：`qa_specs.jsonl`、`qa_realizations.jsonl`。
 
-- [ ] **Step 1: Write failing QuestionSpec and realizer tests**
+- [ ] **Step 1：写自然化失败测试**
 
 ```python
-def test_realizer_uses_specific_referents_without_annotation_jargon():
-    spec = QuestionSpec(
-        spec_id="qs_v1_cm_001",
-        video_id="v1",
-        task_type="CM",
-        capability="CLAIM_DEMONSTRATION_STATUS",
-        reasoning_operator="DISTINGUISH_STATED_FROM_SHOWN",
-        question_intent="Distinguish the universal stain-removal claim from the demonstrated result.",
-        gold_answer="The video shows one stain becoming lighter, but the universal claim is only stated.",
-        evidence_refs=("e1", "e2"),
-        commerce_cue_refs=("c1", "c2"),
-        commercial_relation_refs=("r1",),
-        forbidden_inferences=("The product removes every stain.",),
-        confidence=0.9,
-    )
-    realization = realize_with_fake_client(spec, "What is shown after the stain-removal claim, and what remains only stated?")
-    assert realization.question.startswith("What is shown")
-    assert "mechanism" not in realization.question.lower()
-    assert "support the answer" not in realization.question.lower()
+def test_realized_question_is_specific_english_without_template_jargon():
+    question = "What is shown after the stain-removal claim, and what remains only stated?"
+    assert not contains_cjk(question)
+    assert "mechanism" not in question.lower()
+    assert "support the answer" not in question.lower()
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [ ] **Step 2：运行失败测试**
 
-Run: `pytest tests/test_vqa_specs.py tests/test_vqa_realizer.py -q`
+运行：`pytest tests/test_vqa_specs.py tests/test_vqa_realizer.py -q`
 
-Expected: FAIL because QuestionSpec and realizer modules do not exist.
+预期：FAIL。
 
-- [ ] **Step 3: Implement contracts and the English realizer prompt**
-
-The model returns exactly:
+- [ ] **Step 3：实现全英文 Realizer Contract**
 
 ```json
 {
@@ -734,11 +711,9 @@ The model returns exactly:
 }
 ```
 
-The prompt forbids generic openings such as `What mechanism`, `What strategy`, `What audience`, and the suffix `Support the answer with evidence`. It requires concrete product/action/offer referents, one reasoning operator, no answer leakage, and no task labels. Local code validates English, length, ID equality, and absence of forbidden phrases.
+Prompt 禁止 `What mechanism`、`What strategy`、`What audience` 和 `Support the answer with evidence`，要求使用具体商品、动作、数字或时间关系。新增 CLI：
 
-Add CLI:
-
-```text
+```bash
 python salesbench.py realize-qa \
   --evidence-dir <reviewed-evidence-dir> \
   --output-dir <qa-dir> \
@@ -746,176 +721,235 @@ python salesbench.py realize-qa \
   --max-workers 2
 ```
 
-- [ ] **Step 4: Run spec, realizer, and CLI tests**
+- [ ] **Step 4：运行测试**
 
-Run: `pytest tests/test_vqa_specs.py tests/test_vqa_realizer.py tests/test_goldbank_cli.py -q`
+运行：`pytest tests/test_vqa_specs.py tests/test_vqa_realizer.py tests/test_goldbank_cli.py -q`
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 ```bash
 git add src/salesbench/vqa/specs.py src/salesbench/vqa/prompts.py src/salesbench/vqa/realizer.py src/salesbench/cli.py tests/test_vqa_specs.py tests/test_vqa_realizer.py tests/test_goldbank_cli.py
 git commit -m "feat: realize evidence-specific English questions"
 ```
 
-### Task 7: Compile reviewed realizations and enforce dataset diversity
+## Task 7：编译审核后的英文 QA 并控制多样性
 
-**Files:**
-- Modify: `src/salesbench/vqa/question_programs.py`
-- Modify: `src/salesbench/vqa/compiler.py`
-- Modify: `src/salesbench/cli.py`
-- Modify: `tests/test_vqa_question_programs.py`
-- Modify: `tests/test_goldbank_qa_compiler.py`
-- Modify: `tests/test_goldbank_cli.py`
+**文件：**
+- 修改：`src/salesbench/vqa/question_programs.py`
+- 修改：`src/salesbench/vqa/compiler.py`
+- 修改：`src/salesbench/cli.py`
+- 修改对应 compiler/question/CLI 测试。
 
-**Interfaces:**
-- Consumes: reviewed GroundedAnnotations, `qa_specs.jsonl`, and `qa_realizations.jsonl`.
-- Produces: private/public VQA JSONL, diversity report, and rejection reasons.
+**接口：**
+- 输入：GroundedAnnotation、`qa_specs.jsonl`、审核后 `qa_realizations.jsonl`。
+- 输出：全英文 private/public VQA、diversity report 和 rejection reasons。
 
-- [ ] **Step 1: Write failing no-template and no-forced-task tests**
+- [ ] **Step 1：写失败测试**
 
 ```python
-def test_compiler_uses_realized_questions_and_allows_per_video_abstention():
-    records, validation = compile_qa_records(
-        gold_items=[reviewed_cm_item(), reviewed_ss_item()],
-        realizations={
-            "qs_cm": realization("qs_cm", "What does the demonstration show beyond the spoken claim?"),
-            "qs_ss": realization("qs_ss", "How does the video connect the cleaning problem to the product demo?"),
-        },
-        policy=CompilePolicy(max_questions_per_video=6, max_per_task=3),
-    )
+def test_compiler_keeps_english_and_does_not_force_all_tasks_per_video():
     assert {row["task_type"] for row in records} == {"CM", "SS"}
-    assert all("Support the answer" not in row["question"] for row in records)
+    assert all(not contains_cjk((row["question"], row["gold_answer"])) for row in records)
     assert not any(row.get("reason") == "missing_bp_for_video" for row in validation)
 ```
 
-- [ ] **Step 2: Run and verify signature failure**
+- [ ] **Step 2：确认失败**
 
-Run: `pytest tests/test_goldbank_qa_compiler.py -q`
+运行：`pytest tests/test_goldbank_qa_compiler.py -q`
 
-Expected: FAIL because the compiler does not accept realizations.
+预期：FAIL。
 
-- [ ] **Step 3: Implement compiler v5 and diversity metrics**
+- [ ] **Step 3：实现 compiler v5**
 
-Set `COMPILER_VERSION = "evidence-qa-compiler-v5"`. Compile only realized specs whose source annotations are reviewed/eligible. Emit `qa_diversity.json` with:
+设置 `COMPILER_VERSION = "evidence-qa-compiler-v5"`，新增必填 `--realizations`。输出 `qa_diversity.json`，至少包含 exact duplicate、normalized stem cluster、within-video semantic duplicate、cross-task evidence reuse 和 non-marginal reuse。Canonical QA 不得包含中文审计翻译。
 
-```json
-{
-  "exact_duplicate_rate": 0.0,
-  "largest_normalized_stem_cluster_rate": 0.03125,
-  "within_video_semantic_duplicate_count": 0,
-  "cross_task_same_evidence_count": 4,
-  "cross_task_non_marginal_count": 0
-}
-```
+- [ ] **Step 4：运行测试**
 
-Reject exact duplicates and within-video semantic duplicates. Flag cross-task evidence reuse unless capability, reasoning operator, and normalized answer differ. Require all four tasks only at cohort level, not per video.
+运行：`pytest tests/test_vqa_question_programs.py tests/test_goldbank_qa_compiler.py tests/test_goldbank_cli.py -q`
 
-Extend `compile-vqa` with the required `--realizations` argument and fail before writing outputs when the reviewed realization file is missing or contains an unknown `spec_id`.
+预期：PASS。
 
-- [ ] **Step 4: Run compiler tests**
-
-Run: `pytest tests/test_vqa_question_programs.py tests/test_goldbank_qa_compiler.py tests/test_goldbank_cli.py -q`
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 ```bash
 git add src/salesbench/vqa/question_programs.py src/salesbench/vqa/compiler.py src/salesbench/cli.py tests/test_vqa_question_programs.py tests/test_goldbank_qa_compiler.py tests/test_goldbank_cli.py
-git commit -m "feat: compile diverse reviewed QA realizations"
+git commit -m "feat: compile diverse English QA realizations"
 ```
 
-### Task 8: Extend the lazy-loading audit workbench to commerce graphs and QuestionSpecs
+## Task 8：新增独立审计中文翻译层
 
-**Files:**
-- Modify: `tools/audit_workbench/build.py`
-- Modify: `tools/audit_workbench/evidence_assets.py`
-- Modify: `tools/audit_workbench/review_queue.py`
-- Modify: `tests/test_audit_workbench.py`
-- Modify: `tests/test_audit_review_queue.py`
+**文件：**
+- 新建：`src/salesbench/audit_translation_prompts.py`
+- 新建：`src/salesbench/audit_translation.py`
+- 新建：`tests/test_audit_translation.py`
+- 修改：`src/salesbench/cli.py`
+- 修改：`tests/test_goldbank_cli.py`
 
-**Interfaces:**
-- Consumes: EvidenceUnits, CommerceCues, CommercialRelations, annotations, QuestionSpecs, realizations, QA, and Judge details.
-- Produces: a self-contained HTML shell plus lazy frame thumbnails under `outputs/audit/assets/frames/`.
+**接口：**
+- 输入：Prompt、Evidence、Cue、Relation、QuestionSpec、QA、Judge 中允许审计的英文字段。
+- 输出：`collect_audit_translation_jobs()`、`run_audit_translations()`、`audit_translations.jsonl`。
 
-- [ ] **Step 1: Write failing graph-visibility tests**
+- [ ] **Step 1：写隔离、哈希和忠实翻译测试**
 
 ```python
-def test_workbench_shows_cue_relation_question_spec_and_linked_frames():
-    html = render_workbench(workbench_v9_fixture(), collect_prompt_snapshot())
-    assert "Commerce Cue" in html
-    assert "CLAIM_SUPPORTED_BY_DEMONSTRATION" in html
-    assert "DISTINGUISH_STATED_FROM_SHOWN" in html
-    assert "content_native" in html
-    assert "content_en" in html
-    assert 'loading="lazy"' in html
-    assert "INCREASES_TRUST" not in html
+def test_audit_translation_is_separate_versioned_and_hash_bound():
+    job = build_translation_job(
+        object_type="qa",
+        object_id="q1",
+        source_field="question",
+        source_text="What condition is required for the discount?",
+    )
+    assert job.source_sha256
+    assert job.target_language == "zh-CN"
+    assert job.audit_only is True
+    assert "question_zh" not in public_vqa_item({"question": job.source_text})
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [ ] **Step 2：运行失败测试**
 
-Run: `pytest tests/test_audit_workbench.py tests/test_audit_review_queue.py -q`
+运行：`pytest tests/test_audit_translation.py -q`
 
-Expected: FAIL because v8 workbench data does not contain cues, relations, or specs.
+预期：FAIL，因为翻译模块尚不存在。
 
-- [ ] **Step 3: Implement readable graph cards and review exports**
+- [ ] **Step 3：实现全英文翻译 Prompt**
 
-Evidence cards show native/English text and exact frames. Cue cards show cue type, content, directness, theory tags, evidence contents, and frames. Relation cards show source cue -> relation -> target cue, provenance, rationale, supporting evidence, and frames. QA cards show capability, reasoning operator, QuestionSpec intent, final question, Gold, forbidden inferences, relations, evidence contents, and frames.
+```python
+AUDIT_TRANSLATION_PROMPT_VERSION = "audit-translation-prompt-v1"
 
-Review exports must use stable IDs and support `accept`, `revise`, `reject`, and `defer`, with editable replacement fields stored only in the exported JSON until `apply-evidence-reviews` is run.
+AUDIT_TRANSLATION_SYSTEM_PROMPT = """You are the Simplified Chinese audit translation layer for SalesBench. Translate the supplied English field faithfully for human review. Preserve all numbers, units, negation, modality distinctions, claim-versus-fact boundaries, enum tokens, JSON keys, evidence IDs, and uncertainty wording. Do not summarize, correct, strengthen, weaken, explain, or add marketing interpretations. Return JSON only."""
+```
 
-- [ ] **Step 4: Run workbench tests**
+模型输出：
 
-Run: `pytest tests/test_audit_workbench.py tests/test_audit_review_queue.py -q`
+```json
+{
+  "translation_id": "audit_translation::qa::q1::question",
+  "translated_text": "获得该折扣需要满足什么条件？"
+}
+```
 
-Expected: PASS and generated test HTML contains no private interaction fields.
+本地代码负责 object metadata、source hash、model、prompt version 和 `audit_only=true`。相同 source hash 复用缓存；不同 hash 强制重译。翻译任务必须过滤私有互动字段。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4：新增 CLI 并运行测试**
 
 ```bash
-git add tools/audit_workbench/build.py tools/audit_workbench/evidence_assets.py tools/audit_workbench/review_queue.py tests/test_audit_workbench.py tests/test_audit_review_queue.py
-git commit -m "feat: audit commerce graphs and question specs"
+python salesbench.py build-audit-translations \
+  --manifest configs/pilot64_gpt4o_v9_delivery.json \
+  --output outputs/audit/translations/v9/audit_translations.jsonl \
+  --base-url "$OPENAI_BASE_URL" \
+  --model gpt-4o \
+  --max-workers 2
 ```
 
-### Task 9: Keep LLM-as-Judge as the primary evaluator and add diagnostic error tags
+运行：`pytest tests/test_audit_translation.py tests/test_goldbank_cli.py -q`
 
-**Files:**
-- Modify: `src/salesbench/vqa_evaluate/context.py`
-- Modify: `src/salesbench/vqa_evaluate/prompts.py`
-- Modify: `src/salesbench/vqa_evaluate/judge.py`
-- Modify: `src/salesbench/vqa_evaluate/runner.py`
-- Modify: `tests/test_vqa_evaluate.py`
+预期：PASS。
 
-**Interfaces:**
-- Consumes: question, task/capability, reference answer, reviewed evidence/cue/relation summary, and model answer.
-- Produces: one five-level score plus diagnostic `error_tags`; macro-average remains the primary leaderboard metric.
+- [ ] **Step 5：提交**
 
-- [ ] **Step 1: Write failing v4 Judge contract tests**
+```bash
+git add src/salesbench/audit_translation_prompts.py src/salesbench/audit_translation.py src/salesbench/cli.py tests/test_audit_translation.py tests/test_goldbank_cli.py
+git commit -m "feat: add audit-only Chinese translations"
+```
+
+## Task 9：将审计工作台升级为双语懒加载视图
+
+**文件：**
+- 修改：`tools/audit_workbench/build.py`
+- 修改：`tools/audit_workbench/evidence_assets.py`
+- 修改：`tools/audit_workbench/review_queue.py`
+- 修改：`tests/test_audit_workbench.py`
+- 修改：`tests/test_audit_review_queue.py`
+
+**接口：**
+- 输入：Canonical 英文产物、中文原文、`audit_translations.jsonl` 和关联帧。
+- 输出：默认中文、可展开英文的双语审计 HTML。
+
+- [ ] **Step 1：写双语显示失败测试**
 
 ```python
-def test_judge_v4_returns_main_score_and_error_tags():
+def test_workbench_renders_chinese_translation_and_english_source():
+    html = render_workbench(workbench_v9_fixture(), collect_prompt_snapshot())
+    assert "获得该折扣需要满足什么条件" in html
+    assert "What condition is required for the discount?" in html
+    assert "中文审计翻译" in html
+    assert "英文规范原文" in html
+    assert 'loading="lazy"' in html
+    assert "likes" not in html
+```
+
+- [ ] **Step 2：运行失败测试**
+
+运行：`pytest tests/test_audit_workbench.py tests/test_audit_review_queue.py -q`
+
+预期：FAIL。
+
+- [ ] **Step 3：实现双语审计卡片**
+
+Prompt 页面：英文原 Prompt 为唯一规范版本，中文翻译用于阅读，并显示 source hash、translation model 和 stale 状态。
+
+Evidence/Cue/Relation 页面：默认显示中文翻译；显示中文 ASR/OCR 原文；英文 `content_en` 可展开；始终展示 evidence refs 和关联帧。
+
+QA 页面：默认显示 `question_zh`/`gold_answer_zh` 审计翻译，同时展示英文原题/Gold、Capability、Operator、Relation Path、Evidence 内容与帧。
+
+Judge 页面：显示英文分数/错误标签、中文理由翻译、英文原理由和 Judge 实际依据。
+
+缺失或 stale 翻译必须显示黄色警告，但不能阻断对英文规范数据的审核。
+
+在 `tools/audit_workbench/build.py` 的参数解析中新增必填 `--translations`；读取后按 `(object_type, object_id, source_field, source_sha256)` 建立索引。发现同一字段多个有效翻译、hash 不匹配、`audit_only != true` 或私有字段时立即失败，不生成 HTML。
+
+- [ ] **Step 4：运行审计测试**
+
+运行：`pytest tests/test_audit_workbench.py tests/test_audit_review_queue.py tests/test_audit_translation.py -q`
+
+预期：PASS，HTML 不包含私有互动字段。
+
+- [ ] **Step 5：提交**
+
+```bash
+git add tools/audit_workbench/build.py tools/audit_workbench/evidence_assets.py tools/audit_workbench/review_queue.py tests/test_audit_workbench.py tests/test_audit_review_queue.py tests/test_audit_translation.py
+git commit -m "feat: render bilingual commerce audit views"
+```
+
+## Task 10：保留 LLM-as-Judge 主评分并增加诊断标签
+
+**文件：**
+- 修改：`src/salesbench/vqa_evaluate/context.py`
+- 修改：`src/salesbench/vqa_evaluate/prompts.py`
+- 修改：`src/salesbench/vqa_evaluate/judge.py`
+- 修改：`src/salesbench/vqa_evaluate/runner.py`
+- 修改：`tests/test_vqa_evaluate.py`
+
+**接口：**
+- 输入：英文问题、Capability、Reference Answer、Evidence/Graph Summary 和模型英文答案。
+- 输出：五档主分数和英文错误标签；中文理由由 Task 8 另行生成。
+
+- [ ] **Step 1：写 Judge v4 失败测试**
+
+```python
+def test_judge_v4_keeps_english_output_and_error_tags():
     parsed = parse_judge_response(
         '{"score":0.5,"correctness":0.5,"grounding":0.5,"completeness":0.5,'
         '"error_tags":["CLAIM_EVIDENCE_CONFUSION"],'
         '"reason":"The answer treats repeated text as visual proof.",'
         '"evidence_alignment":"The frames do not independently demonstrate the claim."}'
     )
-    assert JUDGE_PROMPT_VERSION == "judge-prompt-v4"
     assert parsed["score"] == 0.5
     assert parsed["error_tags"] == ["CLAIM_EVIDENCE_CONFUSION"]
+    assert not contains_cjk((parsed["reason"], parsed["evidence_alignment"]))
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [ ] **Step 2：运行失败测试**
 
-Run: `pytest tests/test_vqa_evaluate.py -q`
+运行：`pytest tests/test_vqa_evaluate.py -q`
 
-Expected: FAIL because v3 does not parse error tags.
+预期：FAIL。
 
-- [ ] **Step 3: Implement task-aware rubric without new scoring engines**
+- [ ] **Step 3：实现 task-aware Judge v4**
 
-Keep the existing allowed scores `{0, 0.25, 0.5, 0.75, 1}` and main macro-average. Add controlled tags:
+保留 `{0, 0.25, 0.5, 0.75, 1}`。错误标签固定为：
 
 ```python
 JUDGE_ERROR_TAGS = {
@@ -930,58 +964,49 @@ JUDGE_ERROR_TAGS = {
 }
 ```
 
-The Judge receives reviewed evidence summaries and graph relations but no interaction/private metadata. Missing model answers remain 0. Do not add deterministic answer matching or an independent key-fact scorer in v9.
+Judge payload 只含英文规范数据；缺失答案计 0；不新增独立 key-fact scorer。
 
-- [ ] **Step 4: Run evaluation tests**
+- [ ] **Step 4：运行测试**
 
-Run: `pytest tests/test_vqa_evaluate.py tests/test_evidence_vqa_e2e.py -q`
+运行：`pytest tests/test_vqa_evaluate.py tests/test_evidence_vqa_e2e.py -q`
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 ```bash
 git add src/salesbench/vqa_evaluate/context.py src/salesbench/vqa_evaluate/prompts.py src/salesbench/vqa_evaluate/judge.py src/salesbench/vqa_evaluate/runner.py tests/test_vqa_evaluate.py tests/test_evidence_vqa_e2e.py
 git commit -m "feat: add commerce-aware Judge diagnostics"
 ```
 
-### Task 10: Wire v9 CLI, configs, metadata, and end-to-end tests
+## Task 11：接入 v9 CLI、配置、元数据和端到端测试
 
-**Files:**
-- Modify: `src/salesbench/cli.py`
-- Create: `configs/evidence_smoke_v9_5videos.json`
-- Create: `configs/evidence_pilot_v9_64videos.json`
-- Modify: `tests/test_goldbank_cli.py`
-- Modify: `tests/test_evidence_vqa_e2e.py`
-- Modify: `tests/test_benchmark_convergence.py`
+**文件：**
+- 修改：`src/salesbench/cli.py`
+- 新建：`configs/evidence_smoke_v9_5videos.json`
+- 新建：`configs/evidence_pilot_v9_64videos.json`
+- 新建：`configs/pilot64_gpt4o_v9_delivery.json`
+- 修改 CLI/E2E/Convergence 测试。
 
-**Interfaces:**
-- Consumes: all previous tasks.
-- Produces: executable v9 smoke/formal commands and one complete mocked integration path.
-
-- [ ] **Step 1: Write a failing full-flow test**
+- [ ] **Step 1：写全链路语言与隐私失败测试**
 
 ```python
-def test_v9_context_to_judge_flow_contains_commerce_graph_without_private_fields(tmp_path):
-    outputs = run_v9_mock_flow(tmp_path)
-    assert outputs["counts"]["commerce_cues"] > 0
-    assert outputs["counts"]["commercial_relations"] > 0
-    assert set(outputs["task_counts"]) == {"BP", "CM", "SS", "AE"}
-    payload_text = json.dumps(outputs["model_and_judge_payloads"], ensure_ascii=False)
-    assert "likes" not in payload_text
-    assert "followers" not in payload_text
-    assert "private_analysis_metadata" not in payload_text
+def test_v9_canonical_payloads_are_english_and_audit_translation_is_isolated():
+    canonical = json.dumps(outputs["canonical_payloads"], ensure_ascii=False)
+    audit = json.dumps(outputs["audit_payloads"], ensure_ascii=False)
+    assert "private_analysis_metadata" not in canonical
+    assert "translated_text" not in canonical
+    assert "translated_text" in audit
+    assert outputs["task_counts"].keys() == {"BP", "CM", "SS", "AE"}
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [ ] **Step 2：运行失败测试**
 
-Run: `pytest tests/test_evidence_vqa_e2e.py tests/test_benchmark_convergence.py -q`
+运行：`pytest tests/test_evidence_vqa_e2e.py tests/test_benchmark_convergence.py -q`
 
-Expected: FAIL because v8 fixtures do not include the commerce graph.
+预期：FAIL。
 
-- [ ] **Step 3: Wire CLI and versioned cohort fingerprints**
-
-Both v9 configs set:
+- [ ] **Step 3：接入版本配置**
 
 ```json
 {
@@ -994,93 +1019,80 @@ Both v9 configs set:
 }
 ```
 
-The smoke config retains the existing five v8 smoke video IDs; the pilot config retains the existing 64 v8 pilot IDs so changes measure ontology/prompt effects rather than cohort changes.
+v9 smoke 和 pilot 复用 v8 的 5/64 个 video ID，只改变 ontology/prompt/pipeline，避免 cohort 变化干扰比较。`configs/pilot64_gpt4o_v9_delivery.json` 必须分别声明 smoke/formal Evidence、QA、模型结果、Evaluation、帧 manifest 和 `audit_translations` 路径，且不得引用任何 v6/v7/v8 运行目录。
 
-- [ ] **Step 4: Run integration tests**
+- [ ] **Step 4：运行集成测试**
 
-Run: `pytest tests/test_goldbank_cli.py tests/test_evidence_vqa_e2e.py tests/test_benchmark_convergence.py -q`
+运行：`pytest tests/test_goldbank_cli.py tests/test_evidence_vqa_e2e.py tests/test_benchmark_convergence.py -q`
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 ```bash
-git add src/salesbench/cli.py configs/evidence_smoke_v9_5videos.json configs/evidence_pilot_v9_64videos.json tests/test_goldbank_cli.py tests/test_evidence_vqa_e2e.py tests/test_benchmark_convergence.py
+git add src/salesbench/cli.py configs/evidence_smoke_v9_5videos.json configs/evidence_pilot_v9_64videos.json configs/pilot64_gpt4o_v9_delivery.json tests/test_goldbank_cli.py tests/test_evidence_vqa_e2e.py tests/test_benchmark_convergence.py
 git commit -m "feat: wire the v9 SalesBench pilot flow"
 ```
 
-### Task 11: Update audit metrics, data card, and execution guide
+## Task 12：更新审计指标、Data Card 和执行指南
 
-**Files:**
-- Modify: `src/salesbench/goldbank/audit.py`
-- Modify: `docs/Pilot_64_Video_Execution_Guide.md`
-- Create: `docs/data/EvidenceDataset_Data_Card_v3.md`
-- Modify: `tests/test_goldbank_audit.py`
+**文件：**
+- 修改：`src/salesbench/goldbank/audit.py`
+- 修改：`docs/Pilot_64_Video_Execution_Guide.md`
+- 新建：`docs/data/EvidenceDataset_Data_Card_v3.md`
+- 修改：`tests/test_goldbank_audit.py`
 
-**Interfaces:**
-- Consumes: final v3 artifacts.
-- Produces: provenance/graph/capability coverage metrics and exact human execution instructions.
-
-- [ ] **Step 1: Write failing audit metric tests**
+- [ ] **Step 1：写审计指标失败测试**
 
 ```python
-def test_audit_reports_graph_and_capability_coverage():
+def test_audit_reports_graph_language_and_translation_separation():
     report = audit_gold_bank(v3_records(), v3_evidence(), v3_cues(), v3_relations())
     assert report["commerce_cue_coverage"] == 1.0
     assert report["commercial_relation_validity"] == 1.0
     assert report["causal_outcome_relation_count"] == 0
-    assert report["capability_counts"]["CLAIM_DEMONSTRATION_STATUS"] == 1
+    assert report["canonical_chinese_field_count"] == 0
+    assert report["audit_translation_stale_count"] == 0
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [ ] **Step 2：运行失败测试**
 
-Run: `pytest tests/test_goldbank_audit.py -q`
+运行：`pytest tests/test_goldbank_audit.py -q`
 
-Expected: FAIL because audit currently accepts only records and evidence.
+预期：FAIL。
 
-- [ ] **Step 3: Implement metrics and document exact v9 commands**
+- [ ] **Step 3：实现指标与文档**
 
-Add metrics for cue evidence validity, relation endpoint validity, provenance distribution, causal label leakage, capability counts, operator counts, cross-task evidence reuse, and per-video abstention. Update the data card with the v2/v3 non-upgrade boundary and update the execution guide with the commands in Section 6 below.
+增加 Cue evidence validity、Relation endpoint validity、provenance、causal leakage、capability/operator、cross-task reuse、canonical language、translation coverage/stale 等指标。新建 v3 Data Card，保留 v2 文件作为历史契约。
 
-- [ ] **Step 4: Run documentation-linked tests**
+- [ ] **Step 4：运行测试**
 
-Run: `pytest tests/test_goldbank_audit.py tests/test_goldbank_cli.py -q`
+运行：`pytest tests/test_goldbank_audit.py tests/test_goldbank_cli.py -q`
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5：提交**
 
 ```bash
 git add src/salesbench/goldbank/audit.py docs/Pilot_64_Video_Execution_Guide.md docs/data/EvidenceDataset_Data_Card_v3.md tests/test_goldbank_audit.py
 git commit -m "docs: document and audit the v9 commerce benchmark"
 ```
 
-### Task 12: Run full verification before any API smoke
+## Task 13：API Smoke 前完整验证
 
-**Files:**
-- Verify only; commit fixes only if verification exposes defects.
+**文件：** 只验证；发现缺陷时回到所属 Task 增加回归测试和最小修复。
 
-**Interfaces:**
-- Consumes: Tasks 1–11.
-- Produces: a clean, tested implementation ready for API use.
-
-- [ ] **Step 1: Run focused tests**
-
-Run:
+- [ ] **Step 1：运行聚焦测试**
 
 ```bash
 pytest tests/test_commerce_schema.py tests/test_commerce_ontology.py \
   tests/test_goldbank_prompts.py tests/test_goldbank_pipeline.py \
   tests/test_vqa_specs.py tests/test_vqa_realizer.py \
-  tests/test_goldbank_qa_compiler.py tests/test_audit_workbench.py \
-  tests/test_vqa_evaluate.py tests/test_evidence_vqa_e2e.py -q
+  tests/test_audit_translation.py tests/test_goldbank_qa_compiler.py \
+  tests/test_audit_workbench.py tests/test_vqa_evaluate.py \
+  tests/test_evidence_vqa_e2e.py -q
 ```
 
-Expected: PASS.
-
-- [ ] **Step 2: Run the complete suite and static checks**
-
-Run:
+- [ ] **Step 2：运行完整测试和静态检查**
 
 ```bash
 pytest -q
@@ -1088,27 +1100,23 @@ python -m compileall -q src tools
 git diff --check
 ```
 
-Expected: all tests pass, compileall exits 0, and `git diff --check` prints nothing.
+预期：测试全部通过；compileall 返回 0；`git diff --check` 无输出。
 
-- [ ] **Step 3: Inspect version constants**
-
-Run:
+- [ ] **Step 3：核对全部版本常量**
 
 ```bash
-rg -n "evidence-dataset-schema-v3|evidence-prompt-v9|evidence-first-pipeline-v8|evidence-qa-compiler-v5|judge-prompt-v4" src configs docs
+rg -n "evidence-dataset-schema-v3|evidence-prompt-v9|evidence-first-pipeline-v8|evidence-qa-compiler-v5|judge-prompt-v4|audit-translation-prompt-v1" src configs docs
 ```
 
-Expected: every active v9 path reports the intended version; v6/v7/v8 remain only in explicit legacy/migration text.
+- [ ] **Step 4：处理验证缺陷**
 
-- [ ] **Step 4: Route any discovered defect back to its owning task**
-
-If verification fails, add a focused regression test in the task that owns the failing component, implement the minimal fix there, rerun that task's tests, and commit only the exact files named by that task. If verification passes without file changes, do not create an empty or aggregate verification commit.
+如果验证失败，在负责该组件的 Task 中添加聚焦回归测试，只提交该 Task 明确列出的文件。若验证没有产生文件变化，不创建空提交或汇总提交。
 
 ---
 
-## 6. Post-implementation execution runbook
+## 7. 实施后的完整运行手册
 
-### 6.1 Load the ignored relay credentials without printing them
+### 7.1 加载本地中转 API 凭证
 
 ```bash
 set -a
@@ -1116,7 +1124,9 @@ source .env
 set +a
 ```
 
-### 6.2 Run the five-video v9 smoke
+不得打印 key，也不得将 `.env` 加入 Git。
+
+### 7.2 运行 5 视频 v9 smoke EvidenceDataset
 
 ```bash
 python salesbench.py build-evidence-dataset \
@@ -1130,29 +1140,61 @@ python salesbench.py build-evidence-dataset \
   --max-workers 1
 ```
 
-Smoke acceptance:
+Smoke 通过条件：
 
-- 5/5 videos complete without schema-stage failure.
-- Atomic Evidence, CommerceCue, and CommercialRelation files are non-empty.
-- No causal outcome relation is present.
-- Claim repetition is not misclassified as visual support.
-- At least one BP, CM, SS, and AE capability exists across the five-video set; missing a task for one individual video is acceptable.
-- Linked frames and native/English text are readable in the audit workbench.
+- 5/5 视频无 schema stage failure。
+- Evidence、Cue 和 Relation 文件非空。
+- Canonical 语义字段全部英文；中文只存在于 source-native 字段。
+- 不存在消费者结果 Relation。
+- 文案重复没有被误判为视觉证明。
+- 5 视频集合层面至少覆盖 BP/CM/SS/AE；单视频缺任务允许。
+- 审计能看到关联帧和原语言文本。
 
-### 6.3 Build the smoke audit workbench
+### 7.3 生成 smoke QA
 
-Create a v9 delivery manifest by copying `configs/pilot64_gpt4o_v6_delivery.json` and changing only the formal/smoke source paths to the v9 directories. Then run:
+```bash
+python salesbench.py realize-qa \
+  --evidence-dir outputs/evidence/v9_smoke5_gpt4o_yunwu \
+  --output-dir outputs/vqa/v9_smoke5_gpt4o_yunwu \
+  --text-base-url "$OPENAI_BASE_URL" \
+  --text-model gpt-4o \
+  --max-workers 1
+```
+
+确认问题和 Gold 全英文，不包含公式化后缀。
+
+### 7.4 生成中文审计翻译包
+
+```bash
+python salesbench.py build-audit-translations \
+  --manifest configs/pilot64_gpt4o_v9_delivery.json \
+  --output outputs/audit/translations/v9_smoke/audit_translations.jsonl \
+  --base-url "$OPENAI_BASE_URL" \
+  --model gpt-4o \
+  --max-workers 2
+```
+
+翻译审计重点：
+
+- 数字、单位、价格和数量必须一致。
+- `claim` 不能被翻译成已验证事实。
+- `not shown`、`partially supported`、否定词和条件词不能丢失。
+- Enum、ID、JSON key 不翻译。
+- 翻译缺失或 stale 时使用英文原文审核，不能自动接受。
+
+### 7.5 构建双语 smoke 审计 HTML
 
 ```bash
 python -m tools.audit_workbench.build \
   --manifest configs/pilot64_gpt4o_v9_delivery.json \
-  --output outputs/audit/SalesBench_Prompt_Audit_Workbench_v9.html \
+  --translations outputs/audit/translations/v9_smoke/audit_translations.jsonl \
+  --output outputs/audit/SalesBench_Prompt_Audit_Workbench_v9_smoke.html \
   --skip-organize
 ```
 
-Audit every cue, relation, QuestionSpec, and QA in the five-video smoke. Revise the ontology or prompt before any 64-video call if relation endpoints, causal boundaries, translations, or question naturalness are unstable.
+审核 Prompt、Evidence、Cue、Relation、QuestionSpec 和 QA。默认看中文，同时用英文原文、中文 ASR/OCR 和关联帧核对。
 
-### 6.4 Run the formal 64-video EvidenceDataset
+### 7.6 运行正式 64 视频 EvidenceDataset
 
 ```bash
 python salesbench.py build-evidence-dataset \
@@ -1166,16 +1208,14 @@ python salesbench.py build-evidence-dataset \
   --max-workers 2
 ```
 
-### 6.5 Human-review and freeze EvidenceDataset v3
+### 7.7 人工审核并冻结 EvidenceDataset
 
-Review order:
+审核顺序：
 
-1. Atomic evidence transcription/localization.
-2. CommerceCue type, English normalization, native text, and evidence refs.
-3. CommercialRelation endpoints, provenance, rationale, and causal boundary.
-4. GroundedAnnotation capability, operator, Gold, and forbidden inferences.
-
-Apply exported decisions:
+1. 原子 Evidence 的定位、原文和英文规范语义。
+2. CommerceCue 类型、英文语义、原文和 evidence refs。
+3. CommercialRelation 端点、provenance、rationale 和因果边界。
+4. GroundedAnnotation 的 Capability、Operator、Gold 和 forbidden inference。
 
 ```bash
 python salesbench.py apply-evidence-reviews \
@@ -1184,7 +1224,9 @@ python salesbench.py apply-evidence-reviews \
   --output outputs/evidence/v9_pilot64_gpt4o_yunwu/video_evidence_dataset_reviewed.jsonl
 ```
 
-### 6.6 Realize and audit natural English QA
+审核修改必须写回英文 canonical 字段；中文翻译只能作为理解辅助，不能直接成为 Gold。
+
+### 7.8 生成、翻译并审核正式 QA
 
 ```bash
 python salesbench.py realize-qa \
@@ -1193,11 +1235,18 @@ python salesbench.py realize-qa \
   --text-base-url "$OPENAI_BASE_URL" \
   --text-model gpt-4o \
   --max-workers 2
+
+python salesbench.py build-audit-translations \
+  --manifest configs/pilot64_gpt4o_v9_delivery.json \
+  --output outputs/audit/translations/v9_pilot64/audit_translations.jsonl \
+  --base-url "$OPENAI_BASE_URL" \
+  --model gpt-4o \
+  --max-workers 2
 ```
 
-Human-review every pilot question. Exact duplicates must be zero, within-video semantic duplicates must be zero, and generic `What mechanism/strategy/audience` questions must be rejected.
+64 视频 pilot 的 QA 全量人工审核。中文翻译帮助阅读，最终修改对象仍是英文 Question 和 Gold。
 
-### 6.7 Compile reviewed QA
+### 7.9 编译公开 QA
 
 ```bash
 python salesbench.py compile-vqa \
@@ -1209,9 +1258,9 @@ python salesbench.py compile-vqa \
   --max-per-task 3
 ```
 
-Target volume is approximately 192–384 QA, determined by valid evidence rather than a fixed per-video quota.
+目标约 192–384 条 QA，以有效证据决定，不固定每视频题数。
 
-### 6.8 Run one model and LLM-as-Judge
+### 7.10 跑模型和 LLM-as-Judge
 
 ```bash
 python salesbench.py run-vqa-benchmark \
@@ -1232,25 +1281,29 @@ python salesbench.py evaluate-vqa-benchmark \
   --max-workers 2
 ```
 
-The primary leaderboard value is the macro-average of BP, CM, SS, and AE Judge scores. Micro-average, capability slices, reasoning-operator slices, and error tags are diagnostics.
+主排行榜是 BP/CM/SS/AE Judge score 的 macro-average。中文 Judge 理由只在评测完成后通过 audit translation 生成。
 
 ---
 
-## 7. Final acceptance criteria
+## 8. 最终验收标准
 
-- `pytest -q`, `compileall`, and `git diff --check` pass.
-- Public payloads contain no private interaction/profile/title fields.
-- Referenced evidence, cues, and relations are same-video and resolvable.
-- No causal consumer-outcome relation exists.
-- All retained pilot Evidence/Cue/Relation/QA records have a human decision.
-- Every QA maps to exactly one primary capability and reasoning operator.
-- Exact duplicate questions: 0 in the 64-video pilot.
-- Within-video semantic duplicates: 0.
-- Largest normalized question-stem cluster: at most 5%.
-- CM: 100% genuine cross-modal information gap.
-- SS/AE: no real viewer profile, actual trust, purchase, interaction, or conversion conclusion.
-- All four tasks are non-empty across the cohort, without forcing all tasks per video.
-- Missing model answers score 0.
-- Judge model/version/prompt are frozen and recorded.
-- A human-scored calibration subset covers all four tasks and all five Judge score levels when available.
-- Formal and smoke directories remain physically separate.
+- `pytest -q`、compileall、`git diff --check` 全部通过。
+- Prompt 全英文，Prompt audit 同时提供中文翻译。
+- Canonical Evidence/Cue/Relation/Question/Gold/Judge 自然语言字段全英文。
+- 中文 ASR/OCR 原文逐字保留并可定位。
+- 中文审计翻译只存在于独立 sidecar 和 HTML，不进入 canonical JSONL。
+- 每条翻译绑定 object ID、source field 和 source hash；stale 翻译不能静默使用。
+- 中文翻译保留数字、单位、条件、否定、claim/fact 和 relation status。
+- 公共 payload 不包含私有互动、画像、标题或审计翻译。
+- 引用的 Evidence、Cue、Relation 同视频且可解析。
+- 不存在消费者结果因果 Relation。
+- Pilot 中保留的 Evidence/Cue/Relation/QA 全部有人工作出决定。
+- 每条 QA 对应一个主要 Capability 和 Reasoning Operator。
+- 64 视频 pilot 完全重复问题为 0；视频内语义重复为 0；最大标准化句式簇不超过 5%。
+- CM 100% 具有真实跨模态信息差。
+- SS/AE 不包含真实用户画像、信任、购买、互动或转化结论。
+- 四任务在 cohort 层面非空，不强制单视频四任务齐全。
+- 缺失模型答案计 0。
+- Judge model/version/prompt 冻结并记录。
+- 人工校准样本覆盖四任务；条件允许时覆盖五个 Judge 分档。
+- Smoke、formal、translation sidecar 和 legacy 目录物理隔离。
