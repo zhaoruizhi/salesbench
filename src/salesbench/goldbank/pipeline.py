@@ -163,15 +163,91 @@ def _review_queue_item(
     reason: str,
     proposal: dict[str, object] | None = None,
     issues: list[ValidationIssue] | None = None,
+    *,
+    stage: str | None = None,
+    item_type: str | None = None,
+    source_proposal_ids: list[str] | None = None,
 ) -> dict[str, object]:
-    proposal_id = clean_text((proposal or {}).get("proposal_id")) or "stage"
+    candidate = proposal or {}
+    proposal_id = clean_text(
+        candidate.get("proposal_id") or candidate.get("annotation_id") or candidate.get("gold_id")
+    ) or "stage"
+    source_ids = list(
+        dict.fromkeys(
+            source_proposal_ids
+            or [clean_text(value) for value in candidate.get("source_proposal_ids", []) or [] if clean_text(value)]
+            or ([proposal_id] if proposal_id != "stage" and candidate.get("proposal_id") else [])
+        )
+    )
+    reason_code = clean_text(reason).split(":", 1)[0].upper()
+    if stage is None:
+        if reason_code.startswith("ADJUDICATOR"):
+            stage = "adjudication"
+        elif reason_code.startswith("CHALLENGE"):
+            stage = "challenge"
+        elif reason_code in {"VALIDATION_FAILED", "CONFLICTING_VALUE", "SEMANTIC_DUPLICATE"}:
+            stage = "validation"
+        else:
+            stage = "proposal"
+    if item_type is None:
+        item_type = "conflict" if reason_code in {"CONFLICTING_VALUE", "SEMANTIC_DUPLICATE"} else "candidate"
+    target = dict(candidate.get("target") or {})
+    candidate_gold = dict(candidate.get("gold_value") or candidate.get("proposed_gold") or {})
+    evidence_refs = list(candidate.get("evidence_refs") or candidate.get("evidence_ids") or [])
+    issue_payloads = [issue.to_dict() if isinstance(issue, ValidationIssue) else dict(issue) for issue in issues or []]
+    digest = stable_digest(
+        {
+            "video_id": video_id,
+            "stage": stage,
+            "reason": reason,
+            "proposal_id": proposal_id,
+            "source_proposal_ids": source_ids,
+            "target": target,
+        },
+        length=10,
+    )
     return {
-        "review_item_id": f"hr_{video_id}_{proposal_id}",
+        "review_item_id": f"hr_{video_id}_{stage}_{digest}",
         "video_id": video_id,
-        "proposal_id": proposal_id,
+        "stage": stage,
+        "item_type": item_type,
+        "task_type": clean_text(candidate.get("task_type")).upper(),
+        "task_subtype": clean_text(candidate.get("task_subtype")).upper(),
+        "reason_code": reason_code,
         "reason": reason,
-        "issues": [issue.to_dict() for issue in issues or []],
-        "proposal": proposal or {},
+        "target": target,
+        "candidate_gold": candidate_gold,
+        "evidence_refs": evidence_refs,
+        "source_proposal_ids": source_ids,
+        "issues": issue_payloads,
+        "proposal_id": proposal_id,
+    }
+
+
+def _abstention_queue_item(
+    video_id: str,
+    generator: str,
+    abstention: dict[str, object],
+    ordinal: int,
+) -> dict[str, object]:
+    reason = clean_text(abstention.get("reason")) or "The generator did not produce a supported candidate."
+    digest = stable_digest({"video_id": video_id, "generator": generator, "ordinal": ordinal, "abstention": abstention}, length=10)
+    return {
+        "review_item_id": f"hr_{video_id}_proposal_{digest}",
+        "video_id": video_id,
+        "stage": "proposal",
+        "item_type": "abstention",
+        "task_type": clean_text(abstention.get("task_type")).upper(),
+        "task_subtype": clean_text(abstention.get("task_subtype")).upper(),
+        "reason_code": "ABSTENTION",
+        "reason": reason,
+        "target": {},
+        "candidate_gold": {},
+        "evidence_refs": [],
+        "source_proposal_ids": [],
+        "issues": [],
+        "proposal_id": "",
+        "generator": generator,
     }
 
 
@@ -301,15 +377,9 @@ class GoldBankPipeline:
                     used_proposal_ids.add(proposal.proposal_id)
                     proposals.append(proposal)
                 all_proposals.extend(proposals)
-                for abstention in abstentions:
+                for abstention_ordinal, abstention in enumerate(abstentions):
                     human_review_queue.append(
-                        {
-                            "review_item_id": f"hr_{video_id}_{generator}_abstain_{len(human_review_queue):03d}",
-                            "video_id": video_id,
-                            "proposal_id": "",
-                            "reason": "ABSTENTION",
-                            "abstention": abstention,
-                        }
+                        _abstention_queue_item(video_id, generator, abstention, abstention_ordinal)
                     )
                 traces.append(_trace(stage, generator, call, {"proposals": proposals_raw, "abstentions": abstentions}))
             except ModelOutputError as exc:
@@ -335,6 +405,22 @@ class GoldBankPipeline:
         except (ModelOutputError, ValueError) as exc:
             traces.append(_trace("challenge", "gold_challenger", challenge_call, error=str(exc)))
             return self._review_only_result(video_id, evidence_units, proposal_dicts, [], traces, "partial", "challenge_parse_failed")
+
+        proposals_by_id = {proposal.proposal_id: proposal for proposal in all_proposals}
+        for review in reviews:
+            if review.verdict == ReviewVerdict.PASS:
+                continue
+            proposal = proposals_by_id.get(review.proposal_id)
+            human_review_queue.append(
+                _review_queue_item(
+                    video_id,
+                    f"challenger_{review.verdict.value.lower()}",
+                    proposal.to_dict() if proposal else {"proposal_id": review.proposal_id},
+                    stage="challenge",
+                    item_type="candidate",
+                    source_proposal_ids=[review.proposal_id] if review.proposal_id else [],
+                )
+            )
 
         eligible_proposal_ids = {
             clean_text(proposal.get("proposal_id"))
@@ -461,14 +547,26 @@ class GoldBankPipeline:
         for queue_item in adjudicator_queue:
             if isinstance(queue_item, dict):
                 queue_payload = dict(queue_item)
-                adjudicated_source_ids.update(
+                queue_source_ids = [
                     clean_text(value)
                     for value in queue_payload.get("source_proposal_ids", []) or []
                     if clean_text(value)
+                ]
+                adjudicated_source_ids.update(queue_source_ids)
+                source_candidate = next(
+                    (passed_proposals_by_id[source_id].to_dict() for source_id in queue_source_ids if source_id in passed_proposals_by_id),
+                    {},
                 )
-                queue_payload.setdefault("review_item_id", f"hr_{video_id}_adjudicator_{len(human_review_queue):03d}")
-                queue_payload.setdefault("video_id", video_id)
-                human_review_queue.append(queue_payload)
+                human_review_queue.append(
+                    _review_queue_item(
+                        video_id,
+                        clean_text(queue_payload.get("reason")) or "adjudicator_human_review",
+                        source_candidate,
+                        stage="adjudication",
+                        item_type="conflict" if len(queue_source_ids) > 1 else "candidate",
+                        source_proposal_ids=queue_source_ids,
+                    )
+                )
 
         for proposal_id in sorted(passed_proposal_ids - adjudicated_source_ids):
             proposal = passed_proposals_by_id[proposal_id]
@@ -548,7 +646,11 @@ class GoldBankPipeline:
         status: str,
         reason: str,
     ) -> GoldBankResult:
-        queue = [_review_queue_item(video_id, reason, proposal) for proposal in proposals]
+        stage = "adjudication" if reason.startswith("adjudication") else "challenge"
+        queue = [
+            _review_queue_item(video_id, reason, proposal, stage=stage, item_type="stage_failure")
+            for proposal in proposals
+        ]
         return GoldBankResult(
             video_id=video_id,
             evidence_units=[unit.to_dict() for unit in evidence_units],

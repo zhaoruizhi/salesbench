@@ -532,6 +532,69 @@ def test_rendered_evidence_uses_lazy_images_and_readable_content() -> None:
     assert "openLightbox" in html
 
 
+def test_review_cards_distinguish_candidates_abstentions_and_unresolved_sources() -> None:
+    prompts = collect_prompt_snapshot()
+    data = {
+        "release": {"status": "pilot", "prompt_version": "v6"},
+        "counts": {"videos": 1, "evidence_units": 1, "annotations": 0, "review_queue": 3, "qa": 0},
+        "delivery": {},
+        "evidence": {
+            "queue": [
+                {
+                    "id": "candidate",
+                    "video_id": "v1",
+                    "stage": "validation",
+                    "item_type": "candidate",
+                    "task_type": "SS",
+                    "task_subtype": "TRUST_MECHANISM",
+                    "reason": "Only one evidence unit was cited.",
+                    "target": {"mechanism": "demonstration"},
+                    "candidate_gold": {"answer": "The product is demonstrated in use."},
+                    "evidence_refs": ["e1"],
+                    "issues": [{"code": "INSUFFICIENT_EVIDENCE"}],
+                    "evidence_items": [],
+                },
+                {
+                    "id": "abstention",
+                    "video_id": "v1",
+                    "stage": "proposal",
+                    "item_type": "abstention",
+                    "task_type": "AE",
+                    "reason": "Fewer than two evidence units support a bounded answer.",
+                    "display_summary": "No candidate generated",
+                    "evidence_items": [],
+                },
+                {
+                    "id": "unresolved",
+                    "video_id": "v1",
+                    "stage": "adjudication",
+                    "item_type": "candidate",
+                    "task_type": "",
+                    "reason": "Legacy source ID is missing.",
+                    "resolution_status": "unresolved",
+                    "unresolved_proposal_ids": ["missing"],
+                    "display_summary": "Candidate source could not be resolved",
+                    "evidence_items": [],
+                },
+            ],
+            "risks": [],
+            "missing_task_videos": [],
+        },
+        "qa": [],
+        "judge": {"summary": {}, "metrics": {}, "rows": []},
+    }
+
+    html = render_workbench(data, prompts, fragment=True)
+
+    assert "No candidate generated" in html
+    assert "The product is demonstrated in use." in html
+    assert "Candidate source could not be resolved" in html
+    assert "Candidate content and evidence" in html
+    assert "Abstention details" in html
+    assert "Unresolved source details" in html
+    assert "查看 target / gold / proposal / evidence_refs" not in html
+
+
 def test_qa_and_judge_cards_render_semantic_evidence_not_only_ids() -> None:
     prompts = collect_prompt_snapshot()
     evidence_item = {

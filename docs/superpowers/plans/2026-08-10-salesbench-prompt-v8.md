@@ -108,27 +108,27 @@
 - Consumes: canonical v8 queue rows and legacy rows containing `source_proposal_ids`, nested proposer records, nested GoldItems, or abstentions.
 - Produces: `normalize_review_queue_row(row, proposal_index)` with `review_item_id`, `stage`, `item_type`, `task_type`, `task_subtype`, `reason_code`, `reason`, `target`, `candidate_gold`, `evidence_refs`, `source_proposal_ids`, and `issues`.
 
-- [ ] **Step 1: Write failing adapter and UI-data tests**
+- [x] **Step 1: Write failing adapter and UI-data tests**
 
   Cover canonical rows, source-ID lookup, nested proposal aliases, nested GoldItem aliases, abstentions, unresolved references, and task recovery without generic `UNKNOWN` when the source contains a task.
 
-- [ ] **Step 2: Run focused tests and confirm failures**
+- [x] **Step 2: Run focused tests and confirm failures**
 
   Run: `pytest -q tests/test_audit_review_queue.py tests/test_audit_workbench.py tests/test_goldbank_pipeline.py`
 
-- [ ] **Step 3: Emit and normalize the canonical queue shape**
+- [x] **Step 3: Emit and normalize the canonical queue shape**
 
   Add pipeline queue builders for candidates, abstentions, adjudication conflicts, and stage failures. Add the historical adapter and make the workbench consume only its normalized output.
 
-- [ ] **Step 4: Render type-specific readable audit cards**
+- [x] **Step 4: Render type-specific readable audit cards**
 
   Candidate/conflict cards show target, candidate Gold, readable evidence content, and issues; abstentions show “No candidate generated” plus the exact reason; failures show stage/reason and available representative frames; unresolved references are explicitly labeled.
 
-- [ ] **Step 5: Run focused and full tests**
+- [x] **Step 5: Run focused and full tests**
 
   Run the focused command from Step 2, then `pytest -q`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Commit message: `feat: normalize review queue audit records`
 

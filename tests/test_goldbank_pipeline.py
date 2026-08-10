@@ -270,6 +270,33 @@ class GoldBankPipelineTest(unittest.TestCase):
             [item["annotation_id"] for item in result.video_gold_record["grounded_annotations"]],
         )
 
+        queue_item = next(item for item in result.human_review_queue if item["proposal_id"] == "p_cm")
+        self.assertEqual(queue_item["stage"], "proposal")
+        self.assertEqual(queue_item["item_type"], "candidate")
+        self.assertEqual(queue_item["task_type"], "CM")
+        self.assertEqual(queue_item["candidate_gold"], {"relation": "SUPPORTED"})
+        self.assertEqual(queue_item["evidence_refs"], ["v1_visual_000_abc", "v1_visual_000_abc"])
+
+    def test_abstention_uses_canonical_review_queue_shape(self):
+        responses = successful_responses()
+        responses[2]["abstentions"] = [
+            {
+                "task_type": "SS",
+                "task_subtype": "TRUST_MECHANISM",
+                "reason": "Fewer than two evidence units support this mechanism.",
+            }
+        ]
+        vlm = FakeGoldClient(responses[:1])
+        llm = FakeGoldClient(responses[1:])
+
+        result = GoldBankPipeline(vlm, llm).run_video(bundle())
+
+        abstention = next(item for item in result.human_review_queue if item["item_type"] == "abstention")
+        self.assertEqual(abstention["stage"], "proposal")
+        self.assertEqual(abstention["task_type"], "SS")
+        self.assertEqual(abstention["candidate_gold"], {})
+        self.assertEqual(abstention["reason"], "Fewer than two evidence units support this mechanism.")
+
     def test_rejected_bp_proposal_never_enters_grounded_annotations(self):
         responses = successful_responses()
         local_bp_id = "v1_local_bp_000"
