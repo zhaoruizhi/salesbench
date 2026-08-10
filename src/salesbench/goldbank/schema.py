@@ -11,7 +11,7 @@ from typing import Any
 from ..utils import clean_text
 
 
-SCHEMA_VERSION = "evidence-dataset-schema-v2"
+SCHEMA_VERSION = "evidence-dataset-schema-v3"
 
 
 class GoldTaskType(str, Enum):
@@ -147,9 +147,19 @@ class EvidenceUnit:
     extractor: str
     confidence: float
     timestamp_status: str
+    content_en: str = ""
+    source_text_native: str = ""
 
     def __post_init__(self) -> None:
         _confidence(self.confidence)
+        if not self.source_text_native and self.text_span:
+            object.__setattr__(self, "source_text_native", clean_text(self.text_span))
+        if not self.text_span and self.source_text_native:
+            object.__setattr__(self, "text_span", clean_text(self.source_text_native))
+        if not self.content_en:
+            value = clean_text(self.value)
+            derived = " ".join(part for part in (clean_text(self.subject), clean_text(self.predicate), value) if part)
+            object.__setattr__(self, "content_en", derived)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -159,7 +169,8 @@ class EvidenceUnit:
             "start_s": self.start_s,
             "end_s": self.end_s,
             "frame_indices": list(self.frame_indices),
-            "text_span": self.text_span,
+            "content_en": self.content_en,
+            "source_text_native": self.source_text_native,
             "subject": self.subject,
             "predicate": self.predicate,
             "value": self.value,
@@ -299,6 +310,7 @@ class VideoGoldRecord:
 
 
 def parse_evidence_unit(record: dict[str, object]) -> EvidenceUnit:
+    source_text_native = clean_text(record.get("source_text_native")) or clean_text(record.get("text_span"))
     return EvidenceUnit(
         evidence_id=clean_text(record.get("evidence_id")),
         video_id=clean_text(record.get("video_id")),
@@ -306,7 +318,7 @@ def parse_evidence_unit(record: dict[str, object]) -> EvidenceUnit:
         start_s=None if record.get("start_s") is None else float(record.get("start_s")),
         end_s=None if record.get("end_s") is None else float(record.get("end_s")),
         frame_indices=tuple(int(value) for value in _tuple(record.get("frame_indices"))),
-        text_span=clean_text(record.get("text_span")),
+        text_span=source_text_native,
         subject=clean_text(record.get("subject")),
         predicate=clean_text(record.get("predicate")),
         value=record.get("value"),
@@ -315,6 +327,8 @@ def parse_evidence_unit(record: dict[str, object]) -> EvidenceUnit:
         extractor=clean_text(record.get("extractor")),
         confidence=_confidence(record.get("confidence", 0.0)),
         timestamp_status=clean_text(record.get("timestamp_status")),
+        content_en=clean_text(record.get("content_en")),
+        source_text_native=source_text_native,
     )
 
 
