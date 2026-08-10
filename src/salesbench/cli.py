@@ -229,7 +229,19 @@ def evaluate_vqa_benchmark_command(args: argparse.Namespace) -> int:
 def audit_evidence_dataset_command(args: argparse.Namespace) -> int:
     from .goldbank.audit import audit_gold_bank
 
-    report = audit_gold_bank(read_records(Path(args.dataset)), read_records(Path(args.evidence)))
+    evidence_path = Path(args.evidence)
+    evidence_dir = evidence_path.parent
+    cue_path = Path(args.cues) if args.cues else evidence_dir / "commerce_cues.jsonl"
+    relation_path = (
+        Path(args.relations) if args.relations else evidence_dir / "commercial_relations.jsonl"
+    )
+    report = audit_gold_bank(
+        read_records(Path(args.dataset)),
+        read_records(evidence_path),
+        read_records(cue_path) if cue_path.exists() else [],
+        read_records(relation_path) if relation_path.exists() else [],
+        read_records(Path(args.translations)) if args.translations else [],
+    )
     if args.output:
         write_json(Path(args.output), report)
     print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -347,6 +359,9 @@ def build_parser() -> argparse.ArgumentParser:
     audit = sub.add_parser("audit-evidence-dataset", help="审计 EvidenceDataset")
     audit.add_argument("--dataset", required=True)
     audit.add_argument("--evidence", required=True)
+    audit.add_argument("--cues", default=None)
+    audit.add_argument("--relations", default=None)
+    audit.add_argument("--translations", default=None)
     audit.add_argument("--output", default=None)
     audit.set_defaults(func=audit_evidence_dataset_command)
 
