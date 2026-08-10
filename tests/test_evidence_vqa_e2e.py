@@ -67,9 +67,9 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
                     "end_s": 1,
                     "frame_indices": [0],
                     "text_span": "",
-                    "subject": "产品包装",
-                    "predicate": "颜色",
-                    "value": "黄色",
+                    "subject": "product package",
+                    "predicate": "has color",
+                    "value": "yellow",
                     "attributes": {},
                     "source_domains": ["C1_visual"],
                     "extractor": "fake",
@@ -83,9 +83,9 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
                     "end_s": 2,
                     "frame_indices": [],
                     "text_span": "这款产品适合通勤",
-                    "subject": "口播者",
-                    "predicate": "声称",
-                    "value": "产品适合通勤",
+                    "subject": "speaker",
+                    "predicate": "claims",
+                    "value": "the product is suitable for commuting",
                     "attributes": {},
                     "source_domains": ["C2_audio_speech"],
                     "extractor": "fake",
@@ -100,8 +100,8 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
             "proposal_id": "p_ae",
             "task_type": "AE",
             "task_subtype": "USAGE_CONTEXT",
-            "target": {"subject": "产品"},
-            "proposed_gold": {"usage_context": "通勤场景"},
+            "target": {"scenario": "commuting"},
+            "proposed_gold": {"usage_context": "commuting"},
             "evidence_ids": [e1, e2],
             "reasoning_edges": [],
             "proposal_confidence": 0.9,
@@ -110,7 +110,7 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
             "proposal_id": "p_cm",
             "task_type": "CM",
             "task_subtype": "CLAIM_EVIDENCE_RELATION",
-            "target": {"claim": "产品便携"},
+            "target": {"claim": "the product is portable"},
             "proposed_gold": {"relation": "SUPPORTED"},
             "evidence_ids": [e1, e2],
             "reasoning_edges": [],
@@ -120,8 +120,8 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
             "proposal_id": "p_ss",
             "task_type": "SS",
             "task_subtype": "TRUST_MECHANISM",
-            "target": {"subject": "产品"},
-            "proposed_gold": {"mechanism": "现场演示"},
+            "target": {"segment": "demonstration", "mechanism": "product demonstration"},
+            "proposed_gold": {"label": "demonstration", "answer": "The video demonstrates the product in use."},
             "evidence_ids": [e1, e2],
             "reasoning_edges": [],
             "proposal_confidence": 0.9,
@@ -143,9 +143,9 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
     ]
     annotations = []
     annotation_values = {
-        "p_ae": ("g_ae", "AE", "USAGE_CONTEXT", {"usage_context": "通勤场景"}, "need_with_evidence"),
+        "p_ae": ("g_ae", "AE", "USAGE_CONTEXT", {"usage_context": "commuting"}, "need_with_evidence"),
         "p_cm": ("g_cm", "CM", "CLAIM_EVIDENCE_RELATION", {"relation": "SUPPORTED"}, "relation_choice"),
-        "p_ss": ("g_ss", "SS", "TRUST_MECHANISM", {"mechanism": "现场演示"}, "mechanism_with_evidence"),
+        "p_ss": ("g_ss", "SS", "TRUST_MECHANISM", {"label": "demonstration", "answer": "The video demonstrates the product in use."}, "mechanism_with_evidence"),
     }
     for proposal_id, (annotation_id, task, subtype, value, question_format) in annotation_values.items():
         annotations.append(
@@ -165,9 +165,9 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
             }
         )
     text = [
-        {"proposals": [proposals["p_ae"]], "abstentions": []},
         {"proposals": [proposals["p_cm"]], "abstentions": []},
         {"proposals": [proposals["p_ss"]], "abstentions": []},
+        {"proposals": [proposals["p_ae"]], "abstentions": []},
         {"reviews": reviews},
         {"grounded_annotations": annotations, "human_review_queue": []},
     ]
@@ -186,7 +186,7 @@ class EvidenceVQAE2ETest(unittest.TestCase):
             "video_ids": ["v1"],
             "frame_strategy": "hook_plus_uniform",
             "frames_per_video": 16,
-            "prompt_version": "evidence-prompt-v7",
+            "prompt_version": "evidence-prompt-v8",
             "schema_version": "evidence-dataset-schema-v2",
             "min_confidence": 0.7,
         }

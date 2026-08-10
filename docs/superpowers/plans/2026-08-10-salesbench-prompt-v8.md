@@ -35,27 +35,27 @@
 - Consumes: validated `EvidenceUnit` dictionaries and task-specific model JSON.
 - Produces: `BP_COMPILER_CONTRACT`, Prompt v8 messages, canonical generator names `bp_compiler`, `cm_proposer`, `ss_proposer`, `ae_proposer`, and English normalized candidates.
 
-- [ ] **Step 1: Write failing prompt, routing, and language-contract tests**
+- [x] **Step 1: Write failing prompt, routing, and language-contract tests**
 
   Add tests asserting Prompt v8 contains English task contracts, the three LLM calls use task-specific generator names, BP remains local, and normalized non-verbatim fields reject Chinese output while `text_span` accepts original Chinese.
 
-- [ ] **Step 2: Run focused tests and confirm contract failures**
+- [x] **Step 2: Run focused tests and confirm contract failures**
 
   Run: `pytest -q tests/test_goldbank_prompts.py tests/test_goldbank_normalizer.py tests/test_goldbank_pipeline.py`
 
   Expected: failures identify the v7 prompt version, legacy perspective names, and missing English-language validation.
 
-- [ ] **Step 3: Implement Prompt v8 and generator routing**
+- [x] **Step 3: Implement Prompt v8 and generator routing**
 
   Rewrite all stage instructions and examples in English; expose the deterministic BP compiler contract; replace consumer/operator/strategist with CM/SS/AE proposers; assign BP candidates to `bp_compiler`; bump prompt and pipeline fingerprints.
 
-- [ ] **Step 4: Run focused and full tests**
+- [x] **Step 4: Run focused and full tests**
 
   Run: `pytest -q tests/test_goldbank_prompts.py tests/test_goldbank_normalizer.py tests/test_goldbank_pipeline.py`
 
   Run: `pytest -q`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   Commit message: `feat: add English prompt v8 task generators`
 

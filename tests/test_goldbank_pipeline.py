@@ -75,13 +75,12 @@ def successful_responses() -> list[dict[str, object]]:
                 }
             ]
         },
-        {"proposals": [], "abstentions": []},
         {
             "proposals": [
                 {
                     "proposal_id": "p_cm",
                     "video_id": "v1",
-                    "source_agent": "operator",
+                    "source_agent": "cm_proposer",
                     "task_type": "CM",
                     "task_subtype": "CLAIM_EVIDENCE_RELATION",
                     "target": {"claim": "claim"},
@@ -93,6 +92,7 @@ def successful_responses() -> list[dict[str, object]]:
             ],
             "abstentions": [],
         },
+        {"proposals": [], "abstentions": []},
         {"proposals": [], "abstentions": []},
         {
             "reviews": [
@@ -143,9 +143,9 @@ def successful_responses_with_two_evidence() -> list[dict[str, object]]:
             "end_s": 2,
             "frame_indices": [],
             "text_span": "这款产品采用编织材质",
-            "subject": "口播者",
-            "predicate": "声称",
-            "value": "产品采用编织材质",
+            "subject": "speaker",
+            "predicate": "claims",
+            "value": "the product uses braided material",
             "attributes": {},
             "source_domains": ["C2_audio_speech"],
             "extractor": "fake",
@@ -153,7 +153,7 @@ def successful_responses_with_two_evidence() -> list[dict[str, object]]:
             "timestamp_status": "available",
         }
     )
-    responses[2]["proposals"][0]["evidence_ids"] = ["v1_visual_000_abc", second_id]
+    responses[1]["proposals"][0]["evidence_ids"] = ["v1_visual_000_abc", second_id]
     responses[5]["grounded_annotations"][0]["evidence_ids"] = ["v1_visual_000_abc", second_id]
     return responses
 
@@ -161,7 +161,7 @@ def successful_responses_with_two_evidence() -> list[dict[str, object]]:
 def successful_v7_responses() -> list[dict[str, object]]:
     responses = successful_responses_with_two_evidence()
     responses[5] = {
-        "accepted_groups": [{"source_proposal_ids": ["p_cm"], "reason": "两种模态证据一致"}],
+        "accepted_groups": [{"source_proposal_ids": ["p_cm"], "reason": "The two modalities agree."}],
         "human_review_queue": [],
     }
     return responses
@@ -210,9 +210,9 @@ class GoldBankPipelineTest(unittest.TestCase):
         self.assertEqual(result.status, "ok")
         self.assertEqual([trace["stage"] for trace in result.agent_traces], [
             "evidence_extraction",
-            "consumer_proposal",
-            "operator_proposal",
-            "strategist_proposal",
+            "cm_proposal",
+            "ss_proposal",
+            "ae_proposal",
             "challenge",
             "adjudication",
         ])
@@ -224,7 +224,8 @@ class GoldBankPipelineTest(unittest.TestCase):
 
         proposer_text = " ".join(str(call) for call in llm.calls[:3])
         self.assertNotIn("Propose only BP", proposer_text)
-        self.assertTrue(any(proposal["task_type"] == "BP" for proposal in result.gold_proposals))
+        bp = next(proposal for proposal in result.gold_proposals if proposal["task_type"] == "BP")
+        self.assertEqual(bp["source_agent"], "bp_compiler")
 
     def test_rejected_proposal_never_enters_gold_items(self):
         responses = successful_responses()
@@ -252,7 +253,7 @@ class GoldBankPipelineTest(unittest.TestCase):
 
     def test_low_confidence_proposal_enters_review_and_cannot_be_passed(self):
         responses = successful_responses()
-        responses[2]["proposals"][0]["proposal_confidence"] = 0.6
+        responses[1]["proposals"][0]["proposal_confidence"] = 0.6
         vlm = FakeGoldClient(responses[:1])
         llm = FakeGoldClient(responses[1:])
 
@@ -327,9 +328,9 @@ class GoldBankPipelineTest(unittest.TestCase):
 
     def test_semantic_duplicates_are_removed(self):
         responses = successful_responses_with_two_evidence()
-        duplicate_proposal = deepcopy(responses[2]["proposals"][0])
+        duplicate_proposal = deepcopy(responses[1]["proposals"][0])
         duplicate_proposal["proposal_id"] = "p_cm_duplicate"
-        responses[2]["proposals"].append(duplicate_proposal)
+        responses[1]["proposals"].append(duplicate_proposal)
         responses[4]["reviews"].append(
             {
                 "review_id": "r_cm_duplicate",
@@ -359,9 +360,9 @@ class GoldBankPipelineTest(unittest.TestCase):
 
     def test_invalid_proposal_is_isolated_instead_of_dropping_agent_batch(self):
         responses = successful_responses_with_two_evidence()
-        responses[1]["proposals"] = [
+        responses[2]["proposals"] = [
             {
-                "proposal_id": "bad_consumer",
+                "proposal_id": "bad_cm",
                 "task_type": "CM",
                 "task_subtype": "CONTENT_MOTIVATION",
                 "target": {"claim": "claim"},
@@ -379,7 +380,7 @@ class GoldBankPipelineTest(unittest.TestCase):
         self.assertEqual(result.status, "partial")
         self.assertTrue(any(item["task_type"] == "CM" for item in result.video_gold_record["grounded_annotations"]))
         self.assertTrue(
-            any("consumer_proposal_parse_error" in item["reason"] for item in result.human_review_queue)
+            any("ss_proposer_proposal_parse_error" in item["reason"] for item in result.human_review_queue)
         )
 
     def test_parse_failure_is_visible_and_not_passed(self):

@@ -115,11 +115,11 @@ def build_bp_proposals_from_evidence(video_id: str, evidence_units: list[Evidenc
             GoldProposal(
                 proposal_id=proposal_id,
                 video_id=video_id,
-                source_agent="local_bp_builder",
+                source_agent="bp_compiler",
                 task_type=GoldTaskType.BP,
                 task_subtype=subtype,
                 target={"subject": unit.subject, "predicate": unit.predicate},
-                proposed_gold={"value": unit.value, "text_span": unit.text_span},
+                proposed_gold={"value": unit.value},
                 evidence_ids=(unit.evidence_id,),
                 reasoning_edges=((unit.evidence_id, f"{unit.subject}:{unit.predicate}", "SUPPORTED"),),
                 proposal_confidence=unit.confidence,
@@ -267,34 +267,34 @@ class GoldBankPipeline:
         human_review_queue: list[dict[str, object]] = []
         status = "ok"
 
-        for perspective, stage in (
-            ("consumer", "consumer_proposal"),
-            ("operator", "operator_proposal"),
-            ("strategist", "strategist_proposal"),
+        for generator, stage in (
+            ("cm_proposer", "cm_proposal"),
+            ("ss_proposer", "ss_proposal"),
+            ("ae_proposer", "ae_proposal"),
         ):
-            system, user = build_proposer_prompt(perspective, video_id, [unit.to_dict() for unit in evidence_units])
+            system, user = build_proposer_prompt(generator, video_id, [unit.to_dict() for unit in evidence_units])
             call = self.llm_client.call_text_only(system, user, response_format="json_object")
             if not call.success:
                 status = "partial"
-                traces.append(_trace(stage, perspective, call, error=call.error))
+                traces.append(_trace(stage, generator, call, error=call.error))
                 continue
             try:
                 proposals_raw, abstentions = parse_proposal_response(call.raw_response)
                 proposals: list[GoldProposal] = []
                 for ordinal, raw_proposal in enumerate(proposals_raw):
                     try:
-                        proposal = normalize_proposals(video_id, perspective, [raw_proposal])[0]
+                        proposal = normalize_proposals(video_id, generator, [raw_proposal])[0]
                     except (ValueError, IndexError) as exc:
                         status = "partial"
                         human_review_queue.append(
-                            _review_queue_item(video_id, f"{perspective}_proposal_parse_error: {exc}", raw_proposal)
+                            _review_queue_item(video_id, f"{generator}_proposal_parse_error: {exc}", raw_proposal)
                         )
                         continue
                     if proposal.proposal_id in used_proposal_ids:
                         proposal = replace(
                             proposal,
                             proposal_id=(
-                                f"{video_id}_{perspective}_{proposal.task_type.value.lower()}_{ordinal:03d}_"
+                                f"{video_id}_{generator}_{proposal.task_type.value.lower()}_{ordinal:03d}_"
                                 f"{stable_digest({'target': proposal.target, 'gold': proposal.proposed_gold})}"
                             ),
                         )
@@ -304,17 +304,17 @@ class GoldBankPipeline:
                 for abstention in abstentions:
                     human_review_queue.append(
                         {
-                            "review_item_id": f"hr_{video_id}_{perspective}_abstain_{len(human_review_queue):03d}",
+                            "review_item_id": f"hr_{video_id}_{generator}_abstain_{len(human_review_queue):03d}",
                             "video_id": video_id,
                             "proposal_id": "",
                             "reason": "ABSTENTION",
                             "abstention": abstention,
                         }
                     )
-                traces.append(_trace(stage, perspective, call, {"proposals": proposals_raw, "abstentions": abstentions}))
+                traces.append(_trace(stage, generator, call, {"proposals": proposals_raw, "abstentions": abstentions}))
             except ModelOutputError as exc:
                 status = "partial"
-                traces.append(_trace(stage, perspective, call, error=str(exc)))
+                traces.append(_trace(stage, generator, call, error=str(exc)))
 
         proposal_dicts = [proposal.to_dict() for proposal in all_proposals]
         eligible_proposal_dicts: list[dict[str, object]] = []

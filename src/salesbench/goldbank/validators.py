@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from ..utils import clean_text
@@ -36,6 +37,7 @@ PRIVATE_KEYS = {
 }
 
 DIRECT_EVIDENCE_MODALITIES = {"visual", "asr", "ocr"}
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 INFERENCE_MARKERS = (
     "probably",
@@ -106,6 +108,14 @@ def _text_blob(payload: object) -> str:
     return clean_text(payload).lower()
 
 
+def _contains_cjk(payload: object) -> bool:
+    if isinstance(payload, dict):
+        return any(_contains_cjk(value) for value in payload.values())
+    if isinstance(payload, (list, tuple)):
+        return any(_contains_cjk(value) for value in payload)
+    return isinstance(payload, str) and bool(_CJK_RE.search(payload))
+
+
 def validate_evidence_unit(unit: EvidenceUnit) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if not unit.evidence_id or not unit.video_id:
@@ -127,6 +137,15 @@ def validate_evidence_unit(unit: EvidenceUnit) -> list[ValidationIssue]:
         issues.append(ValidationIssue("MISSING_FRAME_REFERENCE", "ERROR", unit.evidence_id, "Visual evidence requires frame_indices"))
     if unit.modality.value in {"asr", "ocr"} and not unit.text_span:
         issues.append(ValidationIssue("MISSING_TEXT_SPAN", "ERROR", unit.evidence_id, "ASR/OCR evidence requires text_span"))
+    if _contains_cjk((unit.subject, unit.predicate, unit.value)):
+        issues.append(
+            ValidationIssue(
+                "NON_ENGLISH_NORMALIZED_TEXT",
+                "ERROR",
+                unit.evidence_id,
+                "Evidence subject, predicate, and value must use English; source text belongs in text_span",
+            )
+        )
     return issues
 
 

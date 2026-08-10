@@ -16,6 +16,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from salesbench.goldbank.prompts import (
+    BP_COMPILER_CONTRACT,
     PROMPT_VERSION,
     build_adjudicator_prompt,
     build_challenger_prompt,
@@ -141,32 +142,44 @@ def collect_prompt_snapshot() -> list[dict[str, Any]]:
             ],
         }
     ]
+    prompts.append(
+        {
+            "id": "bp_compiler",
+            "name": "BP Deterministic Compiler",
+            "stage": "BP candidate generation",
+            "version": PROMPT_VERSION,
+            "system": BP_COMPILER_CONTRACT,
+            "user_template": "Validated EvidenceUnits",
+            "observed": ["BP 不调用 LLM，由本地规则从直接证据生成。"],
+            "recommendations": ["人工审核应重点检查上游 EvidenceUnit，而不是改写 BP 模板。"],
+        }
+    )
     proposer_notes = {
-        "consumer": (
-            ["AE CONTENT_MOTIVATION 实际出现 CM 风格的 claim/relation 字段。"],
-            ["为每个 AE subtype 给出独立 JSON Schema，禁止 relation/claim。", "减少 Consumer 与 Strategist 在 VALUE_PROPOSITION 上的职责重叠。"],
+        "cm_proposer": (
+            ["CM 需要严格的跨模态与观察窗口约束。"],
+            ["验证至少两种模态；NOT_SHOWN 仅允许完整视频观察窗口。"],
         ),
-        "operator": (
-            ["CM 当前只强制两个 evidence_id，没有强制两个不同模态。"],
-            ["CM proposal 增加 modality_pair，并由本地规则验证至少两种模态。", "NOT_SHOWN 需要明确负证据窗口，避免把未采到当作未出现。"],
+        "ss_proposer": (
+            ["SS 容易把一般产品描述过度解释为说服策略。"],
+            ["要求两条证据共同支持明确的机制，不预测效果。"],
         ),
-        "strategist": (
-            ["部分模型返回 1、2 作为 proposal_id，跨样本追踪性较弱。"],
-            ["模型不再自报 proposal_id，由本地代码始终生成 canonical ID。", "对子类型分别约束 target 与 proposed_gold 的必填字段。"],
+        "ae_proposer": (
+            ["AE 容易越界为真实用户画像或转化结论。"],
+            ["限定为内容所对应的需求、场景或决策障碍。"],
         ),
     }
-    for role in ("consumer", "operator", "strategist"):
-        system, user = build_proposer_prompt(role, "{{video_id}}", placeholder_evidence)
+    for generator in ("cm_proposer", "ss_proposer", "ae_proposer"):
+        system, user = build_proposer_prompt(generator, "{{video_id}}", placeholder_evidence)
         prompts.append(
             {
-                "id": role,
-                "name": f"{role.title()} Proposer",
+                "id": generator,
+                "name": generator.replace("_", " ").title(),
                 "stage": "GroundedAnnotation proposal",
                 "version": PROMPT_VERSION,
                 "system": system,
                 "user_template": user,
-                "observed": proposer_notes[role][0],
-                "recommendations": proposer_notes[role][1],
+                "observed": proposer_notes[generator][0],
+                "recommendations": proposer_notes[generator][1],
             }
         )
     proposal = {
@@ -524,7 +537,7 @@ def render_workbench(
 #salesbench-audit-workbench .evidence-stack{display:grid;gap:9px;margin:12px 0}#salesbench-audit-workbench .evidence-unit{padding:11px;border:1px solid var(--line);border-radius:11px;background:var(--panel)}#salesbench-audit-workbench .evidence-unit .quote{margin:7px 0;padding:8px 10px;border-left:3px solid var(--accent);background:var(--card);border-radius:5px}#salesbench-audit-workbench .localization{color:var(--warn);font-size:12px}#salesbench-audit-workbench .frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-top:9px}#salesbench-audit-workbench .frame{border:1px solid var(--line);padding:0;border-radius:9px;overflow:hidden;background:var(--card);color:var(--ink);text-align:left;cursor:pointer}#salesbench-audit-workbench .frame img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover;background:var(--panel)}#salesbench-audit-workbench .frame span{display:block;padding:6px 8px;font-size:11px}#salesbench-audit-workbench .frame-missing{min-height:90px;display:grid;place-items:center;border:1px dashed var(--line);border-radius:9px;color:var(--muted)}#salesbench-audit-workbench .lightbox{position:fixed;inset:0;z-index:9999;background:rgba(7,14,25,.88);display:none;align-items:center;justify-content:center;padding:24px}#salesbench-audit-workbench .lightbox.open{display:flex}#salesbench-audit-workbench .lightbox button{position:absolute;top:18px;right:18px;border:0;border-radius:999px;background:#fff;color:#111;padding:8px 12px;cursor:pointer}#salesbench-audit-workbench .lightbox img{max-width:min(92vw,1000px);max-height:88vh;object-fit:contain;border-radius:10px}
 @media(max-width:900px){#salesbench-audit-workbench .stats{grid-template-columns:repeat(3,1fr)}#salesbench-audit-workbench .flow{grid-template-columns:repeat(2,1fr)}#salesbench-audit-workbench .toolbar{grid-template-columns:1fr 1fr}}@media(max-width:560px){#salesbench-audit-workbench .hero{padding:16px}#salesbench-audit-workbench .stats{grid-template-columns:repeat(2,1fr)}#salesbench-audit-workbench .grid,#salesbench-audit-workbench .flow,#salesbench-audit-workbench .toolbar{grid-template-columns:1fr}#salesbench-audit-workbench .tabs{display:grid;grid-template-columns:1fr 1fr}#salesbench-audit-workbench .tab{border-radius:10px}}
 </style>
-<header class="hero"><div class="eyebrow">SalesBench · 64-video GPT-4o pilot</div><h1 id="sbaw-title">Prompt 与人工审计工作台</h1><p class="muted">先冻结 Evidence，再重新编译 QA，最后校准 Judge。当前结果是可诊断的 pilot draft，不是已经人工验收的正式 benchmark。</p><div class="alert"><strong>审核结论：</strong>Evidence 和 QA 都要审，但 Evidence/Annotation 是第一质量门；QA 不能修复错误证据。Judge 还需要独立人工校准。</div><p><span class="tag">v6 运行快照：<b id="runtime-prompt-version"></b></span> <span class="tag">v7 当前代码：<b id="current-prompt-version"></b></span></p><div id="sbaw-stats" class="stats"></div></header>
+<header class="hero"><div class="eyebrow">SalesBench · 64-video GPT-4o pilot</div><h1 id="sbaw-title">Prompt 与人工审计工作台</h1><p class="muted">先冻结 Evidence，再重新编译 QA，最后校准 Judge。当前结果是可诊断的 pilot draft，不是已经人工验收的正式 benchmark。</p><div class="alert"><strong>审核结论：</strong>Evidence 和 QA 都要审，但 Evidence/Annotation 是第一质量门；QA 不能修复错误证据。Judge 还需要独立人工校准。</div><p><span class="tag">v6 运行快照：<b id="runtime-prompt-version"></b></span> <span class="tag">v8 当前代码：<b id="current-prompt-version"></b></span></p><div id="sbaw-stats" class="stats"></div></header>
 <nav class="tabs" role="tablist" aria-label="工作台视图"><button class="tab" role="tab" data-tab="delivery" aria-selected="true">交付地图</button><button class="tab" role="tab" data-tab="prompts" aria-selected="false">当前 Prompt</button><button class="tab" role="tab" data-tab="evidence" aria-selected="false">Evidence 审计</button><button class="tab" role="tab" data-tab="qa" aria-selected="false">QA 审计</button><button class="tab" role="tab" data-tab="judge" aria-selected="false">Judge 审计</button></nav>
 <main><section class="panel active" data-panel="delivery"><div id="delivery-view"></div></section><section class="panel" data-panel="prompts"><div id="prompt-view"></div></section><section class="panel" data-panel="evidence"><div id="evidence-view"></div></section><section class="panel" data-panel="qa"><div id="qa-view"></div></section><section class="panel" data-panel="judge"><div id="judge-view"></div></section></main>
 <footer class="footer"><span class="muted" id="preview-note"></span><button class="button" type="button" onclick="exportDecisions()">导出人工审核决定 JSON</button></footer>
@@ -532,10 +545,10 @@ def render_workbench(
 <script type="application/json" id="sbaw-data">__PAYLOAD__</script>
 <script>
 (()=>{const ROOT=document.getElementById('salesbench-audit-workbench');const PACK=JSON.parse(document.getElementById('sbaw-data').textContent);const D=PACK.data;const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const pretty=v=>esc(JSON.stringify(v,null,2));const key=id=>`salesbench-audit:${D.release.prompt_version}:${id}`;
-function stat(label,value){return `<div class="stat"><span class="muted">${esc(label)}</span><b>${esc(value)}</b></div>`}document.getElementById('runtime-prompt-version').textContent=D.release.runtime_prompt_version||D.release.prompt_version||'unknown';document.getElementById('current-prompt-version').textContent=D.release.current_prompt_version||'evidence-prompt-v7';document.getElementById('sbaw-stats').innerHTML=[stat('视频',D.counts.videos),stat('EvidenceUnit',D.counts.evidence_units),stat('自动接受 Annotation',D.counts.annotations),stat('人工队列',D.counts.review_queue),stat('QA',D.counts.qa),stat('Judge',D.counts.judge_rows)].join('');document.getElementById('preview-note').textContent=D.preview_notice||'完整本地审计视图；审核决定仅保存在当前浏览器。';
+function stat(label,value){return `<div class="stat"><span class="muted">${esc(label)}</span><b>${esc(value)}</b></div>`}document.getElementById('runtime-prompt-version').textContent=D.release.runtime_prompt_version||D.release.prompt_version||'unknown';document.getElementById('current-prompt-version').textContent=D.release.current_prompt_version||'evidence-prompt-v8';document.getElementById('sbaw-stats').innerHTML=[stat('视频',D.counts.videos),stat('EvidenceUnit',D.counts.evidence_units),stat('自动接受 Annotation',D.counts.annotations),stat('人工队列',D.counts.review_queue),stat('QA',D.counts.qa),stat('Judge',D.counts.judge_rows)].join('');document.getElementById('preview-note').textContent=D.preview_notice||'完整本地审计视图；审核决定仅保存在当前浏览器。';
 function showTab(id){ROOT.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===id)));ROOT.querySelectorAll('[data-panel]').forEach(p=>p.classList.toggle('active',p.dataset.panel===id));}ROOT.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
 function renderDelivery(){const f=D.delivery.formal_root||'',s=D.delivery.smoke_root||'';document.getElementById('delivery-view').innerHTML=`<div class="grid"><article class="card"><h2>物理目录</h2><p><span class="tag">FORMAL</span> <span class="mono">${esc(f)}</span></p><p><span class="tag">SMOKE</span> <span class="mono">${esc(s)}</span></p><p class="muted">smoke 与正式结果物理分离；v7 新运行必须写入新目录，不能覆盖当前 v6 快照。</p><p><b>当前数据：</b>${esc(D.release.runtime_prompt_version)} · <b>下一次运行：</b>${esc(D.release.current_prompt_version)}</p></article><article class="card"><h2>四层正式交付</h2><ol><li><b>EvidenceDataset</b>：审核并冻结后才是 Gold 来源</li><li><b>Prompt manifest</b>：版本与运行契约</li><li><b>QA</b>：公开问题 + 私有 Gold</li><li><b>Evaluation</b>：predictions、Judge 明细、校准报告</li></ol><p class="muted">互动分析是独立私有实验，不属于这四层。</p></article></div><h2 style="margin-top:18px">三道人工质量门</h2><div class="flow"><article class="gate primary"><h3>Gate E · Evidence</h3><p>全审 296 条队列 + 221 条 INFERRED + 风险 DIRECT；优先处理 21 个缺 BP/CM 视频。</p></article><article class="gate"><h3>冻结 EvidenceDataset</h3><p>接受、修订、拒绝都写入审核记录；冻结后重新编译 QA。</p></article><article class="gate"><h3>Gate Q · QA</h3><p>64 视频 pilot 的 384 题建议全量通读，问题必须回溯到 annotation。</p></article><article class="gate"><h3>Gate J · Judge</h3><p>至少 64 题双人评分 + 裁决，校准五档评分后才能作为榜单指标。</p></article></div>`}
-function renderPrompts(){const opts=PACK.prompts.map((p,i)=>`<option value="${i}">${esc(p.name)} · ${esc(p.stage)}</option>`).join('');document.getElementById('prompt-view').innerHTML=`<div class="alert"><strong>版本边界：</strong>这里展示的是 v7 当前代码 Prompt，用于下一次 smoke；Evidence/QA/Judge 审计数据仍来自 v6 运行快照。</div><div class="card"><div class="toolbar"><select class="control" id="prompt-select" aria-label="选择 Prompt">${opts}</select><span class="tag" id="prompt-version"></span></div><div id="prompt-detail"></div></div>`;const select=document.getElementById('prompt-select');const draw=()=>{const p=PACK.prompts[Number(select.value)];document.getElementById('prompt-version').textContent=p.version;document.getElementById('prompt-detail').innerHTML=`<div class="grid"><div><h2>${esc(p.name)}</h2><h3>v7 当前 System Prompt（代码原文）</h3><pre>${esc(p.system)}</pre><details><summary>下一次运行的 User Payload 模板</summary><pre>${typeof p.user_template==='string'?esc(p.user_template):pretty(p.user_template)}</pre></details></div><div><article class="card"><h3>v6 运行结果中观察到</h3><ul>${p.observed.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></article><article class="card" style="margin-top:10px"><h3>v7 已落实 / 后续验证</h3><ol>${p.recommendations.map(x=>`<li>${esc(x)}</li>`).join('')}</ol></article></div></div>`};select.addEventListener('change',draw);draw()}
+function renderPrompts(){const opts=PACK.prompts.map((p,i)=>`<option value="${i}">${esc(p.name)} · ${esc(p.stage)}</option>`).join('');document.getElementById('prompt-view').innerHTML=`<div class="alert"><strong>版本边界：</strong>这里展示的是 v8 当前代码 Prompt，用于下一次 smoke；Evidence/QA/Judge 审计数据仍来自 v6 运行快照。</div><div class="card"><div class="toolbar"><select class="control" id="prompt-select" aria-label="选择 Prompt">${opts}</select><span class="tag" id="prompt-version"></span></div><div id="prompt-detail"></div></div>`;const select=document.getElementById('prompt-select');const draw=()=>{const p=PACK.prompts[Number(select.value)];document.getElementById('prompt-version').textContent=p.version;document.getElementById('prompt-detail').innerHTML=`<div class="grid"><div><h2>${esc(p.name)}</h2><h3>v8 当前 System Prompt（代码原文）</h3><pre>${esc(p.system)}</pre><details><summary>下一次运行的 User Payload 模板</summary><pre>${typeof p.user_template==='string'?esc(p.user_template):pretty(p.user_template)}</pre></details></div><div><article class="card"><h3>v6 运行结果中观察到</h3><ul>${p.observed.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></article><article class="card" style="margin-top:10px"><h3>v8 已落实 / 后续验证</h3><ol>${p.recommendations.map(x=>`<li>${esc(x)}</li>`).join('')}</ol></article></div></div>`};select.addEventListener('change',draw);draw()}
 function decisionButtons(id){const current=localStorage.getItem(key(id))||'';return `<div class="decision" data-decision="${esc(id)}">${[['accept','接受'],['revise','修订'],['reject','拒绝'],['defer','待定']].map(([v,l])=>`<button type="button" data-value="${v}" class="${current===v?'active':''}">${l}</button>`).join('')}</div>`}function bindDecisions(){ROOT.querySelectorAll('[data-decision] button').forEach(b=>b.addEventListener('click',()=>{const box=b.closest('[data-decision]');localStorage.setItem(key(box.dataset.decision),b.dataset.value);box.querySelectorAll('button').forEach(x=>x.classList.toggle('active',x===b));}))}
 function renderFrames(frames){if(!frames||!frames.length)return '<div class="frame-missing">没有可显示的关联帧</div>';return `<div class="frame-grid">${frames.map(frame=>{const caption=`帧 ${frame.frame_index} · ${frame.timestamp_s==null?'时间未知':Number(frame.timestamp_s).toFixed(2)+'s'} · ${frame.relation||''}`;return frame.thumbnail_src?`<button class="frame" type="button" onclick="openLightbox('${esc(frame.thumbnail_src)}','${esc(caption)}')"><img loading="lazy" decoding="async" src="${esc(frame.thumbnail_src)}" alt="${esc(caption)}"><span>${esc(caption)}</span></button>`:`<div class="frame-missing">${esc(caption)}<br>缩略图缺失</div>`}).join('')}</div>`}
 function renderEvidenceItems(items){return `<div class="evidence-stack">${(items||[]).map(item=>`<section class="evidence-unit"><div><span class="tag">${esc(item.modality||'missing')}</span><span class="mono">${esc(item.evidence_id||'无直接 Evidence ID')}</span></div><h3>${esc(item.semantic_text||'未提供结构化内容')}</h3>${item.text_span?`<div class="quote"><b>原文：</b>${esc(item.text_span)}</div>`:''}${item.localization_note?`<div class="localization">${esc(item.localization_note)}</div>`:''}${renderFrames(item.frames)}</section>`).join('')}</div>`}

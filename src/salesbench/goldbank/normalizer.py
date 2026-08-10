@@ -21,6 +21,7 @@ from .schema import (
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _FRAME_REFERENCE_RE = re.compile(r"frame[_-]?(\d+)", re.IGNORECASE)
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _CONFIDENCE_LABELS = {
     "very_high": 0.95,
     "very high": 0.95,
@@ -32,18 +33,18 @@ _CONFIDENCE_LABELS = {
     "very low": 0.25,
 }
 _PROPOSER_ALLOWED_SUBTYPES = {
-    "consumer": {
+    "ae_proposer": {
         (GoldTaskType.AE, "AUDIENCE_NEED_FIT"),
         (GoldTaskType.AE, "USAGE_CONTEXT"),
         (GoldTaskType.AE, "DECISION_STATE"),
         (GoldTaskType.AE, "CONTENT_MOTIVATION"),
     },
-    "operator": {
+    "cm_proposer": {
         (GoldTaskType.CM, "CLAIM_EVIDENCE_RELATION"),
         (GoldTaskType.CM, "CLAIM_PARTIAL_SUPPORT"),
         (GoldTaskType.CM, "TEXT_VISUAL_CONSISTENCY"),
     },
-    "strategist": {
+    "ss_proposer": {
         (GoldTaskType.SS, "HOOK_MECHANISM"),
         (GoldTaskType.SS, "VALUE_PROPOSITION"),
         (GoldTaskType.SS, "TRUST_MECHANISM"),
@@ -52,6 +53,14 @@ _PROPOSER_ALLOWED_SUBTYPES = {
         (GoldTaskType.SS, "FUNNEL_ROLE"),
     },
 }
+
+
+def _contains_cjk(payload: object) -> bool:
+    if isinstance(payload, dict):
+        return any(_contains_cjk(value) for value in payload.values())
+    if isinstance(payload, (list, tuple)):
+        return any(_contains_cjk(value) for value in payload)
+    return isinstance(payload, str) and bool(_CJK_RE.search(payload))
 
 
 def normalize_text(value: object) -> str:
@@ -170,24 +179,26 @@ def normalize_evidence_units(video_id: str, raw_units: list[dict[str, object]]) 
     return units
 
 
-def normalize_proposals(video_id: str, proposer: str, raw: list[dict[str, object]]) -> list[GoldProposal]:
+def normalize_proposals(video_id: str, generator: str, raw: list[dict[str, object]]) -> list[GoldProposal]:
     proposals: list[GoldProposal] = []
-    proposer = normalize_text(proposer).lower()
+    generator = normalize_text(generator).lower()
     for idx, record in enumerate(raw):
         payload = dict(record)
         task_type = GoldTaskType(normalize_text(payload.get("task_type")).upper())
         subtype = normalize_task_subtype(task_type, payload.get("task_subtype"))
-        if (task_type, subtype) not in _PROPOSER_ALLOWED_SUBTYPES.get(proposer, set()):
-            raise ValueError(f"{proposer} proposer cannot emit {task_type.value}/{subtype}")
+        if (task_type, subtype) not in _PROPOSER_ALLOWED_SUBTYPES.get(generator, set()):
+            raise ValueError(f"{generator} cannot emit {task_type.value}/{subtype}")
         target = payload.get("target")
         proposed_gold = payload.get("proposed_gold")
         if not isinstance(target, dict) or not target:
             raise ValueError("Proposal target must be a non-empty object")
         if not isinstance(proposed_gold, dict) or not proposed_gold:
             raise ValueError("Proposal proposed_gold must be a non-empty object")
+        if _contains_cjk((target, proposed_gold, payload.get("reasoning_edges", []))):
+            raise ValueError("Proposal normalized natural-language fields must use English")
         payload["task_subtype"] = subtype
         payload["video_id"] = video_id
-        payload["source_agent"] = proposer
+        payload["source_agent"] = generator
         proposal_id = normalize_text(payload.get("proposal_id"))
         if proposal_id.lower() in {"optional", "optional string", "none", "null", "n/a"}:
             proposal_id = ""

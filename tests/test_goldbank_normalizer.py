@@ -18,9 +18,9 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 {
                     "modality": "image",
                     "evidence_id": "frame_006.jpg",
-                    "subject": "产品",
-                    "predicate": "颜色",
-                    "value": "红色",
+                    "subject": "product",
+                    "predicate": "has color",
+                    "value": "red",
                     "confidence": "high",
                 }
             ],
@@ -39,24 +39,26 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 {
                     "modality": "text",
                     "evidence_id": "asr_subtitles",
-                    "subject": "产品",
-                    "predicate": "价格",
-                    "value": "十几元",
+                    "text_span": "这个产品只要十几元",
+                    "subject": "speaker",
+                    "predicate": "claims a price",
+                    "value": "a little over ten yuan",
                     "confidence": "medium",
                 },
                 {
                     "modality": "text",
                     "evidence_id": "asr_subtitles",
-                    "subject": "产品",
-                    "predicate": "用途",
-                    "value": "厨房收纳",
+                    "text_span": "适合厨房收纳",
+                    "subject": "speaker",
+                    "predicate": "claims a use",
+                    "value": "kitchen storage",
                     "confidence": 90,
                 },
             ],
         )
 
         self.assertTrue(all(unit.modality == EvidenceModality.ASR for unit in units))
-        self.assertEqual([unit.text_span for unit in units], ["十几元", "厨房收纳"])
+        self.assertEqual([unit.text_span for unit in units], ["这个产品只要十几元", "适合厨房收纳"])
         self.assertEqual([unit.confidence for unit in units], [0.75, 0.9])
         self.assertEqual(len({unit.evidence_id for unit in units}), 2)
         self.assertTrue(all(not validate_evidence_unit(unit) for unit in units))
@@ -78,11 +80,11 @@ class EvidenceNormalizerTest(unittest.TestCase):
         self.assertEqual(unit.modality, EvidenceModality.METADATA)
         self.assertTrue(any(issue.code == "NON_DIRECT_EVIDENCE" for issue in validate_evidence_unit(unit)))
 
-    def test_proposer_cannot_emit_another_perspectives_task_subtype(self):
-        with self.assertRaisesRegex(ValueError, "consumer proposer cannot emit"):
+    def test_proposer_cannot_emit_another_tasks_subtype(self):
+        with self.assertRaisesRegex(ValueError, "ae_proposer cannot emit"):
             normalize_proposals(
                 "v1",
-                "consumer",
+                "ae_proposer",
                 [
                     {
                         "task_type": "CM",
@@ -96,16 +98,16 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 ],
             )
 
-        with self.assertRaisesRegex(ValueError, "consumer proposer cannot emit"):
+        with self.assertRaisesRegex(ValueError, "ae_proposer cannot emit"):
             normalize_proposals(
                 "v1",
-                "consumer",
+                "ae_proposer",
                 [
                     {
                         "task_type": "SS",
                         "task_subtype": "VALUE_PROPOSITION",
-                        "target": {"segment": "开场"},
-                        "proposed_gold": {"label": "卖点"},
+                        "target": {"segment": "opening"},
+                        "proposed_gold": {"label": "value proposition"},
                         "evidence_ids": ["e1", "e2"],
                         "reasoning_edges": [],
                         "proposal_confidence": 0.9,
@@ -113,16 +115,16 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 ],
             )
 
-        with self.assertRaisesRegex(ValueError, "operator proposer cannot emit"):
+        with self.assertRaisesRegex(ValueError, "cm_proposer cannot emit"):
             normalize_proposals(
                 "v1",
-                "operator",
+                "cm_proposer",
                 [
                     {
                         "task_type": "SS",
                         "task_subtype": "HOOK_MECHANISM",
-                        "target": {"segment": "开场"},
-                        "proposed_gold": {"label": "提问"},
+                        "target": {"segment": "opening"},
+                        "proposed_gold": {"label": "question hook"},
                         "evidence_ids": ["e1", "e2"],
                         "reasoning_edges": [],
                         "proposal_confidence": 0.9,
@@ -133,7 +135,7 @@ class EvidenceNormalizerTest(unittest.TestCase):
     def test_placeholder_proposal_id_is_replaced_locally(self):
         proposal = normalize_proposals(
             "v1",
-            "strategist",
+            "ss_proposer",
             [
                 {
                     "proposal_id": "optional",
@@ -148,7 +150,44 @@ class EvidenceNormalizerTest(unittest.TestCase):
             ],
         )[0]
 
-        self.assertTrue(proposal.proposal_id.startswith("v1_strategist_ss_000_"))
+        self.assertTrue(proposal.proposal_id.startswith("v1_ss_proposer_ss_000_"))
+
+    def test_normalized_evidence_rejects_cjk_outside_verbatim_text_span(self):
+        unit = normalize_evidence_units(
+            "v1",
+            [
+                {
+                    "modality": "asr",
+                    "text_span": "这款产品采用编织材质",
+                    "subject": "口播者",
+                    "predicate": "claims",
+                    "value": "braided material",
+                    "confidence": 0.9,
+                }
+            ],
+        )[0]
+
+        issues = validate_evidence_unit(unit)
+
+        self.assertTrue(any(issue.code == "NON_ENGLISH_NORMALIZED_TEXT" for issue in issues))
+
+    def test_normalized_proposal_rejects_cjk_natural_language(self):
+        with self.assertRaisesRegex(ValueError, "English"):
+            normalize_proposals(
+                "v1",
+                "ss_proposer",
+                [
+                    {
+                        "task_type": "SS",
+                        "task_subtype": "HOOK_MECHANISM",
+                        "target": {"segment": "开场", "mechanism": "result first"},
+                        "proposed_gold": {"label": "result-first", "answer": "The opening shows the result."},
+                        "evidence_ids": ["e1", "e2"],
+                        "reasoning_edges": [],
+                        "proposal_confidence": 0.9,
+                    }
+                ],
+            )
 
 
 if __name__ == "__main__":

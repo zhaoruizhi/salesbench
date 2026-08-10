@@ -12,6 +12,7 @@ from salesbench.goldbank.parsing import (  # noqa: E402
     parse_proposal_response,
 )
 from salesbench.goldbank.prompts import (  # noqa: E402
+    BP_COMPILER_CONTRACT,
     PROMPT_VERSION,
     build_adjudicator_prompt,
     build_challenger_prompt,
@@ -25,19 +26,25 @@ class GoldBankPromptTest(unittest.TestCase):
         system, user_blocks = build_evidence_extractor_prompt("v1", {"C3_text_language": {"title": "hello"}})
         text = system + " " + str(user_blocks)
 
-        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v7")
+        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v8")
         self.assertIn("EvidenceUnit", text)
-        self.assertNotIn("generate questions", text.lower())
-        self.assertIn("自然语言字段必须使用中文", system)
-        self.assertIn("口播", system)
-        self.assertIn("声称", system)
-        self.assertIn("禁止把坐标", system)
+        self.assertIn("Do not generate questions", system)
+        self.assertIn("English", system)
+        self.assertIn("subject='speaker', predicate='claims'", system)
+        self.assertIn("verbatim", system)
         self.assertIn("start_s", system)
         self.assertIn("end_s", system)
+        self.assertNotRegex(system, r"[\u4e00-\u9fff]")
+
+    def test_bp_has_an_explicit_deterministic_compiler_contract(self):
+        self.assertIn("BP", BP_COMPILER_CONTRACT)
+        self.assertIn("deterministic", BP_COMPILER_CONTRACT.lower())
+        self.assertIn("EvidenceUnit", BP_COMPILER_CONTRACT)
+        self.assertNotRegex(BP_COMPILER_CONTRACT, r"[\u4e00-\u9fff]")
 
     def test_all_proposers_must_reference_existing_evidence_ids(self):
         system, user = build_proposer_prompt(
-            "operator",
+            "cm_proposer",
             "v1",
             [{"evidence_id": "e1", "video_id": "v1", "subject": "claim"}],
         )
@@ -45,51 +52,58 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn("evidence_id", system + user)
         self.assertIn("e1", user)
         self.assertIn("abstentions", system + user)
-        self.assertIn("至少两个不同的 evidence_ids", system)
+        self.assertIn("at least two distinct evidence_ids", system)
         self.assertIn("proposal_confidence", system)
         self.assertIn("reasoning_edges", system)
 
     def test_proposer_contract_has_controlled_tasks_subtypes_and_exact_schema(self):
-        consumer, _ = build_proposer_prompt("consumer", "v1", [])
-        operator, _ = build_proposer_prompt("operator", "v1", [])
-        strategist, _ = build_proposer_prompt("strategist", "v1", [])
+        ae, _ = build_proposer_prompt("ae_proposer", "v1", [])
+        cm, _ = build_proposer_prompt("cm_proposer", "v1", [])
+        ss, _ = build_proposer_prompt("ss_proposer", "v1", [])
 
-        self.assertIn("AUDIENCE_NEED_FIT", consumer)
-        self.assertIn("CLAIM_EVIDENCE_RELATION", operator)
-        self.assertIn("HOOK_MECHANISM", strategist)
-        self.assertIn('"task_type":"AE"', consumer)
-        self.assertIn('"task_type":"CM"', operator)
-        self.assertIn('"task_type":"SS"', strategist)
-        self.assertNotIn('"task_type":"SS"', consumer)
-        self.assertNotIn('"task_type":"SS"', operator)
-        self.assertNotIn('"task_type":"AE"', operator)
-        self.assertNotIn('"task_type":"CM"', strategist)
-        self.assertNotIn('"task_type":"AE"', strategist)
-        for prompt in (consumer, operator, strategist):
+        self.assertIn("AUDIENCE_NEED_FIT", ae)
+        self.assertIn("CLAIM_EVIDENCE_RELATION", cm)
+        self.assertIn("HOOK_MECHANISM", ss)
+        self.assertIn('"task_type":"AE"', ae)
+        self.assertIn('"task_type":"CM"', cm)
+        self.assertIn('"task_type":"SS"', ss)
+        self.assertNotIn('"task_type":"SS"', ae)
+        self.assertNotIn('"task_type":"SS"', cm)
+        self.assertNotIn('"task_type":"AE"', cm)
+        self.assertNotIn('"task_type":"CM"', ss)
+        self.assertNotIn('"task_type":"AE"', ss)
+        for prompt in (ae, cm, ss):
             self.assertIn('"target"', prompt)
             self.assertIn('"proposed_gold"', prompt)
-            self.assertIn("不要输出 proposal_id", prompt)
-            self.assertIn("自然语言", prompt)
-        self.assertIn("audience_need", consumer)
-        self.assertIn("usage_context", consumer)
-        self.assertIn("decision_state", consumer)
-        self.assertIn("content_motivation", consumer)
-        self.assertIn("AE 禁止使用 claim", consumer)
-        self.assertIn("至少两种不同模态", operator)
-        self.assertIn("modality_pair", operator)
-        self.assertIn("NOT_SHOWN", operator)
-        self.assertIn("完整观察窗口", operator)
+            self.assertIn("Do not output proposal_id", prompt)
+            self.assertIn("English", prompt)
+            self.assertNotRegex(prompt, r"[\u4e00-\u9fff]")
+        self.assertIn("audience_need", ae)
+        self.assertIn("usage_context", ae)
+        self.assertIn("decision_state", ae)
+        self.assertIn("content_motivation", ae)
+        self.assertIn("must not claim a real audience profile", ae)
+        self.assertIn("two distinct modalities", cm)
+        self.assertIn("modality_pair", cm)
+        self.assertIn("NOT_SHOWN", cm)
+        self.assertIn("complete-video observation window", cm)
+
+    def test_unknown_or_legacy_proposer_name_is_rejected(self):
+        for name in ("consumer", "operator", "strategist", "unknown"):
+            with self.assertRaisesRegex(ValueError, "Unknown task generator"):
+                build_proposer_prompt(name, "v1", [])
 
     def test_challenger_can_request_human_review_and_cannot_default_pass(self):
         system, user = build_challenger_prompt("v1", [], [])
 
         self.assertIn("HUMAN_REVIEW", system + user)
-        self.assertIn("不得默认", system + user)
-        self.assertIn("每个输入 proposal", system)
+        self.assertIn("must not default", system + user)
+        self.assertIn("every input proposal", system)
         self.assertIn("suggested_revision", system)
         for task_type in ("BP", "CM", "SS", "AE"):
             self.assertIn(task_type, system)
-        self.assertIn("issues 中的自然语言必须使用中文", system)
+        self.assertIn("issues and suggested_revision must use English", system)
+        self.assertNotRegex(system, r"[\u4e00-\u9fff]")
 
     def test_adjudicator_returns_items_and_review_queue(self):
         system, user = build_adjudicator_prompt("v1", [], [], [])
@@ -99,7 +113,8 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn("source_proposal_ids", system)
         self.assertNotIn("grounded_annotations", system)
         self.assertNotIn('"gold_value"', system)
-        self.assertIn("不得重写", system)
+        self.assertIn("must not rewrite", system)
+        self.assertNotRegex(system, r"[\u4e00-\u9fff]")
 
     def test_prompt_payload_never_contains_performance_data(self):
         _, user_blocks = build_evidence_extractor_prompt(
