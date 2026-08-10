@@ -32,7 +32,11 @@ from salesbench.goldbank.prompts import (
 )
 from salesbench.goldbank.validators import PRIVATE_KEYS
 from salesbench.vqa_evaluate.prompts import JUDGE_PROMPT_VERSION, JUDGE_SYSTEM_PROMPT, build_judge_user_prompt
-from salesbench.vqa.prompts import QUESTION_REALIZER_PROMPT_VERSION, QUESTION_REALIZER_SYSTEM_PROMPT
+from salesbench.vqa.prompts import (
+    QUESTION_REALIZER_PROMPT_VERSION,
+    QUESTION_REALIZER_SYSTEM_PROMPT,
+    QUESTION_REPAIR_SYSTEM_PROMPT,
+)
 
 from .evidence_assets import enrich_evidence_refs, load_frame_manifests, materialize_thumbnails
 from .review_queue import normalize_review_queue_row
@@ -403,6 +407,24 @@ def collect_prompt_snapshot() -> list[dict[str, Any]]:
             "user_template": "QuestionSpec + cited English Evidence/Commerce graph context",
             "observed": ["负责减少问题模板化，不改变 QuestionSpec 的语义边界。"],
             "recommendations": ["检查自然度、答案泄漏、跨任务重复和英文一致性。"],
+        }
+    )
+    prompts.append(
+        {
+            "id": "question_repairer",
+            "name": "Question Surface Repairer",
+            "stage": "QA / Local-validation repair",
+            "version": QUESTION_REALIZER_PROMPT_VERSION,
+            "system": QUESTION_REPAIR_SYSTEM_PROMPT,
+            "user_template": {
+                "spec_id": "{{spec_id}}",
+                "question_spec": "{{same semantic specification}}",
+                "rejected_question": "{{first-pass question}}",
+                "local_error_codes": ["{{deterministic validation code}}"],
+                "evidence_context": "{{English evidence context}}",
+            },
+            "observed": ["仅在首轮问题违反语言、公式化、问号或答案泄漏规则时触发一次。"],
+            "recommendations": ["修复只能改写问句表面，不得改变 Gold、能力或证据引用。"],
         }
     )
     proposer_notes = {

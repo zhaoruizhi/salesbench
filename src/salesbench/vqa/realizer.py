@@ -14,6 +14,7 @@ from ..utils import clean_text, contains_cjk
 from ..vlm.api_client import VLMClient
 from .prompts import (
     QUESTION_REALIZER_PROMPT_VERSION,
+    build_question_repair_prompt,
     build_question_realizer_prompt,
 )
 from .specs import QuestionRealization, QuestionSpec, build_question_specs
@@ -137,7 +138,9 @@ def run_qa_realizer(
 
     failures: list[dict[str, object]] = []
 
-    def realize(spec: QuestionSpec) -> tuple[QuestionSpec, QuestionRealization | None, str | None]:
+    def realize(
+        spec: QuestionSpec,
+    ) -> tuple[QuestionSpec, QuestionRealization | None, str | None, bool]:
         evidence_context = _context_by_ids(
             spec.evidence_refs,
             evidence_lookup,
@@ -168,11 +171,41 @@ def run_qa_realizer(
         )
         call = client.call_text_only(system, user, response_format="json_object")
         if not call.success:
-            return spec, None, call.error or "api_call_failed"
+            return spec, None, call.error or "api_call_failed", False
         try:
-            return spec, _parse_realization(call.raw_response, spec, call.model), None
+            return spec, _parse_realization(call.raw_response, spec, call.model), None, False
         except (ModelOutputError, ValueError) as exc:
-            return spec, None, str(exc)
+            initial_error = str(exc)
+            try:
+                rejected_payload = parse_json_object(call.raw_response, "spec_id")
+                rejected_question = clean_text(rejected_payload.get("question"))
+            except ModelOutputError:
+                rejected_question = ""
+            local_errors = validate_realized_question(rejected_question, spec.gold_answer)
+            repair_system, repair_user = build_question_repair_prompt(
+                spec,
+                rejected_question,
+                local_errors or [initial_error],
+                evidence_context,
+                cue_context,
+                relation_context,
+            )
+            repair_call = client.call_text_only(
+                repair_system,
+                repair_user,
+                response_format="json_object",
+            )
+            if not repair_call.success:
+                return spec, None, repair_call.error or initial_error, True
+            try:
+                return (
+                    spec,
+                    _parse_realization(repair_call.raw_response, spec, repair_call.model),
+                    None,
+                    True,
+                )
+            except (ModelOutputError, ValueError) as repair_exc:
+                return spec, None, str(repair_exc), True
 
     workers = max(1, int(max_workers))
     if workers == 1:
@@ -184,7 +217,11 @@ def run_qa_realizer(
             for future in as_completed(futures):
                 completed.append(future.result())
 
-    for spec, realization, error in completed:
+    repaired_count = 0
+    repair_attempted_count = 0
+    for spec, realization, error, repair_attempted in completed:
+        if repair_attempted:
+            repair_attempted_count += 1
         if realization is None:
             failures.append(
                 {
@@ -195,6 +232,8 @@ def run_qa_realizer(
                 }
             )
             continue
+        if repair_attempted:
+            repaired_count += 1
         realizations[spec.spec_id] = realization
         part = _part_path(output_dir, spec.spec_id)
         part.parent.mkdir(parents=True, exist_ok=True)
@@ -218,6 +257,8 @@ def run_qa_realizer(
             "realized": len(ordered),
             "failed": len(failures),
             "resumed": resumed_count,
+            "repair_attempted": repair_attempted_count,
+            "repaired": repaired_count,
         },
         "fingerprint": stable_digest(
             {"specs": [spec.to_dict() for spec in specs], "model": client.model},

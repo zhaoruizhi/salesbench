@@ -40,6 +40,27 @@ class FakeClient:
         )
 
 
+class RepairClient(FakeClient):
+    def call_text_only(self, system_prompt: str, user_text: str, response_format: str | None = None):
+        self.calls.append({"system": system_prompt, "user": user_text})
+        payload = json.loads(user_text)
+        spec_id = payload.get("question_spec", {}).get("spec_id") or payload["spec_id"]
+        question = (
+            "What product is the 4-in-1 fast charging data cable?"
+            if len(self.calls) == 1
+            else "What type of product is featured in the video?"
+        )
+        return APICallResult(
+            raw_response=json.dumps({"spec_id": spec_id, "question": question}),
+            model=self.model,
+            input_tokens=10,
+            output_tokens=10,
+            latency_s=0.01,
+            cost_usd=0.0,
+            success=True,
+        )
+
+
 def _write_evidence_dir(root: Path) -> None:
     write_jsonl(
         root / "video_evidence_dataset.jsonl",
@@ -131,7 +152,32 @@ def test_realizer_writes_specific_english_question_and_resumes(tmp_path: Path):
     assert realized[0]["question"].startswith("What does the wiping demonstration")
     assert "这个可以" not in prompt_payload
     assert "likes" not in prompt_payload
-    assert QUESTION_REALIZER_PROMPT_VERSION == "question-realizer-prompt-v1"
+    assert QUESTION_REALIZER_PROMPT_VERSION == "question-realizer-prompt-v2"
+
+
+def test_realizer_repairs_answer_leakage_once_with_local_feedback(tmp_path: Path):
+    evidence_dir = tmp_path / "evidence"
+    output_dir = tmp_path / "qa"
+    _write_evidence_dir(evidence_dir)
+    dataset = read_jsonl(evidence_dir / "video_evidence_dataset.jsonl")
+    annotation = dataset[0]["grounded_annotations"][0]
+    annotation["task_type"] = "BP"
+    annotation["task_subtype"] = "PRODUCT_IDENTITY"
+    annotation["capability"] = "PRODUCT_IDENTITY"
+    annotation["reasoning_operator"] = "IDENTIFY_PRODUCT"
+    annotation["target"] = {"specific_focus": "4-in-1 fast charging data cable"}
+    annotation["gold_value"] = {"answer": "4-in-1 fast charging data cable"}
+    write_jsonl(evidence_dir / "video_evidence_dataset.jsonl", dataset)
+    client = RepairClient()
+
+    summary = run_qa_realizer(evidence_dir, output_dir, client)
+    realized = read_jsonl(output_dir / "qa_realizations.jsonl")
+
+    assert summary["counts"]["realized"] == 1
+    assert len(client.calls) == 2
+    assert "Question Surface Repairer" in client.calls[1]["system"]
+    assert "ANSWER_LEAKAGE" in client.calls[1]["user"]
+    assert realized[0]["question"] == "What type of product is featured in the video?"
 
 
 def test_realizer_rejects_formulaic_or_non_english_questions():

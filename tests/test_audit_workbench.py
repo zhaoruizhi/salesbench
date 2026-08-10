@@ -210,6 +210,13 @@ def test_prompt_snapshot_uses_current_judge_prompt_version() -> None:
     assert judge["version"] == JUDGE_PROMPT_VERSION
 
 
+def test_prompt_snapshot_includes_question_surface_repairer() -> None:
+    prompts = {item["id"]: item for item in collect_prompt_snapshot()}
+
+    assert "question_repairer" in prompts
+    assert "Question Surface Repairer" in prompts["question_repairer"]["system"]
+
+
 def test_prompt_snapshot_includes_split_language_and_visual_evidence_stages() -> None:
     prompts = {item["id"]: item for item in collect_prompt_snapshot()}
 
