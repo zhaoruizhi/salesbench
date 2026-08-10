@@ -5,17 +5,18 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 
+from .commerce_schema import CueType, RelationType
 from .validators import PRIVATE_KEYS
 
 
-PROMPT_VERSION = "evidence-prompt-v8"
+PROMPT_VERSION = "evidence-prompt-v9"
 
 BP_COMPILER_CONTRACT = (
     "BP is produced by a deterministic local compiler, not by an LLM proposer. "
     "For every validated direct EvidenceUnit, the compiler creates at most one BP candidate, "
     "maps the evidence modality and predicate to a controlled BP subtype, copies only the "
     "English normalized value into proposed_gold, and retains the EvidenceUnit ID as provenance. "
-    "Verbatim source-language OCR or ASR remains in EvidenceUnit.text_span and is not copied into "
+    "Verbatim source-language OCR or ASR remains in EvidenceUnit.source_text_native and is not copied into "
     "the public English Gold answer."
 )
 
@@ -45,26 +46,97 @@ def build_evidence_extractor_prompt(video_id: str, content_context: dict[str, ob
         "Each unit must use exactly one modality: visual for visible non-text facts, ocr for in-frame "
         "text, or asr for speech/subtitles. Never output image, text, or metadata as a modality. "
         "A visual unit must include frame_indices. An ocr unit must include frame_indices and a "
-        "verbatim text_span. An asr unit must include the verbatim text_span supplied in the input. "
-        "OCR text_span must contain only the visible source text, never coordinates, bounding boxes, "
+        "verbatim source_text_native. An asr unit must include the verbatim source_text_native supplied in the input. "
+        "OCR source_text_native must contain only the visible source text, never coordinates, bounding boxes, "
         "or values such as [0,50]. If ASR start_s/end_s are supplied, copy them exactly; otherwise use "
         "null and never infer timing from semantics or frame position. Every unit must contain subject, "
         "predicate, and value. All normalized semantic fields, including subject, predicate, value, "
-        "and descriptive attributes, must be in English. OCR/ASR text_span must preserve the original "
+        "content_en, subject, predicate, value, and descriptive attributes, must be in English. "
+        "content_en must be a concise factual English sentence. OCR/ASR source_text_native must preserve the original "
         "source language verbatim; brand names and source terms may remain unchanged only there. "
         "A seller's performance, effect, or usage statement is an unverified claim. Encode it as "
         "subject='speaker', predicate='claims', and value=<English normalized claim>, while retaining "
-        "the original text_span. Do not state that the product has the claimed effect unless visible "
+        "the original source_text_native. Do not state that the product has the claimed effect unless visible "
         "evidence directly verifies it. confidence must be a JSON number from 0 to 1, never "
         "high/medium/low. evidence_id may be omitted; if supplied, it is only a source locator such as "
         "frame_006 or asr_subtitles because local code creates the canonical ID. Omit anything that "
         "cannot be localized, is ambiguous, or requires external knowledge. Example: "
         '{"evidence_units":[{"modality":"visual","start_s":null,"end_s":null,'
-        '"frame_indices":[0],"text_span":"","subject":"product package",'
+        '"frame_indices":[0],"content_en":"The product package is red.","source_text_native":"",'
+        '"subject":"product package",'
         '"predicate":"has color","value":"red","attributes":{},"confidence":0.9}]}'
     )
     user_text = _json({"video_id": video_id, "content_context": content_context})
     return system, [{"type": "text", "text": user_text}]
+
+
+def _enum_values(enum_type: type) -> str:
+    return ", ".join(item.value for item in enum_type)
+
+
+_NO_CONSUMER_OUTCOMES = (
+    "Never claim that a viewer trusted, purchased, converted, or became less uncertain. "
+    "Describe only what the supplied content presents or how cited content units relate."
+)
+
+
+def build_commerce_cue_prompt(
+    video_id: str,
+    evidence_units: list[dict[str, object]],
+) -> tuple[str, str]:
+    system = (
+        "You are the SalesBench Commerce Cue Extractor for presenter-led e-commerce short videos. "
+        "Convert validated atomic EvidenceUnits into grounded commercial presentation cues without "
+        "adding consumer outcomes, external knowledge, creator metadata, or interaction data. "
+        f"Allowed cue_type values are: {_enum_values(CueType)}. "
+        "Return strict JSON with exactly two top-level arrays: commerce_cues and abstentions. "
+        "Each commerce_cues item must contain exactly cue_type, content_en, source_text_native, "
+        "evidence_ids, attributes, directness, theory_tags, and confidence. content_en must be a "
+        "specific English sentence. source_text_native may copy only verbatim ASR or OCR text from "
+        "the cited EvidenceUnits and otherwise must be an empty string. evidence_ids must contain "
+        "one or more existing EvidenceUnit IDs copied exactly. directness must be DIRECT, INFERRED, "
+        "or NEEDS_REVIEW. confidence must be a JSON number from 0 to 1. Do not output cue_id, "
+        "video_id, extractor, translations, questions, or answers; local code adds canonical IDs. "
+        "Keep a spoken product-effect statement as FUNCTION_CLAIM, EFFECT_CLAIM, PRICE_CLAIM, "
+        "FIT_CLAIM, or EXPERIENCE_REVIEW until separate evidence demonstrates it. Do not relabel a "
+        "claim as an observed product fact. Abstain when the cue cannot be localized. "
+        f"{_NO_CONSUMER_OUTCOMES}"
+    )
+    user = _json({"video_id": video_id, "evidence_units": evidence_units})
+    return system, user
+
+
+def build_commercial_relation_prompt(
+    video_id: str,
+    evidence_units: list[dict[str, object]],
+    commerce_cues: list[dict[str, object]],
+) -> tuple[str, str]:
+    system = (
+        "You are the SalesBench Commercial Relation Builder. Connect existing grounded CommerceCue "
+        "nodes only when their cited EvidenceUnits support a controlled commercial argument relation. "
+        f"Allowed relation_type values are: {_enum_values(RelationType)}. "
+        "Return strict JSON with exactly two top-level arrays: commercial_relations and abstentions. "
+        "Each commercial_relations item must contain exactly relation_type, source_cue_ids, "
+        "target_cue_ids, evidence_ids, status, rationale_en, directness, and confidence. Copy existing "
+        "cue IDs and EvidenceUnit IDs exactly; never invent IDs. status must be SUPPORTED, "
+        "PARTIALLY_SUPPORTED, CONTRADICTED, or TEMPORALLY_MISALIGNED. rationale_en must be a concise "
+        "English explanation of the cited relationship. directness must be DIRECT, INFERRED, or "
+        "NEEDS_REVIEW. Do not output relation_id, provenance, extractor, translations, questions, or "
+        "answers; local code generates IDs and overrides provenance from the frozen ontology. "
+        "CLAIM_REPEATED_ACROSS_MODALITIES means two modalities repeat equivalent promotional wording; "
+        "it is not independent evidence. CLAIM_SUPPORTED_BY_DEMONSTRATION requires a distinct visual "
+        "demonstration of the material claim. Abstain when endpoints are ambiguous or evidence is "
+        "insufficient. Never claim that a viewer trusted, purchased, converted, or became less uncertain. "
+        "Describe only relationships among the supplied content cues."
+    )
+    user = _json(
+        {
+            "video_id": video_id,
+            "evidence_units": evidence_units,
+            "commerce_cues": commerce_cues,
+        }
+    )
+    return system, user
 
 
 def build_proposer_prompt(

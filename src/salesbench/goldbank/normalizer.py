@@ -6,6 +6,17 @@ import re
 from typing import Any
 
 from ..utils import clean_text, contains_cjk
+from .commerce_ontology import relation_rule
+from .commerce_schema import (
+    CommerceCue,
+    CommercialRelation,
+    CueType,
+    RelationType,
+    make_cue_id,
+    make_relation_id,
+    parse_commerce_cue,
+    parse_commercial_relation,
+)
 from .ontology import allowed_subtypes
 from .schema import (
     EvidenceModality,
@@ -98,6 +109,7 @@ def _normalize_modality(raw: dict[str, object]) -> EvidenceModality:
         [
             normalize_text(raw.get("evidence_id")),
             normalize_text(raw.get("text_span")),
+            normalize_text(raw.get("source_text_native")),
             " ".join(normalize_text(item) for item in raw.get("source_domains", []) or []),
         ]
     ).lower()
@@ -138,7 +150,7 @@ def normalize_evidence_units(video_id: str, raw_units: list[dict[str, object]]) 
         attributes = dict(raw.get("attributes") or {})
         if source_locator and source_locator != evidence_id:
             attributes.setdefault("source_locator", source_locator)
-        text_span = normalize_text(raw.get("text_span"))
+        text_span = normalize_text(raw.get("source_text_native") or raw.get("text_span"))
         if not text_span and modality in {EvidenceModality.ASR, EvidenceModality.OCR}:
             text_span = normalize_text(raw.get("value"))
         source_domains = tuple(normalize_text(value) for value in raw.get("source_domains", []) or [])
@@ -165,9 +177,125 @@ def normalize_evidence_units(video_id: str, raw_units: list[dict[str, object]]) 
                 extractor=normalize_text(raw.get("extractor") or "objective_evidence_extractor"),
                 confidence=_normalize_confidence(raw.get("confidence", 0.0)),
                 timestamp_status=normalize_text(raw.get("timestamp_status") or "unavailable"),
+                content_en=normalize_text(raw.get("content_en")),
+                source_text_native=text_span,
             )
         )
     return units
+
+
+def normalize_commerce_cues(
+    video_id: str,
+    raw_cues: list[dict[str, object]],
+    evidence: dict[str, EvidenceUnit],
+) -> list[CommerceCue]:
+    cues: list[CommerceCue] = []
+    seen_ids: set[str] = set()
+    for raw in raw_cues:
+        payload = dict(raw)
+        cue_type = CueType(normalize_text(payload.get("cue_type")).upper())
+        content_en = normalize_text(payload.get("content_en"))
+        if not content_en:
+            raise ValueError("Commerce cue requires content_en")
+        if contains_cjk(content_en):
+            raise ValueError("Commerce cue content_en must use English")
+        evidence_ids = tuple(
+            dict.fromkeys(normalize_text(item) for item in payload.get("evidence_ids", []) or [] if normalize_text(item))
+        )
+        if not evidence_ids:
+            raise ValueError("Commerce cue requires evidence_ids")
+        for evidence_id in evidence_ids:
+            unit = evidence.get(evidence_id)
+            if unit is None:
+                raise ValueError(f"Unknown evidence id: {evidence_id}")
+            if unit.video_id != video_id:
+                raise ValueError(f"Evidence {evidence_id} belongs to another video")
+        cue_id = make_cue_id(video_id, cue_type, evidence_ids, content_en)
+        if cue_id in seen_ids:
+            continue
+        seen_ids.add(cue_id)
+        payload.update(
+            {
+                "cue_id": cue_id,
+                "video_id": video_id,
+                "cue_type": cue_type.value,
+                "content_en": content_en,
+                "source_text_native": normalize_text(payload.get("source_text_native")),
+                "evidence_ids": list(evidence_ids),
+                "directness": normalize_text(payload.get("directness") or "DIRECT").upper(),
+                "extractor": normalize_text(payload.get("extractor") or "commerce_cue_extractor"),
+                "confidence": _normalize_confidence(payload.get("confidence", 0.0)),
+            }
+        )
+        cues.append(parse_commerce_cue(payload))
+    return cues
+
+
+def normalize_commercial_relations(
+    video_id: str,
+    raw_relations: list[dict[str, object]],
+    cues: dict[str, CommerceCue],
+    evidence: dict[str, EvidenceUnit],
+) -> list[CommercialRelation]:
+    relations: list[CommercialRelation] = []
+    seen_ids: set[str] = set()
+    for raw in raw_relations:
+        payload = dict(raw)
+        relation_type = RelationType(normalize_text(payload.get("relation_type")).upper())
+        source_cue_ids = tuple(
+            dict.fromkeys(normalize_text(item) for item in payload.get("source_cue_ids", []) or [] if normalize_text(item))
+        )
+        target_cue_ids = tuple(
+            dict.fromkeys(normalize_text(item) for item in payload.get("target_cue_ids", []) or [] if normalize_text(item))
+        )
+        if not source_cue_ids or not target_cue_ids:
+            raise ValueError("Commercial relation requires source and target cue ids")
+        endpoint_cues: list[CommerceCue] = []
+        for cue_id in (*source_cue_ids, *target_cue_ids):
+            cue = cues.get(cue_id)
+            if cue is None:
+                raise ValueError(f"Unknown cue id: {cue_id}")
+            if cue.video_id != video_id:
+                raise ValueError(f"Cue {cue_id} belongs to another video")
+            endpoint_cues.append(cue)
+        supplied_evidence = [
+            normalize_text(item)
+            for item in payload.get("evidence_ids", []) or []
+            if normalize_text(item)
+        ]
+        evidence_ids = tuple(
+            dict.fromkeys(supplied_evidence or [item for cue in endpoint_cues for item in cue.evidence_ids])
+        )
+        for evidence_id in evidence_ids:
+            unit = evidence.get(evidence_id)
+            if unit is None:
+                raise ValueError(f"Unknown evidence id: {evidence_id}")
+            if unit.video_id != video_id:
+                raise ValueError(f"Evidence {evidence_id} belongs to another video")
+        rationale_en = normalize_text(payload.get("rationale_en"))
+        if not rationale_en or contains_cjk(rationale_en):
+            raise ValueError("Commercial relation rationale_en must use English")
+        relation_id = make_relation_id(video_id, relation_type, source_cue_ids, target_cue_ids)
+        if relation_id in seen_ids:
+            continue
+        seen_ids.add(relation_id)
+        payload.update(
+            {
+                "relation_id": relation_id,
+                "video_id": video_id,
+                "relation_type": relation_type.value,
+                "source_cue_ids": list(source_cue_ids),
+                "target_cue_ids": list(target_cue_ids),
+                "evidence_ids": list(evidence_ids),
+                "rationale_en": rationale_en,
+                "provenance": relation_rule(relation_type)["provenance"].value,
+                "directness": normalize_text(payload.get("directness") or "INFERRED").upper(),
+                "extractor": normalize_text(payload.get("extractor") or "commercial_relation_builder"),
+                "confidence": _normalize_confidence(payload.get("confidence", 0.0)),
+            }
+        )
+        relations.append(parse_commercial_relation(payload))
+    return relations
 
 
 def normalize_proposals(video_id: str, generator: str, raw: list[dict[str, object]]) -> list[GoldProposal]:

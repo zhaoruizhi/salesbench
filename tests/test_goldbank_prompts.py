@@ -8,6 +8,8 @@ sys.path.insert(0, "src")
 from salesbench.goldbank.parsing import (  # noqa: E402
     ModelOutputError,
     parse_adjudication_response,
+    parse_commerce_cue_response,
+    parse_commercial_relation_response,
     parse_json_object,
     parse_proposal_response,
 )
@@ -16,6 +18,8 @@ from salesbench.goldbank.prompts import (  # noqa: E402
     PROMPT_VERSION,
     build_adjudicator_prompt,
     build_challenger_prompt,
+    build_commerce_cue_prompt,
+    build_commercial_relation_prompt,
     build_evidence_extractor_prompt,
     build_proposer_prompt,
 )
@@ -26,7 +30,7 @@ class GoldBankPromptTest(unittest.TestCase):
         system, user_blocks = build_evidence_extractor_prompt("v1", {"C3_text_language": {"title": "hello"}})
         text = system + " " + str(user_blocks)
 
-        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v8")
+        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v9")
         self.assertIn("EvidenceUnit", text)
         self.assertIn("Do not generate questions", system)
         self.assertIn("English", system)
@@ -34,7 +38,41 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn("verbatim", system)
         self.assertIn("start_s", system)
         self.assertIn("end_s", system)
+        self.assertIn("content_en", system)
+        self.assertIn("source_text_native", system)
+        self.assertNotIn("EvidenceUnit.text_span", system)
         self.assertNotRegex(system, r"[\u4e00-\u9fff]")
+
+    def test_v9_commerce_prompts_are_english_and_forbid_outcome_claims(self):
+        evidence = [{
+            "evidence_id": "e1",
+            "video_id": "v1",
+            "modality": "visual",
+            "content_en": "The host wipes a marked surface.",
+            "source_text_native": "",
+        }]
+        cue_system, cue_user = build_commerce_cue_prompt("v1", evidence)
+        relation_system, relation_user = build_commercial_relation_prompt(
+            "v1",
+            evidence,
+            [{
+                "cue_id": "cue1",
+                "cue_type": "PROCESS_DEMONSTRATION",
+                "content_en": "The host wipes a marked surface.",
+                "evidence_ids": ["e1"],
+            }],
+        )
+        combined = cue_system + cue_user + relation_system + relation_user
+
+        self.assertNotRegex(combined, r"[\u4e00-\u9fff]")
+        self.assertIn("commerce_cues", cue_system)
+        self.assertIn("commercial_relations", relation_system)
+        self.assertIn(
+            "Never claim that a viewer trusted, purchased, converted, or became less uncertain",
+            combined,
+        )
+        self.assertIn("CLAIM_REPEATED_ACROSS_MODALITIES", relation_system)
+        self.assertIn("existing cue IDs", relation_system)
 
     def test_bp_has_an_explicit_deterministic_compiler_contract(self):
         self.assertIn("BP", BP_COMPILER_CONTRACT)
@@ -139,6 +177,20 @@ class GoldBankPromptTest(unittest.TestCase):
 
         self.assertEqual(proposals[0]["proposal_id"], "p1")
         self.assertEqual(abstentions[0]["task_type"], "AE")
+
+    def test_parse_commerce_graph_responses_returns_items_and_abstentions(self):
+        cues, cue_abstentions = parse_commerce_cue_response(
+            '{"commerce_cues":[{"cue_type":"PRICE"}],"abstentions":[]}'
+        )
+        relations, relation_abstentions = parse_commercial_relation_response(
+            '{"commercial_relations":[{"relation_type":"OFFER_REQUIRES_CONDITION"}],'
+            '"abstentions":[{"reason":"No condition cue."}]}'
+        )
+
+        self.assertEqual(cues[0]["cue_type"], "PRICE")
+        self.assertEqual(cue_abstentions, [])
+        self.assertEqual(relations[0]["relation_type"], "OFFER_REQUIRES_CONDITION")
+        self.assertEqual(relation_abstentions[0]["reason"], "No condition cue.")
 
     def test_parse_adjudication_response_accepts_v7_decision_groups(self):
         groups, queue = parse_adjudication_response(

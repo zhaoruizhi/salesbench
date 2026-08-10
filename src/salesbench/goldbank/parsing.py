@@ -34,6 +34,33 @@ def parse_evidence_response(raw_response: str) -> list[dict[str, object]]:
     return [unit for unit in units if isinstance(unit, dict)]
 
 
+def _parse_items_and_abstentions(
+    raw_response: str,
+    required_key: str,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    payload = parse_json_object(raw_response, required_key)
+    items = payload[required_key]
+    abstentions = payload.get("abstentions", [])
+    if not isinstance(items, list) or not isinstance(abstentions, list):
+        raise ModelOutputError(f"{required_key} and abstentions must be lists")
+    return (
+        [item for item in items if isinstance(item, dict)],
+        [item for item in abstentions if isinstance(item, dict)],
+    )
+
+
+def parse_commerce_cue_response(
+    raw_response: str,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    return _parse_items_and_abstentions(raw_response, "commerce_cues")
+
+
+def parse_commercial_relation_response(
+    raw_response: str,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    return _parse_items_and_abstentions(raw_response, "commercial_relations")
+
+
 def parse_proposal_response(raw_response: str) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     payload = parse_json_object(raw_response, "proposals")
     proposals = payload["proposals"]
