@@ -40,6 +40,11 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn("end_s", system)
         self.assertIn("content_en", system)
         self.assertIn("source_text_native", system)
+        self.assertIn("When asr_subtitles is non-empty", system)
+        self.assertIn("output ASR EvidenceUnits before visual or OCR", system)
+        self.assertIn("CJK characters are forbidden", system)
+        self.assertIn("burned-in subtitle", system)
+        self.assertIn("creator handle", system)
         self.assertNotIn("EvidenceUnit.text_span", system)
         self.assertNotRegex(system, r"[\u4e00-\u9fff]")
 

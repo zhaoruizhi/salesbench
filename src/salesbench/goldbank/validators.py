@@ -78,6 +78,17 @@ CONSUMER_OUTCOME_MARKERS = (
     "becomes less uncertain",
 )
 
+CREATOR_METADATA_MARKERS = (
+    "creator handle",
+    "account handle",
+    "account identifier",
+    "username",
+    "douyin handle",
+    "tiktok handle",
+    "抖音号",
+    "账号",
+)
+
 
 @dataclass(frozen=True)
 class ValidationIssue:
@@ -156,13 +167,25 @@ def validate_evidence_unit(unit: EvidenceUnit) -> list[ValidationIssue]:
         issues.append(ValidationIssue("MISSING_FRAME_REFERENCE", "ERROR", unit.evidence_id, "Visual evidence requires frame_indices"))
     if unit.modality.value in {"asr", "ocr"} and not unit.text_span:
         issues.append(ValidationIssue("MISSING_TEXT_SPAN", "ERROR", unit.evidence_id, "ASR/OCR evidence requires text_span"))
-    if contains_cjk((unit.subject, unit.predicate, unit.value)):
+    if contains_cjk((unit.subject, unit.predicate, unit.value, unit.content_en, unit.attributes)):
         issues.append(
             ValidationIssue(
                 "NON_ENGLISH_NORMALIZED_TEXT",
                 "ERROR",
                 unit.evidence_id,
-                "Evidence subject, predicate, and value must use English; source text belongs in text_span",
+                "Evidence normalized semantic fields must use English; native text belongs in source_text_native",
+            )
+        )
+    evidence_text = _text_blob(
+        (unit.subject, unit.predicate, unit.value, unit.content_en, unit.source_text_native)
+    )
+    if any(marker in evidence_text for marker in CREATOR_METADATA_MARKERS):
+        issues.append(
+            ValidationIssue(
+                "CREATOR_METADATA_LEAK",
+                "ERROR",
+                unit.evidence_id,
+                "Creator handles and account identifiers are not public benchmark evidence",
             )
         )
     return issues

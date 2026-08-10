@@ -162,7 +162,7 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 {
                     "task_type": "SS",
                     "task_subtype": "FEATURE_BENEFIT",
-                    "capability": "FEATURE_BENEFIT",
+                    "capability": "OUTCOME_DISPLAY",
                     "reasoning_operator": "controlled operator",
                     "target": {"specific_focus": "The braided jacket is presented as durable."},
                     "proposed_gold": {"answer": "The material feature is framed as durability."},
@@ -175,6 +175,7 @@ class EvidenceNormalizerTest(unittest.TestCase):
         )[0]
 
         self.assertEqual(proposal.reasoning_operator, "MAP_FEATURE_TO_BENEFIT")
+        self.assertEqual(proposal.capability, "FEATURE_BENEFIT")
 
     def test_proposal_graph_nodes_are_resolved_to_underlying_evidence(self):
         evidence_units = normalize_evidence_units(
@@ -268,6 +269,8 @@ class EvidenceNormalizerTest(unittest.TestCase):
 
         self.assertEqual(set(proposal.evidence_ids), set(evidence))
         self.assertNotIn(demonstration.cue_id, proposal.evidence_ids)
+        self.assertTrue(proposal.reasoning_edges)
+        self.assertTrue(all(len(edge) == 3 and edge[0] in evidence for edge in proposal.reasoning_edges))
 
     def test_proposal_rejects_copied_schema_placeholders(self):
         with self.assertRaisesRegex(ValueError, "placeholder"):
@@ -395,6 +398,29 @@ class EvidenceNormalizerTest(unittest.TestCase):
         issues = validate_evidence_unit(unit)
 
         self.assertTrue(any(issue.code == "NON_ENGLISH_NORMALIZED_TEXT" for issue in issues))
+
+    def test_normalized_evidence_rejects_cjk_content_en_and_creator_handle(self):
+        unit = normalize_evidence_units(
+            "v1",
+            [
+                {
+                    "modality": "ocr",
+                    "evidence_id": "frame_003_ocr",
+                    "frame_indices": [3],
+                    "source_text_native": "抖音号: demo123",
+                    "subject": "on-screen watermark",
+                    "predicate": "shows",
+                    "value": "creator handle demo123",
+                    "content_en": "The watermark reads 抖音号: demo123.",
+                    "confidence": 0.9,
+                }
+            ],
+        )[0]
+
+        codes = {issue.code for issue in validate_evidence_unit(unit)}
+
+        self.assertIn("NON_ENGLISH_NORMALIZED_TEXT", codes)
+        self.assertIn("CREATOR_METADATA_LEAK", codes)
 
     def test_normalized_proposal_rejects_cjk_natural_language(self):
         with self.assertRaisesRegex(ValueError, "English"):

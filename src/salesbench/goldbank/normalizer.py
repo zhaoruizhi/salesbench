@@ -342,9 +342,7 @@ def normalize_proposals(
             raise ValueError("Proposal target must be a non-empty object")
         if not isinstance(proposed_gold, dict) or not proposed_gold:
             raise ValueError("Proposal proposed_gold must be a non-empty object")
-        capability = normalize_text(payload.get("capability") or subtype).upper()
-        if capability != subtype:
-            raise ValueError("Proposal capability must equal task_subtype")
+        capability = subtype
         reasoning_operator = default_reasoning_operator(task_type, subtype)
         cue_ids = tuple(
             dict.fromkeys(
@@ -408,12 +406,37 @@ def normalize_proposals(
             supplied_evidence_ids = [
                 value for value in dict.fromkeys(resolved_evidence_ids) if value in evidence_ids
             ]
+        reasoning_edges: list[list[str]] = []
+        if isinstance(commerce_cues, Mapping):
+            for cue_id in cue_ids:
+                cue = commerce_cues[cue_id]
+                for evidence_id in cue.evidence_ids:
+                    if evidence_id in supplied_evidence_ids:
+                        reasoning_edges.append([evidence_id, cue.content_en, "SUPPORTED"])
+        if isinstance(commercial_relations, Mapping):
+            for relation_id in relation_ids:
+                relation = commercial_relations[relation_id]
+                for evidence_id in relation.evidence_ids:
+                    if evidence_id in supplied_evidence_ids:
+                        reasoning_edges.append(
+                            [evidence_id, relation.rationale_en, relation.status]
+                        )
+        if reasoning_edges:
+            reasoning_edges = list(dict.fromkeys(tuple(edge) for edge in reasoning_edges))
+            reasoning_edges = [list(edge) for edge in reasoning_edges]
+        else:
+            reasoning_edges = [
+                [normalize_text(part) for part in edge[:3]]
+                for edge in payload.get("reasoning_edges", []) or []
+                if isinstance(edge, (list, tuple)) and len(edge) >= 3
+            ]
         payload["task_subtype"] = subtype
         payload["video_id"] = video_id
         payload["source_agent"] = generator
         payload["capability"] = capability
         payload["reasoning_operator"] = reasoning_operator
         payload["evidence_ids"] = supplied_evidence_ids
+        payload["reasoning_edges"] = reasoning_edges
         payload["commerce_cue_ids"] = list(cue_ids)
         payload["commercial_relation_ids"] = list(relation_ids)
         payload["question_intent"] = question_intent
