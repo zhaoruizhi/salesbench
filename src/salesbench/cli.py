@@ -112,6 +112,31 @@ def apply_evidence_reviews_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def realize_qa_command(args: argparse.Namespace) -> int:
+    from .vlm.api_client import VLMClient
+    from .vqa.realizer import run_qa_realizer
+
+    api_key = args.text_api_key or os.environ.get("TEXT_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("QA realization requires --text-api-key, TEXT_API_KEY, or OPENAI_API_KEY")
+    client = VLMClient(
+        api_key=api_key,
+        model=args.text_model,
+        base_url=args.text_base_url or os.environ.get("TEXT_BASE_URL") or os.environ.get("OPENAI_BASE_URL"),
+        max_tokens=1024,
+    )
+    summary = run_qa_realizer(
+        Path(args.evidence_dir),
+        Path(args.output_dir),
+        client,
+        dataset_filename=args.dataset_file,
+        max_workers=args.max_workers,
+        resume=args.resume,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
+
+
 def compile_vqa_command(args: argparse.Namespace) -> int:
     from .vqa.compiler import CompilePolicy, compile_vqa_from_gold
 
@@ -234,6 +259,17 @@ def build_parser() -> argparse.ArgumentParser:
     reviews.add_argument("--decisions", required=True)
     reviews.add_argument("--output", required=True)
     reviews.set_defaults(func=apply_evidence_reviews_command)
+
+    realize = sub.add_parser("realize-qa", help="将审核后的 QuestionSpec 实现为自然英文问题")
+    realize.add_argument("--evidence-dir", required=True)
+    realize.add_argument("--dataset-file", default="video_evidence_dataset.jsonl")
+    realize.add_argument("--output-dir", required=True)
+    realize.add_argument("--text-api-key", default=None)
+    realize.add_argument("--text-base-url", default=None)
+    realize.add_argument("--text-model", default="gpt-4o")
+    realize.add_argument("--max-workers", type=int, default=2)
+    realize.add_argument("--no-resume", action="store_false", dest="resume")
+    realize.set_defaults(func=realize_qa_command, resume=True)
 
     compile_parser = sub.add_parser("compile-vqa", help="从 EvidenceDataset 编译 BP/CM/SS/AE")
     compile_parser.add_argument("--evidence-dir", required=True)

@@ -41,6 +41,15 @@ class GoldBankCLITest(unittest.TestCase):
         self.assertEqual(compile_args.dataset_file, "video_evidence_dataset_reviewed.jsonl")
         self.assertEqual(audit_args.output, None)
 
+    def test_realize_qa_command_parses_gpt4o_defaults(self):
+        args = build_parser().parse_args(
+            ["realize-qa", "--evidence-dir", "evidence", "--output-dir", "qa"]
+        )
+
+        self.assertEqual(args.text_model, "gpt-4o")
+        self.assertEqual(args.dataset_file, "video_evidence_dataset.jsonl")
+        self.assertTrue(args.resume)
+
 
 if __name__ == "__main__":
     unittest.main()
