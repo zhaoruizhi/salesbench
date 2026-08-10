@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..utils import clean_text, contains_cjk
+from .commerce_ontology import relation_rule
+from .commerce_schema import CommerceCue, CommercialRelation
 from .normalizer import semantic_key, semantic_target_key
 from .ontology import CM_RELATIONS, TASK_MIN_EVIDENCE, allowed_subtypes
 from .schema import EvidenceUnit, GoldItem, GoldProposal, GoldTaskType, GoldTier
@@ -55,6 +57,21 @@ INFERENCE_MARKERS = (
 
 CAUSAL_MARKERS = ("caused", "because of this", "conversion", "sales", "购买转化", "销售", "归因")
 
+CONSUMER_OUTCOME_MARKERS = (
+    "causes purchase",
+    "cause a purchase",
+    "makes the viewer purchase",
+    "makes viewers purchase",
+    "will purchase",
+    "increases trust",
+    "makes the viewer trust",
+    "makes viewers trust",
+    "improves conversion",
+    "reduces uncertainty",
+    "became less uncertain",
+    "becomes less uncertain",
+)
+
 
 @dataclass(frozen=True)
 class ValidationIssue:
@@ -72,8 +89,14 @@ class ValidationIssue:
         }
 
 
-def _item_id(item: GoldItem | GoldProposal | EvidenceUnit) -> str:
-    return getattr(item, "gold_id", None) or getattr(item, "proposal_id", None) or getattr(item, "evidence_id", "")
+def _item_id(item: GoldItem | GoldProposal | EvidenceUnit | CommerceCue | CommercialRelation) -> str:
+    return (
+        getattr(item, "gold_id", None)
+        or getattr(item, "proposal_id", None)
+        or getattr(item, "evidence_id", None)
+        or getattr(item, "cue_id", None)
+        or getattr(item, "relation_id", "")
+    )
 
 
 def _contains_key(payload: object, keys: set[str]) -> bool:
@@ -136,6 +159,145 @@ def validate_evidence_unit(unit: EvidenceUnit) -> list[ValidationIssue]:
                 "Evidence subject, predicate, and value must use English; source text belongs in text_span",
             )
         )
+    return issues
+
+
+def validate_commerce_cue(
+    cue: CommerceCue,
+    evidence: dict[str, EvidenceUnit],
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    if not cue.cue_id or not cue.video_id or not cue.content_en:
+        issues.append(ValidationIssue("INVALID_COMMERCE_CUE", "ERROR", cue.cue_id, "Cue requires ids and content_en"))
+    if contains_cjk(cue.content_en):
+        issues.append(
+            ValidationIssue(
+                "NON_ENGLISH_CANONICAL_TEXT",
+                "ERROR",
+                cue.cue_id,
+                "CommerceCue content_en must use English",
+            )
+        )
+    if not cue.evidence_ids:
+        issues.append(ValidationIssue("INSUFFICIENT_EVIDENCE", "ERROR", cue.cue_id, "Cue requires evidence"))
+    for evidence_id in cue.evidence_ids:
+        unit = evidence.get(evidence_id)
+        if unit is None:
+            issues.append(ValidationIssue("EVIDENCE_NOT_FOUND", "ERROR", cue.cue_id, f"Missing evidence: {evidence_id}"))
+        elif unit.video_id != cue.video_id:
+            issues.append(
+                ValidationIssue(
+                    "EVIDENCE_VIDEO_MISMATCH",
+                    "ERROR",
+                    cue.cue_id,
+                    f"Evidence {evidence_id} belongs to {unit.video_id}",
+                )
+            )
+    if cue.directness not in {"DIRECT", "INFERRED", "NEEDS_REVIEW"}:
+        issues.append(ValidationIssue("INVALID_DIRECTNESS", "ERROR", cue.cue_id, cue.directness))
+    if contains_private_fields(cue.to_dict()):
+        issues.append(ValidationIssue("PRIVATE_FIELD_LEAK", "ERROR", cue.cue_id, "Private field appears in cue"))
+    return issues
+
+
+def validate_commercial_relation(
+    relation: CommercialRelation,
+    cues: dict[str, CommerceCue],
+    evidence: dict[str, EvidenceUnit],
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    rule = relation_rule(relation.relation_type)
+    source_types = rule["source"]
+    target_types = rule["target"]
+
+    if not relation.source_cue_ids or not relation.target_cue_ids:
+        issues.append(
+            ValidationIssue("MISSING_RELATION_ENDPOINT", "ERROR", relation.relation_id, "Relation requires source and target cues")
+        )
+
+    for cue_id in relation.source_cue_ids:
+        cue = cues.get(cue_id)
+        if cue is None:
+            issues.append(ValidationIssue("CUE_NOT_FOUND", "ERROR", relation.relation_id, f"Missing cue: {cue_id}"))
+            continue
+        if cue.video_id != relation.video_id:
+            issues.append(ValidationIssue("CUE_VIDEO_MISMATCH", "ERROR", relation.relation_id, cue_id))
+        if cue.cue_type not in source_types:
+            issues.append(
+                ValidationIssue(
+                    "INVALID_RELATION_SOURCE_TYPE",
+                    "ERROR",
+                    relation.relation_id,
+                    f"{cue.cue_type.value} cannot be a source for {relation.relation_type.value}",
+                )
+            )
+
+    for cue_id in relation.target_cue_ids:
+        cue = cues.get(cue_id)
+        if cue is None:
+            issues.append(ValidationIssue("CUE_NOT_FOUND", "ERROR", relation.relation_id, f"Missing cue: {cue_id}"))
+            continue
+        if cue.video_id != relation.video_id:
+            issues.append(ValidationIssue("CUE_VIDEO_MISMATCH", "ERROR", relation.relation_id, cue_id))
+        if cue.cue_type not in target_types:
+            issues.append(
+                ValidationIssue(
+                    "INVALID_RELATION_TARGET_TYPE",
+                    "ERROR",
+                    relation.relation_id,
+                    f"{cue.cue_type.value} cannot be a target for {relation.relation_type.value}",
+                )
+            )
+
+    minimum = int(rule["min_evidence"])
+    if len(set(relation.evidence_ids)) < minimum:
+        issues.append(
+            ValidationIssue(
+                "INSUFFICIENT_EVIDENCE",
+                "ERROR",
+                relation.relation_id,
+                f"Relation requires at least {minimum} distinct evidence units",
+            )
+        )
+    for evidence_id in relation.evidence_ids:
+        unit = evidence.get(evidence_id)
+        if unit is None:
+            issues.append(ValidationIssue("EVIDENCE_NOT_FOUND", "ERROR", relation.relation_id, evidence_id))
+        elif unit.video_id != relation.video_id:
+            issues.append(ValidationIssue("EVIDENCE_VIDEO_MISMATCH", "ERROR", relation.relation_id, evidence_id))
+
+    if relation.provenance != rule["provenance"]:
+        issues.append(
+            ValidationIssue(
+                "INVALID_RELATION_PROVENANCE",
+                "ERROR",
+                relation.relation_id,
+                f"Expected {rule['provenance'].value}",
+            )
+        )
+    if not relation.rationale_en or contains_cjk(relation.rationale_en):
+        issues.append(
+            ValidationIssue(
+                "NON_ENGLISH_CANONICAL_TEXT",
+                "ERROR",
+                relation.relation_id,
+                "Relation rationale_en must use English",
+            )
+        )
+    rationale = clean_text(relation.rationale_en).lower()
+    if any(marker in rationale for marker in CONSUMER_OUTCOME_MARKERS):
+        issues.append(
+            ValidationIssue(
+                "CONSUMER_OUTCOME_LEAK",
+                "ERROR",
+                relation.relation_id,
+                "Relation describes an unobservable consumer outcome",
+            )
+        )
+    if relation.status not in {"SUPPORTED", "PARTIALLY_SUPPORTED", "CONTRADICTED", "TEMPORALLY_MISALIGNED"}:
+        issues.append(ValidationIssue("INVALID_RELATION_STATUS", "ERROR", relation.relation_id, relation.status))
+    if contains_private_fields(relation.to_dict()):
+        issues.append(ValidationIssue("PRIVATE_FIELD_LEAK", "ERROR", relation.relation_id, "Private field appears in relation"))
     return issues
 
 
