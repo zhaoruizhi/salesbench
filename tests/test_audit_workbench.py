@@ -13,6 +13,7 @@ from tools.audit_workbench.build import (
     collect_prompt_snapshot,
     compact_workbench_data,
     detect_annotation_risks,
+    load_translation_index,
     organize_delivery,
     render_workbench,
 )
@@ -192,12 +193,12 @@ def test_render_workbench_has_interaction_contract_without_private_fields() -> N
     assert "localStorage" in html
     assert "exportDecisions" in html
     assert "evidence-prompt-v6" in html
-    assert "evidence-prompt-v8" in html
-    assert "v6 运行快照" in html
-    assert "v8 当前代码" in html
+    assert "evidence-prompt-v9" in html
+    assert "运行版本" in html
+    assert "当前代码" in html
     assert "Gold Challenger" in html
     assert "senior multimodal evaluator" in html
-    assert "自动风险概览" in html
+    assert "商业图资产" in html
     assert "\"likes\"" not in html
     assert "\"followers\"" not in html
     json.loads(html.split('<script type="application/json" id="sbaw-data">', 1)[1].split("</script>", 1)[0])
@@ -268,6 +269,26 @@ def test_evidence_content_links_visual_unit_to_exact_cached_frame(tmp_path: Path
             "relation": "direct",
         }
     ]
+
+
+def test_v3_evidence_exposes_canonical_english_and_native_source(tmp_path: Path) -> None:
+    evidence = {
+        "e_visual": {
+            "evidence_id": "e_visual",
+            "video_id": "v1",
+            "modality": "ocr",
+            "frame_indices": [],
+            "content_en": "The frame shows a 9.9-yuan offer.",
+            "source_text_native": "到手9.9元",
+            "confidence": 0.9,
+        }
+    }
+
+    items = enrich_evidence_refs("v1", ["e_visual"], evidence, {})
+
+    assert items[0]["content_en"] == "The frame shows a 9.9-yuan offer."
+    assert items[0]["source_text_native"] == "到手9.9元"
+    assert items[0]["semantic_text"] == "The frame shows a 9.9-yuan offer."
 
 
 def test_representative_frames_make_unlocalized_asr_auditable(tmp_path: Path) -> None:
@@ -458,6 +479,112 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     assert data["release"]["runtime_prompt_version"] == "evidence-prompt-v6"
     assert data["release"]["current_prompt_version"] == "evidence-prompt-v9"
     assert data["release"]["current_judge_prompt_version"] == "judge-prompt-v3"
+
+
+def test_workbench_renders_chinese_translation_and_english_source(tmp_path: Path) -> None:
+    source = "The frame shows a 9.9-yuan offer."
+    question = "What price is shown in the offer?"
+    gold = "The offer price is 9.9 yuan."
+    from salesbench.audit_translation import build_translation_job
+
+    jobs = [
+        (build_translation_job(object_type="evidence_unit", object_id="e1", source_field="content_en", source_text=source), "画面显示到手价为9.9元。"),
+        (build_translation_job(object_type="qa", object_id="q1", source_field="question", source_text=question), "优惠中显示的价格是多少？"),
+        (build_translation_job(object_type="qa", object_id="q1", source_field="gold_answer", source_text=gold), "优惠价为9.9元。"),
+    ]
+    translation_path = tmp_path / "audit_translations.jsonl"
+    _write(
+        translation_path,
+        "\n".join(
+            json.dumps(
+                {
+                    **job.to_dict(),
+                    "translated_text": translated,
+                    "translation_method": "gpt-4o",
+                    "prompt_version": "audit-translation-prompt-v1",
+                },
+                ensure_ascii=False,
+            )
+            for job, translated in jobs
+        )
+        + "\n",
+    )
+    translations = load_translation_index(translation_path)
+    evidence_item = enrich_evidence_refs(
+        "v1",
+        ["e1"],
+        {
+            "e1": {
+                "evidence_id": "e1",
+                "video_id": "v1",
+                "modality": "ocr",
+                "content_en": source,
+                "source_text_native": "到手9.9元",
+                "frame_indices": [],
+            }
+        },
+        {},
+    )[0]
+    evidence_item["content_zh"] = translations.translate("evidence_unit", "e1", "content_en", source)["translated_text"]
+    data = {
+        "release": {"status": "candidate", "prompt_version": "evidence-prompt-v9"},
+        "counts": {"videos": 1, "evidence_units": 1, "annotations": 1, "review_queue": 0, "qa": 1, "judge_rows": 0},
+        "delivery": {},
+        "translations": {"missing": 0, "stale": 0},
+        "evidence": {"queue": [], "risks": [], "missing_task_videos": []},
+        "qa": [{
+            "vqa_id": "q1",
+            "video_id": "v1",
+            "task_type": "BP",
+            "task_subtype": "OFFER_PRICE",
+            "question": question,
+            "question_zh": translations.translate("qa", "q1", "question", question)["translated_text"],
+            "gold_answer": gold,
+            "gold_answer_zh": translations.translate("qa", "q1", "gold_answer", gold)["translated_text"],
+            "capability": "PRICE_AND_DISCOUNT",
+            "reasoning_operator": "READ_GROUNDED_VALUE",
+            "evidence_items": [evidence_item],
+        }],
+        "judge": {"summary": {}, "metrics": {}, "rows": []},
+    }
+
+    html = render_workbench(data, collect_prompt_snapshot(), fragment=True)
+
+    assert "中文审计翻译" in html
+    assert "优惠中显示的价格是多少？" in html
+    assert "优惠价为9.9元。" in html
+    assert "The frame shows a 9.9-yuan offer." in html
+    assert "到手9.9元" in html
+    assert "PRICE_AND_DISCOUNT" in html
+    assert 'loading="lazy"' in html
+
+
+def test_translation_index_rejects_duplicate_or_non_audit_rows(tmp_path: Path) -> None:
+    base = {
+        "translation_id": "audit_translation::qa::q1::question",
+        "object_type": "qa",
+        "object_id": "q1",
+        "source_field": "question",
+        "source_language": "en",
+        "target_language": "zh-CN",
+        "source_sha256": "a" * 64,
+        "translated_text": "问题",
+        "translation_method": "gpt-4o",
+        "prompt_version": "audit-translation-prompt-v1",
+        "audit_only": True,
+    }
+    duplicate_path = tmp_path / "duplicate.jsonl"
+    _write(duplicate_path, json.dumps(base, ensure_ascii=False) + "\n" + json.dumps(base, ensure_ascii=False) + "\n")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="duplicate audit translation"):
+        load_translation_index(duplicate_path)
+    base["audit_only"] = False
+    invalid_path = tmp_path / "invalid.jsonl"
+    _write(invalid_path, json.dumps(base, ensure_ascii=False) + "\n")
+    with pytest.raises(ValueError, match="audit_only"):
+        load_translation_index(invalid_path)
 
 
 def test_thumbnail_materialization_deduplicates_and_uses_relative_paths(tmp_path: Path) -> None:

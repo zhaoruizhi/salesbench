@@ -136,6 +136,33 @@ def normalize_review_queue_row(
         evidence_refs = _strings(
             [evidence_id for proposal in linked for evidence_id in proposal.get("evidence_ids") or []]
         )
+    commerce_cue_ids = _strings(
+        _first_list(
+            row.get("commerce_cue_ids"),
+            nested.get("commerce_cue_ids"),
+            primary.get("commerce_cue_ids"),
+        )
+    )
+    commercial_relation_ids = _strings(
+        _first_list(
+            row.get("commercial_relation_ids"),
+            nested.get("commercial_relation_ids"),
+            primary.get("commercial_relation_ids"),
+        )
+    )
+    if linked:
+        if not commerce_cue_ids:
+            commerce_cue_ids = _strings(
+                [cue_id for proposal in linked for cue_id in proposal.get("commerce_cue_ids") or []]
+            )
+        if not commercial_relation_ids:
+            commercial_relation_ids = _strings(
+                [
+                    relation_id
+                    for proposal in linked
+                    for relation_id in proposal.get("commercial_relation_ids") or []
+                ]
+            )
 
     raw_reason = str(row.get("reason") or "").strip()
     reason = str(abstention.get("reason") or raw_reason).strip()
@@ -166,6 +193,11 @@ def normalize_review_queue_row(
                 "target": candidate.get("target") or {},
                 "candidate_gold": candidate.get("gold_value") or candidate.get("proposed_gold") or {},
                 "evidence_refs": candidate.get("evidence_refs") or candidate.get("evidence_ids") or [],
+                "commerce_cue_ids": candidate.get("commerce_cue_ids") or [],
+                "commercial_relation_ids": candidate.get("commercial_relation_ids") or [],
+                "capability": candidate.get("capability") or candidate.get("task_subtype"),
+                "reasoning_operator": candidate.get("reasoning_operator") or "",
+                "question_intent": candidate.get("question_intent") or "",
                 "confidence": candidate.get("confidence", candidate.get("proposal_confidence")),
             }
         )
@@ -182,6 +214,11 @@ def normalize_review_queue_row(
         "target": target,
         "candidate_gold": candidate_gold,
         "evidence_refs": evidence_refs,
+        "commerce_cue_ids": commerce_cue_ids,
+        "commercial_relation_ids": commercial_relation_ids,
+        "capability": str(primary.get("capability") or task_source.get("task_subtype") or ""),
+        "reasoning_operator": str(primary.get("reasoning_operator") or ""),
+        "question_intent": str(primary.get("question_intent") or ""),
         "source_proposal_ids": source_ids,
         "issues": list(row.get("issues") or []),
         "source_candidates": source_candidates,

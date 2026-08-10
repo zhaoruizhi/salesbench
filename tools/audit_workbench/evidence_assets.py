@@ -129,6 +129,11 @@ def enrich_evidence_refs(
                 frames = _representative_frames(video_frames)
                 note = "ASR 缺少时间戳，以下为视频代表帧，不能精确定位到该语音片段。"
         semantic_values = [unit.get("subject"), unit.get("predicate"), unit.get("value")]
+        structured_fallback = "｜".join(
+            str(value) for value in semantic_values if value not in (None, "")
+        )
+        content_en = str(unit.get("content_en") or structured_fallback)
+        source_text_native = str(unit.get("source_text_native") or unit.get("text_span") or "")
         items.append(
             {
                 "evidence_id": str(unit.get("evidence_id") or evidence_id),
@@ -137,8 +142,10 @@ def enrich_evidence_refs(
                 "subject": unit.get("subject"),
                 "predicate": unit.get("predicate"),
                 "value": unit.get("value"),
-                "semantic_text": "｜".join(str(value) for value in semantic_values if value not in (None, "")),
-                "text_span": unit.get("text_span") or "",
+                "semantic_text": content_en,
+                "content_en": content_en,
+                "source_text_native": source_text_native,
+                "text_span": source_text_native,
                 "start_s": unit.get("start_s"),
                 "end_s": unit.get("end_s"),
                 "frame_indices": list(unit.get("frame_indices") or []),

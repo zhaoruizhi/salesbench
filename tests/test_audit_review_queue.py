@@ -15,6 +15,11 @@ PROPOSAL = {
     "target": {"claim": "the cable uses braided material"},
     "proposed_gold": {"relation": "SUPPORTED", "answer": "The visible weave supports the claim."},
     "evidence_ids": ["e1", "e2"],
+    "commerce_cue_ids": ["c1", "c2"],
+    "commercial_relation_ids": ["r1"],
+    "capability": "CLAIM_DEMONSTRATION_STATUS",
+    "reasoning_operator": "CLASSIFY_RELATION_STATUS",
+    "question_intent": "Ask whether the spoken claim is independently demonstrated.",
     "proposal_confidence": 0.9,
 }
 
@@ -39,6 +44,9 @@ def test_source_proposal_ids_resolve_readable_candidate_content() -> None:
     assert normalized["target"] == PROPOSAL["target"]
     assert normalized["candidate_gold"] == PROPOSAL["proposed_gold"]
     assert normalized["evidence_refs"] == ["e1", "e2"]
+    assert normalized["commerce_cue_ids"] == ["c1", "c2"]
+    assert normalized["commercial_relation_ids"] == ["r1"]
+    assert normalized["capability"] == "CLAIM_DEMONSTRATION_STATUS"
     assert normalized["resolution_status"] == "resolved"
 
 
