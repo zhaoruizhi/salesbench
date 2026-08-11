@@ -122,6 +122,27 @@ def test_unresolved_source_id_is_labeled_instead_of_becoming_unknown_content() -
     assert normalized["display_summary"] == "Candidate source could not be resolved"
 
 
+def test_pipeline_failure_without_candidate_is_labeled_as_diagnostic() -> None:
+    normalized = normalize_review_queue_row(
+        {
+            "review_item_id": "r-diagnostic",
+            "video_id": "v1",
+            "stage": "commercial_relation_building",
+            "item_type": "commercial_relation",
+            "reason_code": "COMMERCIAL_RELATION_VALIDATION_FAILED",
+            "reason": "commercial_relation_validation_failed",
+            "evidence_refs": ["e1", "e2"],
+            "issues": [{"code": "INVALID_RELATION_TARGET_TYPE"}],
+        },
+        {},
+    )
+
+    assert normalized["resolution_status"] == "diagnostic"
+    assert normalized["display_summary"] == "Pipeline diagnostic record"
+    assert normalized["target"] == {}
+    assert normalized["candidate_gold"] == {}
+
+
 def test_canonical_v8_row_round_trips() -> None:
     row = {
         "review_item_id": "r6",

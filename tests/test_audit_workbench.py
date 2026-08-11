@@ -451,9 +451,30 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     _write(evidence_dir / "gold_proposals.jsonl", json.dumps(proposal, ensure_ascii=False) + "\n")
     _write(
         evidence_dir / "human_review_queue.jsonl",
-        json.dumps(
-            {"review_item_id": "r1", "video_id": "v1", "source_proposal_ids": ["p1"], "reason": "复核"},
-            ensure_ascii=False,
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "review_item_id": "r1",
+                        "video_id": "v1",
+                        "source_proposal_ids": ["p1"],
+                        "reason": "复核",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "review_item_id": "r1",
+                        "video_id": "v1",
+                        "stage": "commercial_relation_building",
+                        "item_type": "commercial_relation",
+                        "reason_code": "COMMERCIAL_RELATION_VALIDATION_FAILED",
+                        "reason": "commercial_relation_validation_failed",
+                        "evidence_refs": ["e1"],
+                        "issues": [{"code": "INVALID_RELATION_TARGET_TYPE"}],
+                    }
+                ),
+            ]
         )
         + "\n",
     )
@@ -523,6 +544,9 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     )
 
     assert data["evidence"]["queue"][0]["evidence_items"][0]["text_span"] == "国家专利"
+    assert len({row["id"] for row in data["evidence"]["queue"]}) == 2
+    assert all(row["id"].startswith("r1:") for row in data["evidence"]["queue"])
+    assert data["evidence"]["queue"][1]["resolution_status"] == "diagnostic"
     assert data["qa"][0]["evidence_items"][0]["semantic_text"] == "产品｜认证｜国家专利"
     assert data["qa"][0]["evidence_items"][0]["frames"][0]["frame_index"] == 1
     assert data["judge"]["rows"][0]["evidence_items"] == data["qa"][0]["evidence_items"]
@@ -729,7 +753,7 @@ def test_review_cards_distinguish_candidates_abstentions_and_unresolved_sources(
     prompts = collect_prompt_snapshot()
     data = {
         "release": {"status": "pilot", "prompt_version": "v6"},
-        "counts": {"videos": 1, "evidence_units": 1, "annotations": 0, "review_queue": 3, "qa": 0},
+        "counts": {"videos": 1, "evidence_units": 1, "annotations": 0, "review_queue": 4, "qa": 0},
         "delivery": {},
         "evidence": {
             "queue": [
@@ -769,6 +793,21 @@ def test_review_cards_distinguish_candidates_abstentions_and_unresolved_sources(
                     "display_summary": "Candidate source could not be resolved",
                     "evidence_items": [],
                 },
+                {
+                    "id": "diagnostic",
+                    "video_id": "v1",
+                    "stage": "commercial_relation_building",
+                    "item_type": "commercial_relation",
+                    "task_type": "",
+                    "reason": "commercial_relation_validation_failed",
+                    "reason_code": "COMMERCIAL_RELATION_VALIDATION_FAILED",
+                    "resolution_status": "diagnostic",
+                    "issues": [{"code": "INVALID_RELATION_TARGET_TYPE"}],
+                    "evidence_refs": ["e1"],
+                    "target": {},
+                    "candidate_gold": {},
+                    "evidence_items": [],
+                },
             ],
             "risks": [],
             "missing_task_videos": [],
@@ -785,6 +824,7 @@ def test_review_cards_distinguish_candidates_abstentions_and_unresolved_sources(
     assert "Candidate content and evidence" in html
     assert "Abstention details" in html
     assert "Unresolved source details" in html
+    assert "管线诊断记录，不包含候选 Target 或 Gold" in html
     assert "查看 target / gold / proposal / evidence_refs" not in html
 
 

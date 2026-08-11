@@ -178,6 +178,9 @@ def normalize_review_queue_row(
     elif unresolved and not has_embedded_candidate:
         resolution_status = "unresolved"
         display_summary = "Candidate source could not be resolved"
+    elif not target and not candidate_gold and not primary:
+        resolution_status = "diagnostic"
+        display_summary = "Pipeline diagnostic record"
     else:
         resolution_status = "resolved"
         display_summary = "Candidate requires review"
