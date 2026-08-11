@@ -825,6 +825,7 @@ def test_review_cards_distinguish_candidates_abstentions_and_unresolved_sources(
     assert "Abstention details" in html
     assert "Unresolved source details" in html
     assert "管线诊断记录，不包含候选 Target 或 Gold" in html
+    assert "'PIPELINE':'UNRESOLVED'" in html
     assert "查看 target / gold / proposal / evidence_refs" not in html
 
 
