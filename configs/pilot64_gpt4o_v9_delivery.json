@@ -23,10 +23,10 @@
         "exclude": ["run_*", "evaluation_*"]
       },
       "model_run": {
-        "source": "outputs/vqa/v9_pilot64_gpt4o_yunwu/run_gpt4o"
+        "source": "outputs/evaluation/v9_pilot64_gpt4o_yunwu/predictions_gpt4o"
       },
       "evaluation": {
-        "source": "outputs/vqa/v9_pilot64_gpt4o_yunwu/evaluation_gpt4o"
+        "source": "outputs/evaluation/v9_pilot64_gpt4o_yunwu/judge_gpt4o"
       },
       "audit_translations": {
         "source": "outputs/audit/translations/v9_pilot64/audit_translations.jsonl"
@@ -44,10 +44,10 @@
         "exclude": ["run_*", "evaluation_*"]
       },
       "model_run": {
-        "source": "outputs/vqa/v9_smoke5_gpt4o_yunwu/run_gpt4o"
+        "source": "outputs/evaluation/v9_smoke5_gpt4o_yunwu/predictions_gpt4o"
       },
       "evaluation": {
-        "source": "outputs/vqa/v9_smoke5_gpt4o_yunwu/evaluation_gpt4o"
+        "source": "outputs/evaluation/v9_smoke5_gpt4o_yunwu/judge_gpt4o"
       },
       "audit_translations": {
         "source": "outputs/audit/translations/v9_smoke/audit_translations.jsonl"
