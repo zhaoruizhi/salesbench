@@ -6,10 +6,10 @@
   "versions": {
     "schema": "evidence-dataset-schema-v3",
     "prompt": "evidence-prompt-v9",
-    "pipeline": "evidence-first-pipeline-v8",
+    "pipeline": "evidence-first-pipeline-v9",
     "compiler": "evidence-qa-compiler-v5",
-    "question_realizer": "question-realizer-prompt-v1",
-    "judge": "judge-prompt-v4",
+    "question_realizer": "question-realizer-prompt-v2",
+    "judge": "judge-prompt-v5",
     "audit_translation": "audit-translation-prompt-v1"
   },
   "formal": {

@@ -383,12 +383,22 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     qa_dir = tmp_path / "qa"
     evaluation_dir = tmp_path / "evaluation"
     _write(tmp_path / "frames/v1/frame_001.jpg", "frame")
+    _write(tmp_path / "frames/v2/frame_002.jpg", "frame")
     _write(
         tmp_path / "frames/v1/manifest.json",
         json.dumps(
             {
                 "video_id": "v1",
                 "frames": [{"frame_index": 1, "timestamp_s": 1.5, "path": "frames/v1/frame_001.jpg"}],
+            }
+        ),
+    )
+    _write(
+        tmp_path / "frames/v2/manifest.json",
+        json.dumps(
+            {
+                "video_id": "v2",
+                "frames": [{"frame_index": 2, "timestamp_s": 2.5, "path": "frames/v2/frame_002.jpg"}],
             }
         ),
     )
@@ -423,7 +433,17 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
         "evidence_ids": ["e1"],
         "proposal_confidence": 0.9,
     }
-    _write(evidence_dir / "evidence_units.jsonl", json.dumps(unit, ensure_ascii=False) + "\n")
+    abstained_unit = {
+        "evidence_id": "e2",
+        "video_id": "v2",
+        "modality": "visual",
+        "frame_indices": [2],
+        "content_en": "A quiz card is shown before the product pitch.",
+    }
+    _write(
+        evidence_dir / "evidence_units.jsonl",
+        json.dumps(unit, ensure_ascii=False) + "\n" + json.dumps(abstained_unit) + "\n",
+    )
     _write(
         evidence_dir / "video_evidence_dataset.jsonl",
         json.dumps({"video_id": "v1", "grounded_annotations": [annotation]}, ensure_ascii=False) + "\n",
@@ -441,7 +461,16 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
         evidence_dir / "audit_before_review.json",
         json.dumps({"video_count": 1, "videos_missing_required_tasks": []}),
     )
-    _write(evidence_dir / "generation_meta.json", json.dumps({"prompt_version": "evidence-prompt-v6"}))
+    _write(
+        evidence_dir / "generation_meta.json",
+        json.dumps(
+            {
+                "prompt_version": "evidence-prompt-v6",
+                "video_ids": ["v1", "v2"],
+                "statuses": {"v1": "ok", "v2": "partial"},
+            }
+        ),
+    )
     qa = {
         "vqa_id": "q1",
         "video_id": "v1",
@@ -500,6 +529,14 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     assert data["release"]["runtime_prompt_version"] == "evidence-prompt-v6"
     assert data["release"]["current_prompt_version"] == "evidence-prompt-v9"
     assert data["release"]["current_judge_prompt_version"] == "judge-prompt-v5"
+    assert data["counts"]["videos"] == 2
+    assert data["counts"]["commercial_records"] == 1
+    assert data["counts"]["abstentions"] == 1
+    abstention = data["evidence"]["abstentions"][0]
+    assert abstention["video_id"] == "v2"
+    assert abstention["reason_code"] == "NO_COMMERCIAL_RECORD"
+    assert abstention["evidence_items"][0]["content_en"] == abstained_unit["content_en"]
+    assert abstention["evidence_items"][0]["frames"][0]["frame_index"] == 2
 
 
 def test_workbench_renders_chinese_translation_and_english_source(tmp_path: Path) -> None:

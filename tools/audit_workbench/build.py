@@ -53,6 +53,7 @@ RISK_LABELS = {
     "INSUFFICIENT_EVIDENCE": "证据引用不足",
     "TEMPLATE_REPETITION": "模板重复度高",
     "LOW_JUDGE_SCORE": "Judge 低分",
+    "NO_COMMERCIAL_RECORD": "未生成可编译商业记录",
 }
 
 
@@ -655,10 +656,26 @@ def build_workbench_data(
         )
         for row in relations
     }
+    evidence_meta = _read_json(evidence_dir / "generation_meta.json", {})
     video_records = _read_jsonl(evidence_dir / "video_evidence_dataset.jsonl")
     annotations = [item for row in video_records for item in row.get("grounded_annotations") or []]
     annotation_by_id = {str(item.get("annotation_id")): item for item in annotations}
-    video_ids = {str(row.get("video_id")) for row in video_records if row.get("video_id")}
+    commercial_video_ids = {
+        str(row.get("video_id")) for row in video_records if row.get("video_id")
+    }
+    sampled_video_ids = [
+        str(row.get("video_id"))
+        for row in _read_jsonl(evidence_dir / "video_samples.jsonl")
+        if row.get("video_id")
+    ]
+    processed_video_ids = list(
+        dict.fromkeys(
+            [str(video_id) for video_id in evidence_meta.get("video_ids") or [] if video_id]
+            + sampled_video_ids
+            + sorted(commercial_video_ids)
+        )
+    )
+    video_ids = set(processed_video_ids)
     frame_cache_root = (repo_root / manifest.get("frame_cache_root", "outputs/cache/frames")).resolve()
     frame_manifests = load_frame_manifests(frame_cache_root, video_ids, repo_root=repo_root)
     proposals = _read_jsonl(evidence_dir / "gold_proposals.jsonl")
@@ -688,7 +705,6 @@ def build_workbench_data(
         ]
         queue_rows.append(normalized)
     audit = _read_json(evidence_dir / "audit_before_review.json", {})
-    evidence_meta = _read_json(evidence_dir / "generation_meta.json", {})
     qa_rows = _read_jsonl(qa_dir / "vqa_gold_private.jsonl")
     annotation_risks = detect_annotation_risks(annotations, evidence_by_id)
     for risk in annotation_risks:
@@ -710,6 +726,66 @@ def build_workbench_data(
             for relation_id in annotation.get("commercial_relation_ids") or []
             if relation_id in relation_by_id
         ]
+    evidence_ids_by_video: dict[str, list[str]] = {}
+    for unit in units:
+        video_id = str(unit.get("video_id") or "")
+        evidence_id = str(unit.get("evidence_id") or "")
+        if video_id and evidence_id:
+            evidence_ids_by_video.setdefault(video_id, []).append(evidence_id)
+    cue_ids_by_video: dict[str, list[str]] = {}
+    for cue in cues:
+        video_id = str(cue.get("video_id") or "")
+        cue_id = str(cue.get("cue_id") or "")
+        if video_id and cue_id:
+            cue_ids_by_video.setdefault(video_id, []).append(cue_id)
+    relation_ids_by_video: dict[str, list[str]] = {}
+    for relation in relations:
+        video_id = str(relation.get("video_id") or "")
+        relation_id = str(relation.get("relation_id") or "")
+        if video_id and relation_id:
+            relation_ids_by_video.setdefault(video_id, []).append(relation_id)
+    abstentions: list[dict[str, Any]] = []
+    for video_id in processed_video_ids:
+        if video_id in commercial_video_ids:
+            continue
+        evidence_refs = evidence_ids_by_video.get(video_id, [])
+        evidence_items = enrich_evidence_refs(
+            video_id,
+            evidence_refs,
+            evidence_by_id,
+            frame_manifests,
+        )
+        _localize_evidence_items(evidence_items, translations)
+        abstentions.append(
+            {
+                "id": f"abstention:{video_id}",
+                "video_id": video_id,
+                "stage": "commercial_compilation",
+                "item_type": "abstention",
+                "task_type": "UNKNOWN",
+                "task_subtype": "NO_COMMERCIAL_RECORD",
+                "reason_code": "NO_COMMERCIAL_RECORD",
+                "risk_codes": ["NO_COMMERCIAL_RECORD"],
+                "display_summary": "该视频已完成 Evidence 提取，但未生成可编译的商业记录",
+                "reason": (
+                    "请核对抽帧是否覆盖实际带货段、商业线索是否确实缺失，并决定保留 abstention、"
+                    "增加尾段抽帧后重跑，或从正式 cohort 重采样。"
+                ),
+                "pipeline_status": (evidence_meta.get("statuses") or {}).get(video_id),
+                "evidence_refs": evidence_refs,
+                "evidence_items": evidence_items,
+                "commerce_cues": [
+                    cue_by_id[cue_id]
+                    for cue_id in cue_ids_by_video.get(video_id, [])
+                    if cue_id in cue_by_id
+                ],
+                "commercial_relations": [
+                    relation_by_id[relation_id]
+                    for relation_id in relation_ids_by_video.get(video_id, [])
+                    if relation_id in relation_by_id
+                ],
+            }
+        )
     annotation_risk_index = {row["id"]: row["risk_codes"] for row in annotation_risks}
     question_counts = Counter(str(row.get("question") or "") for row in qa_rows)
     compact_qa: list[dict[str, Any]] = []
@@ -827,7 +903,9 @@ def build_workbench_data(
             },
             "delivery": delivery,
             "counts": {
-                "videos": audit.get("video_count", len(video_records)),
+                "videos": len(processed_video_ids),
+                "commercial_records": len(video_records),
+                "abstentions": len(abstentions),
                 "evidence_units": len(units),
                 "annotations": len(annotations),
                 "review_queue": len(queue_rows),
@@ -840,6 +918,7 @@ def build_workbench_data(
             "evidence": {
                 "queue": queue_rows,
                 "risks": annotation_risks,
+                "abstentions": abstentions,
                 "commerce_cues": list(cue_by_id.values()),
                 "commercial_relations": list(relation_by_id.values()),
                 "missing_task_videos": audit.get("videos_missing_required_tasks") or [],
@@ -858,6 +937,7 @@ def build_workbench_data(
 def compact_workbench_data(data: dict[str, Any], limit: int = 60) -> dict[str, Any]:
     compact = deepcopy(data)
     compact["evidence"]["queue"] = compact["evidence"]["queue"][:limit]
+    compact["evidence"]["abstentions"] = compact["evidence"].get("abstentions", [])[:limit]
     priority = {
         "AE_SCHEMA_MISMATCH": 6,
         "SELLER_CLAIM_AS_FACT": 6,
@@ -895,7 +975,7 @@ def render_workbench(
 #salesbench-audit-workbench{--ink:var(--color-text-primary,#182230);--muted:var(--color-text-secondary,#627084);--panel:var(--color-background-secondary,#f5f7fa);--card:var(--color-background-primary,#fff);--line:var(--color-border-secondary,#d9e0e8);--accent:#1769e0;--warn:#a85800;--bad:#b42318;--ok:#067647;color:var(--ink);font:14px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:1440px;margin:auto}
 #salesbench-audit-workbench *{box-sizing:border-box}#salesbench-audit-workbench h1{font-size:clamp(25px,4vw,42px);line-height:1.1;margin:.25rem 0}#salesbench-audit-workbench h2{font-size:21px;margin:0 0 12px}#salesbench-audit-workbench h3{font-size:16px;margin:0 0 8px}#salesbench-audit-workbench button,#salesbench-audit-workbench select,#salesbench-audit-workbench input{font:inherit}
 #salesbench-audit-workbench .hero{border:1px solid var(--line);border-radius:20px;padding:24px;background:linear-gradient(135deg,var(--card),var(--panel))}#salesbench-audit-workbench .eyebrow{font-weight:700;color:var(--accent);letter-spacing:.04em}#salesbench-audit-workbench .muted{color:var(--muted)}#salesbench-audit-workbench .alert{margin-top:15px;padding:12px 14px;border-left:4px solid var(--warn);background:color-mix(in srgb,#f79009 10%,var(--card));border-radius:8px}
-#salesbench-audit-workbench .stats{display:grid;grid-template-columns:repeat(6,minmax(110px,1fr));gap:10px;margin-top:18px}#salesbench-audit-workbench .stat{padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card)}#salesbench-audit-workbench .stat b{display:block;font-size:23px}#salesbench-audit-workbench .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}#salesbench-audit-workbench .tab{border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 13px;border-radius:999px;cursor:pointer}#salesbench-audit-workbench .tab[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+#salesbench-audit-workbench .stats{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:10px;margin-top:18px}#salesbench-audit-workbench .stat{padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card)}#salesbench-audit-workbench .stat b{display:block;font-size:23px}#salesbench-audit-workbench .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}#salesbench-audit-workbench .tab{border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 13px;border-radius:999px;cursor:pointer}#salesbench-audit-workbench .tab[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
 #salesbench-audit-workbench .panel{display:none}#salesbench-audit-workbench .panel.active{display:block}#salesbench-audit-workbench .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}#salesbench-audit-workbench .card{border:1px solid var(--line);border-radius:14px;background:var(--card);padding:16px;min-width:0}#salesbench-audit-workbench .flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:stretch}#salesbench-audit-workbench .gate{padding:14px;border-radius:12px;border-top:4px solid var(--accent);background:var(--panel)}#salesbench-audit-workbench .gate.primary{border-top-color:var(--bad)}#salesbench-audit-workbench .tag{display:inline-flex;padding:2px 8px;border-radius:999px;background:var(--panel);border:1px solid var(--line);font-size:12px;margin:2px}#salesbench-audit-workbench .tag.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,var(--line))}
 #salesbench-audit-workbench .toolbar{display:grid;grid-template-columns:minmax(170px,1fr) 150px 170px auto;gap:8px;margin:10px 0}#salesbench-audit-workbench .control{border:1px solid var(--line);border-radius:9px;padding:8px 10px;background:var(--card);color:var(--ink);min-width:0}#salesbench-audit-workbench .list{display:grid;gap:10px}#salesbench-audit-workbench .item{border:1px solid var(--line);border-radius:12px;padding:13px;background:var(--card)}#salesbench-audit-workbench .item-head{display:flex;gap:8px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap}#salesbench-audit-workbench .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}#salesbench-audit-workbench pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:470px;overflow:auto;padding:14px;background:#111827;color:#e5edf7;border-radius:11px;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}#salesbench-audit-workbench details{margin-top:8px}#salesbench-audit-workbench summary{cursor:pointer;font-weight:650}
 #salesbench-audit-workbench .decision{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}#salesbench-audit-workbench .decision button,#salesbench-audit-workbench .button{border:1px solid var(--line);background:var(--card);color:var(--ink);padding:6px 9px;border-radius:8px;cursor:pointer}#salesbench-audit-workbench .decision button.active{background:var(--accent);color:#fff;border-color:var(--accent)}#salesbench-audit-workbench .bars{display:grid;gap:8px}#salesbench-audit-workbench .bar{display:grid;grid-template-columns:44px 1fr 55px;gap:8px;align-items:center}#salesbench-audit-workbench .track{height:10px;background:var(--panel);border-radius:999px;overflow:hidden}#salesbench-audit-workbench .fill{height:100%;background:var(--accent)}#salesbench-audit-workbench .footer{margin-top:18px;padding:14px;border-top:1px solid var(--line);display:flex;gap:12px;justify-content:space-between;align-items:center;flex-wrap:wrap}
@@ -912,7 +992,7 @@ def render_workbench(
 <script type="application/json" id="sbaw-data">__PAYLOAD__</script>
 <script>
 (()=>{const ROOT=document.getElementById('salesbench-audit-workbench');const PACK=JSON.parse(document.getElementById('sbaw-data').textContent);const D=PACK.data;const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const pretty=v=>esc(JSON.stringify(v,null,2));const key=id=>`salesbench-audit:${D.release.prompt_version}:${id}`;
-function stat(label,value){return `<div class="stat"><span class="muted">${esc(label)}</span><b>${esc(value)}</b></div>`}document.getElementById('runtime-prompt-version').textContent=D.release.runtime_prompt_version||D.release.prompt_version||'unknown';document.getElementById('current-prompt-version').textContent=D.release.current_prompt_version||'evidence-prompt-v9';document.getElementById('translation-warning-count').textContent=Number(D.translations?.missing||0)+Number(D.translations?.stale||0);document.getElementById('sbaw-stats').innerHTML=[stat('视频',D.counts.videos),stat('EvidenceUnit',D.counts.evidence_units),stat('Annotation',D.counts.annotations),stat('人工队列',D.counts.review_queue),stat('QA',D.counts.qa),stat('Judge',D.counts.judge_rows)].join('');document.getElementById('preview-note').textContent=D.preview_notice||'完整本地审计视图；审核决定仅保存在当前浏览器。';
+function stat(label,value){return `<div class="stat"><span class="muted">${esc(label)}</span><b>${esc(value)}</b></div>`}document.getElementById('runtime-prompt-version').textContent=D.release.runtime_prompt_version||D.release.prompt_version||'unknown';document.getElementById('current-prompt-version').textContent=D.release.current_prompt_version||'evidence-prompt-v9';document.getElementById('translation-warning-count').textContent=Number(D.translations?.missing||0)+Number(D.translations?.stale||0);document.getElementById('sbaw-stats').innerHTML=[stat('已处理视频',D.counts.videos),stat('商业记录',D.counts.commercial_records??D.counts.videos),stat('Abstention',D.counts.abstentions??0),stat('EvidenceUnit',D.counts.evidence_units),stat('Annotation',D.counts.annotations),stat('人工队列',D.counts.review_queue),stat('QA',D.counts.qa),stat('Judge',D.counts.judge_rows)].join('');document.getElementById('preview-note').textContent=D.preview_notice||'完整本地审计视图；审核决定仅保存在当前浏览器。';
 function showTab(id){ROOT.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===id)));ROOT.querySelectorAll('[data-panel]').forEach(p=>p.classList.toggle('active',p.dataset.panel===id));}ROOT.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
 function renderDelivery(){const f=D.delivery.formal_root||'',s=D.delivery.smoke_root||'';document.getElementById('delivery-view').innerHTML=`<div class="grid"><article class="card"><h2>物理目录</h2><p><span class="tag">FORMAL</span> <span class="mono">${esc(f)}</span></p><p><span class="tag">SMOKE</span> <span class="mono">${esc(s)}</span></p><p class="muted">smoke 与 64 条正式 candidate 结果物理分离，不能互相覆盖。</p><p><b>当前数据：</b>${esc(D.release.runtime_prompt_version)} · <b>审计组：</b>${esc(D.release.group||'formal')}</p></article><article class="card"><h2>四层正式交付</h2><ol><li><b>EvidenceDataset</b>：人工审核并冻结后才是 Gold 来源</li><li><b>Prompt manifest</b>：全英文版本与运行契约</li><li><b>QA</b>：全英文公开问题 + 私有 Gold</li><li><b>Evaluation</b>：predictions、Judge 明细、校准报告</li></ol><p class="muted">中文审计翻译和互动分析都不进入公开 benchmark。</p></article></div><h2 style="margin-top:18px">三道人工质量门</h2><div class="flow"><article class="gate primary"><h3>Gate E · Evidence Graph</h3><p>核查 EvidenceUnit、CommerceCue、CommercialRelation、Annotation 及关联帧。</p></article><article class="gate"><h3>冻结 EvidenceDataset</h3><p>接受、修订、拒绝都写入审核记录；冻结后重新实现并编译 QA。</p></article><article class="gate"><h3>Gate Q · QA</h3><p>逐题检查自然度、领域特异性、答案和图引用。</p></article><article class="gate"><h3>Gate J · Judge</h3><p>抽取人工评分集校准五档主评分和错误标签。</p></article></div>`}
 function translationWarning(status){return status&&status!=='current'&&status!=='not_applicable'?`<div class="translation-warning">中文审计翻译状态：${esc(status)}。请以英文 canonical 原文为准并重新生成 sidecar。</div>`:''}
@@ -925,9 +1005,9 @@ function renderReviewDetails(x){if(x.kind==='AUTO_RISK')return `<details><summar
 window.openLightbox=function openLightbox(src,caption){const box=document.getElementById('frame-lightbox');const image=document.getElementById('frame-lightbox-image');image.src=src;image.alt=caption||'放大的证据帧';box.classList.add('open')};window.closeLightbox=function closeLightbox(){const box=document.getElementById('frame-lightbox');box.classList.remove('open');document.getElementById('frame-lightbox-image').removeAttribute('src')};document.getElementById('frame-lightbox').addEventListener('click',event=>{if(event.target.id==='frame-lightbox')closeLightbox()});
 function toolbar(prefix){return `<div class="toolbar"><input class="control" id="${prefix}-search" placeholder="搜索 ID、问题、理由…"><select class="control" id="${prefix}-task"><option value="">全部任务</option><option>BP</option><option>CM</option><option>SS</option><option>AE</option><option>UNKNOWN</option></select><select class="control" id="${prefix}-risk"><option value="">全部风险</option>${Object.entries(PACK.risk_labels).map(([k,v])=>`<option value="${k}">${esc(v)}</option>`).join('')}</select><span class="muted" id="${prefix}-count"></span></div>`}
 function tags(codes){return (codes||[]).map(code=>`<span class="tag bad">${esc(PACK.risk_labels[code]||code)}</span>`).join('')}
-function renderEvidence(){const queue=D.evidence.queue.map(x=>({...x,kind:'QUEUE',risk_codes:['HUMAN_QUEUE']}));const risks=D.evidence.risks.map(x=>({...x,kind:'AUTO_RISK'}));const rows=[...queue,...risks];const riskCounts=risks.reduce((acc,row)=>{(row.risk_codes||[]).forEach(code=>acc[code]=(acc[code]||0)+1);return acc},{});const riskSummary=Object.entries(riskCounts).sort((a,b)=>b[1]-a[1]).map(([code,count])=>`<span class="tag bad">${esc(PACK.risk_labels[code]||code)} · ${count}</span>`).join('');document.getElementById('evidence-view').innerHTML=`<div class="grid"><article class="card"><h2>当前优先级</h2><p><b>P0：</b>${D.counts.review_queue} 条人工队列；${D.evidence.missing_task_videos.length} 个缺任务视频。</p><p><b>P1：</b>全部 INFERRED 与自动规则风险；对其余 DIRECT 分层抽样。</p></article><article class="card"><h2>商业图资产</h2><p>CommerceCue：<b>${D.evidence.commerce_cues?.length||0}</b> · CommercialRelation：<b>${D.evidence.commercial_relations?.length||0}</b></p><p>${riskSummary||'未命中自动风险规则'}</p></article><article class="card"><h2>不要只审 QA</h2><p>必须先核对原始事实、带货线索和关系边，再判断 Annotation 与 QA。</p><p class="muted">审核决定不会自动写回数据集。</p></article></div>${toolbar('ev')}<div id="ev-list" class="list"></div>`;const draw=()=>{const q=document.getElementById('ev-search').value.toLowerCase(),task=document.getElementById('ev-task').value,risk=document.getElementById('ev-risk').value;const found=rows.filter(x=>(!task||x.task_type===task)&&(!risk||(x.risk_codes||[]).includes(risk))&&(!q||JSON.stringify(x).toLowerCase().includes(q)));document.getElementById('ev-count').textContent=`显示 ${found.length} / ${rows.length}`;document.getElementById('ev-list').innerHTML=found.slice(0,200).map(x=>`<article class="item"><div class="item-head"><div><span class="tag">${esc(x.kind)}</span><span class="tag">${esc(x.task_type||'UNRESOLVED')}</span>${x.stage?`<span class="tag">${esc(x.stage)}</span>`:''}${x.item_type?`<span class="tag">${esc(x.item_type)}</span>`:''}${tags(x.risk_codes)}</div><span class="mono">${esc(x.video_id)}</span></div><h3>${esc(x.id)}</h3><p>${esc(x.reason||'自动接受记录命中本地风险规则')}</p>${renderReviewDetails(x)}<h3>CommerceCue / CommercialRelation</h3>${renderGraph(x.commerce_cues,x.commercial_relations)}<h3>可核对 Evidence 与关联帧</h3>${renderEvidenceItems(x.evidence_items)}${decisionButtons(x.id)}</article>`).join('')||'<p class="muted">没有匹配记录。</p>';bindDecisions()};['ev-search','ev-task','ev-risk'].forEach(id=>document.getElementById(id).addEventListener('input',draw));draw()}
+function renderEvidence(){const queue=D.evidence.queue.map(x=>({...x,kind:'QUEUE',risk_codes:['HUMAN_QUEUE']}));const abstentions=(D.evidence.abstentions||[]).map(x=>({...x,kind:'ABSTENTION'}));const risks=D.evidence.risks.map(x=>({...x,kind:'AUTO_RISK'}));const rows=[...abstentions,...queue,...risks];const riskCounts=[...abstentions,...risks].reduce((acc,row)=>{(row.risk_codes||[]).forEach(code=>acc[code]=(acc[code]||0)+1);return acc},{});const riskSummary=Object.entries(riskCounts).sort((a,b)=>b[1]-a[1]).map(([code,count])=>`<span class="tag bad">${esc(PACK.risk_labels[code]||code)} · ${count}</span>`).join('');document.getElementById('evidence-view').innerHTML=`<div class="grid"><article class="card"><h2>当前优先级</h2><p><b>P0：</b>${D.counts.abstentions||0} 个无商业记录视频；${D.counts.review_queue} 条人工队列；${D.evidence.missing_task_videos.length} 个缺任务视频。</p><p><b>P1：</b>全部 INFERRED 与自动规则风险；对其余 DIRECT 分层抽样。</p></article><article class="card"><h2>商业图资产</h2><p>CommerceCue：<b>${D.evidence.commerce_cues?.length||0}</b> · CommercialRelation：<b>${D.evidence.commercial_relations?.length||0}</b></p><p>${riskSummary||'未命中自动风险规则'}</p></article><article class="card"><h2>不要只审 QA</h2><p>必须先核对原始事实、带货线索和关系边，再判断 Annotation 与 QA。</p><p class="muted">审核决定不会自动写回数据集。</p></article></div>${toolbar('ev')}<div id="ev-list" class="list"></div>`;const draw=()=>{const q=document.getElementById('ev-search').value.toLowerCase(),task=document.getElementById('ev-task').value,risk=document.getElementById('ev-risk').value;const found=rows.filter(x=>(!task||x.task_type===task)&&(!risk||(x.risk_codes||[]).includes(risk))&&(!q||JSON.stringify(x).toLowerCase().includes(q)));document.getElementById('ev-count').textContent=`显示 ${found.length} / ${rows.length}`;document.getElementById('ev-list').innerHTML=found.slice(0,200).map(x=>`<article class="item"><div class="item-head"><div><span class="tag">${esc(x.kind)}</span><span class="tag">${esc(x.task_type||'UNRESOLVED')}</span>${x.stage?`<span class="tag">${esc(x.stage)}</span>`:''}${x.item_type?`<span class="tag">${esc(x.item_type)}</span>`:''}${tags(x.risk_codes)}</div><span class="mono">${esc(x.video_id)}</span></div><h3>${esc(x.id)}</h3><p>${esc(x.reason||'自动接受记录命中本地风险规则')}</p>${renderReviewDetails(x)}<h3>CommerceCue / CommercialRelation</h3>${renderGraph(x.commerce_cues,x.commercial_relations)}<h3>可核对 Evidence 与关联帧</h3>${renderEvidenceItems(x.evidence_items)}${decisionButtons(x.id)}</article>`).join('')||'<p class="muted">没有匹配记录。</p>';bindDecisions()};['ev-search','ev-task','ev-risk'].forEach(id=>document.getElementById(id).addEventListener('input',draw));draw()}
 function renderQA(){document.getElementById('qa-view').innerHTML=`<div class="card"><h2>QA 是第二道审核门</h2><p>当前 ${D.counts.qa} 题是未完成人工冻结的 candidate QA。中文只用于通读，审核结论必须同时核对英文 canonical QA、商业图、Evidence 与帧。</p></div>${toolbar('qa')}<div id="qa-list" class="list"></div>`;const draw=()=>{const q=document.getElementById('qa-search').value.toLowerCase(),task=document.getElementById('qa-task').value,risk=document.getElementById('qa-risk').value;const found=D.qa.filter(x=>(!task||x.task_type===task)&&(!risk||(x.risk_codes||[]).includes(risk))&&(!q||JSON.stringify(x).toLowerCase().includes(q)));document.getElementById('qa-count').textContent=`显示 ${found.length} / ${D.qa.length}`;document.getElementById('qa-list').innerHTML=found.slice(0,200).map(x=>`<article class="item"><div class="item-head"><div><span class="tag">${esc(x.task_type)}</span><span class="tag">${esc(x.task_subtype)}</span><span class="tag">${esc(x.capability||'')}</span><span class="tag">${esc(x.reasoning_operator||'')}</span>${tags(x.risk_codes)}</div><span class="mono">${esc(x.vqa_id)}</span></div>${translationWarning(x.question_translation_status)}${translationWarning(x.gold_translation_status)}<h3>${esc(x.question_zh||x.question)}</h3><p><b>中文 Gold：</b>${esc(x.gold_answer_zh||x.gold_answer)}</p><details open><summary>English canonical question and Gold</summary><p><b>Question:</b> ${esc(x.question)}</p><p><b>Gold:</b> ${esc(typeof x.gold_answer==='string'?x.gold_answer:JSON.stringify(x.gold_answer))}</p></details><h3>CommerceCue / CommercialRelation</h3>${renderGraph(x.commerce_cues,x.commercial_relations)}<h3>可读 Evidence 与关联帧</h3>${renderEvidenceItems(x.evidence_items)}<details><summary>来源 Annotation 与完整引用</summary><pre>${pretty({source_annotations:x.source_annotations,source_annotation_ids:x.source_annotation_ids,evidence_refs:x.evidence_refs,commerce_cue_ids:x.commerce_cue_ids,commercial_relation_ids:x.commercial_relation_ids,spec_id:x.spec_id})}</pre></details>${decisionButtons(x.vqa_id)}</article>`).join('')||'<p class="muted">没有匹配记录。</p>';bindDecisions()};['qa-search','qa-task','qa-risk'].forEach(id=>document.getElementById(id).addEventListener('input',draw));draw()}
-function renderJudge(){const per=D.judge.metrics.per_task||{};const bars=Object.entries(per).map(([task,m])=>`<div class="bar"><b>${esc(task)}</b><div class="track"><div class="fill" style="width:${Math.max(0,Math.min(100,Number(m.relaxed_accuracy||0)*100))}%"></div></div><span>${(Number(m.relaxed_accuracy||0)*100).toFixed(1)}%</span></div>`).join('');document.getElementById('judge-view').innerHTML=`<div class="grid"><article class="card"><h2>Candidate 诊断分数</h2><div class="bars">${bars}</div><p>Macro relaxed：<b>${(Number(D.judge.metrics.macro_average?.relaxed_accuracy||0)*100).toFixed(2)}%</b> · Judge failures：<b>${esc(D.judge.summary.judge_failed_count||0)}</b></p></article><article class="card"><h2>Judge v4 与后续校准</h2><ol><li>四任务独立 rubric 与五档主分数；</li><li>英文 canonical 理由和诊断标签；</li><li>中文理由只由 audit sidecar 生成；</li><li>仍需人工样本校准一致性和偏差。</li></ol></article></div>${toolbar('jd')}<div id="jd-list" class="list"></div>`;document.querySelector('#jd-risk').innerHTML='<option value="">全部分数</option><option value="LOW">≤ 0.5</option><option value="HIGH">≥ 0.75</option>';const draw=()=>{const q=document.getElementById('jd-search').value.toLowerCase(),task=document.getElementById('jd-task').value,risk=document.getElementById('jd-risk').value;const found=D.judge.rows.filter(x=>(!task||x.task_type===task)&&(!risk||(risk==='LOW'?Number(x.score)<=.5:Number(x.score)>=.75))&&(!q||JSON.stringify(x).toLowerCase().includes(q)));document.getElementById('jd-count').textContent=`显示 ${found.length} / ${D.judge.rows.length}`;document.getElementById('jd-list').innerHTML=found.slice(0,200).map(x=>`<article class="item"><div class="item-head"><div><span class="tag">${esc(x.task_type)}</span><span class="tag ${Number(x.score)<=.5?'bad':''}">score ${esc(x.score)}</span></div><span class="mono">${esc(x.vqa_id)}</span></div><h3>${esc(x.question)}</h3><p><b>Reference：</b>${esc(x.reference_answer)}</p><p><b>Model：</b>${esc(x.model_output)}</p>${x.correctness==null?'<p class="muted">当前结果没有完整分项分数。</p>':`<p><span class="tag">correctness ${esc(x.correctness)}</span> <span class="tag">grounding ${esc(x.grounding)}</span> <span class="tag">completeness ${esc(x.completeness)}</span></p>`}<h3>Judge 实际依据的 Evidence</h3>${renderEvidenceItems(x.evidence_items)}${translationWarning(x.reason_translation_status)}${translationWarning(x.evidence_alignment_translation_status)}<details open><summary>中文 Judge 理由与证据对齐</summary><p>${esc(x.reason_zh||'尚无中文审计翻译')}</p><p>${esc(x.evidence_alignment_zh||'')}</p></details><details><summary>English canonical Judge output</summary><p>${esc(x.reason)}</p><p>${esc(x.evidence_alignment)}</p></details>${decisionButtons(`judge:${x.vqa_id}`)}</article>`).join('')||'<p class="muted">没有匹配记录。</p>';bindDecisions()};['jd-search','jd-task','jd-risk'].forEach(id=>document.getElementById(id).addEventListener('input',draw));draw()}
+function renderJudge(){const per=D.judge.metrics.per_task||{};const bars=Object.entries(per).map(([task,m])=>`<div class="bar"><b>${esc(task)}</b><div class="track"><div class="fill" style="width:${Math.max(0,Math.min(100,Number(m.relaxed_accuracy||0)*100))}%"></div></div><span>${(Number(m.relaxed_accuracy||0)*100).toFixed(1)}%</span></div>`).join('');document.getElementById('judge-view').innerHTML=`<div class="grid"><article class="card"><h2>Candidate 诊断分数</h2><div class="bars">${bars}</div><p>Macro relaxed：<b>${(Number(D.judge.metrics.macro_average?.relaxed_accuracy||0)*100).toFixed(2)}%</b> · Judge failures：<b>${esc(D.judge.summary.judge_failed_count||0)}</b></p></article><article class="card"><h2>Judge v5 与后续校准</h2><ol><li>四任务独立 rubric 与五档主分数；</li><li>英文 canonical 理由和诊断标签；</li><li>中文理由只由 audit sidecar 生成；</li><li>仍需人工样本校准一致性和偏差。</li></ol></article></div>${toolbar('jd')}<div id="jd-list" class="list"></div>`;document.querySelector('#jd-risk').innerHTML='<option value="">全部分数</option><option value="LOW">≤ 0.5</option><option value="HIGH">≥ 0.75</option>';const draw=()=>{const q=document.getElementById('jd-search').value.toLowerCase(),task=document.getElementById('jd-task').value,risk=document.getElementById('jd-risk').value;const found=D.judge.rows.filter(x=>(!task||x.task_type===task)&&(!risk||(risk==='LOW'?Number(x.score)<=.5:Number(x.score)>=.75))&&(!q||JSON.stringify(x).toLowerCase().includes(q)));document.getElementById('jd-count').textContent=`显示 ${found.length} / ${D.judge.rows.length}`;document.getElementById('jd-list').innerHTML=found.slice(0,200).map(x=>`<article class="item"><div class="item-head"><div><span class="tag">${esc(x.task_type)}</span><span class="tag ${Number(x.score)<=.5?'bad':''}">score ${esc(x.score)}</span></div><span class="mono">${esc(x.vqa_id)}</span></div><h3>${esc(x.question)}</h3><p><b>Reference：</b>${esc(x.reference_answer)}</p><p><b>Model：</b>${esc(x.model_output)}</p>${x.correctness==null?'<p class="muted">当前结果没有完整分项分数。</p>':`<p><span class="tag">correctness ${esc(x.correctness)}</span> <span class="tag">grounding ${esc(x.grounding)}</span> <span class="tag">completeness ${esc(x.completeness)}</span></p>`}<h3>Judge 实际依据的 Evidence</h3>${renderEvidenceItems(x.evidence_items)}${translationWarning(x.reason_translation_status)}${translationWarning(x.evidence_alignment_translation_status)}<details open><summary>中文 Judge 理由与证据对齐</summary><p>${esc(x.reason_zh||'尚无中文审计翻译')}</p><p>${esc(x.evidence_alignment_zh||'')}</p></details><details><summary>English canonical Judge output</summary><p>${esc(x.reason)}</p><p>${esc(x.evidence_alignment)}</p></details>${decisionButtons(`judge:${x.vqa_id}`)}</article>`).join('')||'<p class="muted">没有匹配记录。</p>';bindDecisions()};['jd-search','jd-task','jd-risk'].forEach(id=>document.getElementById(id).addEventListener('input',draw));draw()}
 window.exportDecisions=function exportDecisions(){const decisions={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(`salesbench-audit:${D.release.prompt_version}:`))decisions[k.split(':').slice(2).join(':')]=localStorage.getItem(k)}const blob=new Blob([JSON.stringify({prompt_version:D.release.prompt_version,exported_at:new Date().toISOString(),decisions},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`salesbench-audit-decisions-${D.release.prompt_version}.json`;a.click();URL.revokeObjectURL(url)};renderDelivery();renderPrompts();renderEvidence();renderQA();renderJudge();})();
 </script></section>'''.replace("__PAYLOAD__", payload)
     if fragment:
