@@ -10,12 +10,16 @@ sys.path.insert(1, ".")
 
 from tools.audit_workbench.build import (
     build_workbench_data,
+    classify_review_bucket,
+    compact_workbench_to_byte_budget,
     collect_prompt_snapshot,
     compact_workbench_data,
     detect_annotation_risks,
     load_translation_index,
     organize_delivery,
+    render_preview_workbench,
     render_workbench,
+    select_accepted_annotation_sample,
 )
 from tools.audit_workbench.evidence_assets import (
     enrich_evidence_refs,
@@ -36,6 +40,63 @@ def test_module_cli_resolves_src_package_despite_salesbench_script_shadowing() -
 
     assert result.returncode == 0, result.stderr
     assert "Build the local SalesBench" in result.stdout
+
+
+def test_review_bucket_classification_separates_human_decisions_from_pipeline_noise() -> None:
+    assert classify_review_bucket({"item_type": "abstention"}) == "abstention_resample"
+    assert (
+        classify_review_bucket(
+            {
+                "stage": "commercial_relation_building",
+                "resolution_status": "diagnostic",
+                "reason_code": "COMMERCIAL_RELATION_VALIDATION_FAILED",
+            }
+        )
+        == "pipeline_diagnostics"
+    )
+    assert (
+        classify_review_bucket(
+            {
+                "stage": "proposal",
+                "reason_code": "PROPOSAL_GRAPH_VALIDATION_FAILED",
+                "issues": [{"code": "MISSING_COMMERCIAL_RELATION"}],
+            }
+        )
+        == "pipeline_diagnostics"
+    )
+    assert (
+        classify_review_bucket(
+            {"stage": "challenge", "item_type": "candidate", "reason_code": "CHALLENGER_REVISE"}
+        )
+        == "content_review"
+    )
+    assert (
+        classify_review_bucket({"risk_codes": ["MISSING_TEMPORAL_LOCALIZATION"]})
+        == "pipeline_diagnostics"
+    )
+    assert classify_review_bucket({"risk_codes": ["SELLER_CLAIM_AS_FACT"]}) == "content_review"
+
+
+def test_accepted_annotation_sample_is_stable_stratified_and_excludes_risks() -> None:
+    annotations = [
+        {
+            "annotation_id": f"{task.lower()}-{index}",
+            "video_id": f"v-{index}",
+            "task_type": task,
+            "evidence_refs": [f"e-{task}-{index}"],
+        }
+        for task in ("BP", "CM")
+        for index in range(10)
+    ]
+    risk_ids = {"bp-0", "cm-0"}
+
+    first = select_accepted_annotation_sample(annotations, risk_ids, fraction=0.1)
+    second = select_accepted_annotation_sample(list(reversed(annotations)), risk_ids, fraction=0.1)
+
+    assert len(first) == 2
+    assert {row["task_type"] for row in first} == {"BP", "CM"}
+    assert not risk_ids.intersection(str(row["annotation_id"]) for row in first)
+    assert [row["annotation_id"] for row in first] == [row["annotation_id"] for row in second]
 
 
 def _write(path: Path, text: str) -> None:
@@ -204,6 +265,133 @@ def test_render_workbench_has_interaction_contract_without_private_fields() -> N
     json.loads(html.split('<script type="application/json" id="sbaw-data">', 1)[1].split("</script>", 1)[0])
 
 
+def test_review_views_render_one_case_pagers_and_four_evidence_queues() -> None:
+    data = {
+        "release": {"status": "candidate", "prompt_version": "evidence-prompt-v9"},
+        "counts": {
+            "videos": 1,
+            "evidence_units": 1,
+            "annotations": 1,
+            "review_queue": 1,
+            "accepted_sample": 1,
+            "qa": 1,
+            "judge_rows": 1,
+        },
+        "delivery": {},
+        "evidence": {
+            "queue": [
+                {
+                    "id": "r1",
+                    "video_id": "v1",
+                    "task_type": "CM",
+                    "reason": "needs review",
+                    "audit_bucket": "content_review",
+                }
+            ],
+            "risks": [],
+            "abstentions": [],
+            "accepted_sample": [
+                {
+                    "id": "a1",
+                    "video_id": "v1",
+                    "task_type": "BP",
+                    "audit_bucket": "accepted_sample",
+                }
+            ],
+            "missing_task_videos": [],
+        },
+        "qa": [{"vqa_id": "q1", "task_type": "BP", "question": "Question?", "gold_answer": "Answer."}],
+        "judge": {
+            "summary": {},
+            "metrics": {},
+            "rows": [{"vqa_id": "q1", "task_type": "BP", "question": "Question?", "score": 1}],
+        },
+    }
+
+    html = render_workbench(data, collect_prompt_snapshot(), fragment=True)
+
+    assert 'class="case-pager"' in html
+    assert html.count("${pager(") == 3
+    assert 'aria-label="上一条"' in html
+    assert 'aria-label="下一条"' in html
+    assert 'aria-label="跳转到案例序号"' in html
+    assert "ArrowLeft" in html and "ArrowRight" in html
+    assert "event.key==='Enter'" in html
+    assert "prev.onclick" in html and "next.onclick" in html
+    assert "prev.addEventListener" not in html and "next.addEventListener" not in html
+    assert "内容审核" in html
+    assert "Abstention / 补采样" in html
+    assert "流水线诊断" in html
+    assert "自动通过抽样" in html
+    assert "原始诊断队列" in html
+    assert "slice(0,200)" not in html
+
+
+def test_preview_renderer_reduces_record_limit_to_fit_byte_budget() -> None:
+    large = "x" * 10_000
+    rows = [{"id": f"row-{index}", "reason": large} for index in range(12)]
+    data = {
+        "release": {"prompt_version": "v9"},
+        "counts": {},
+        "delivery": {},
+        "translations": {},
+        "evidence": {
+            "queue": rows,
+            "risks": rows,
+            "abstentions": [],
+            "accepted_sample": rows,
+            "missing_task_videos": [],
+        },
+        "qa": [{"vqa_id": f"q-{index}", "question": large} for index in range(12)],
+        "judge": {"summary": {}, "metrics": {}, "rows": [{"vqa_id": f"j-{index}", "reason": large} for index in range(12)]},
+    }
+
+    html = render_preview_workbench(data, [], limit=12, max_bytes=100_000)
+
+    assert len(html.encode("utf-8")) < 100_000
+    assert "预览根据 100000 字节上限自动缩减" in html
+
+
+def test_preview_budget_includes_asset_preparation_mutations() -> None:
+    rows = [{"id": f"row-{index}", "reason": "small"} for index in range(12)]
+    data = {
+        "evidence": {
+            "queue": rows,
+            "risks": rows,
+            "abstentions": [],
+            "accepted_sample": rows,
+        },
+        "qa": [{"vqa_id": f"q-{index}"} for index in range(12)],
+        "judge": {"rows": [{"vqa_id": f"j-{index}"} for index in range(12)]},
+    }
+    prepared_limits: list[int] = []
+
+    def prepare(compact: dict) -> None:
+        prepared_limits.append(len(compact["qa"]))
+        for collection in (
+            compact["evidence"]["queue"],
+            compact["evidence"]["risks"],
+            compact["evidence"]["accepted_sample"],
+            compact["qa"],
+            compact["judge"]["rows"],
+        ):
+            for row in collection:
+                row["prepared_asset"] = "y" * 5_000
+
+    compact = compact_workbench_to_byte_budget(
+        data,
+        [],
+        limit=12,
+        max_bytes=100_000,
+        prepare=prepare,
+    )
+    html = render_workbench(compact, [], fragment=True)
+
+    assert len(prepared_limits) > 1
+    assert prepared_limits[-1] < prepared_limits[0]
+    assert len(html.encode("utf-8")) < 100_000
+
+
 def test_prompt_snapshot_uses_current_judge_prompt_version() -> None:
     judge = next(item for item in collect_prompt_snapshot() if item["id"] == "judge")
 
@@ -247,6 +435,28 @@ def test_compact_preview_prioritizes_structural_risks_over_systemic_missing_time
     compact = compact_workbench_data(data, limit=1)
 
     assert compact["evidence"]["risks"][0]["id"] == "schema"
+
+
+def test_compact_preview_keeps_accepted_sample_stratified_by_task() -> None:
+    accepted = [
+        {"id": f"{task}-{index}", "task_type": task}
+        for task in ("AE", "BP", "CM", "SS")
+        for index in range(4)
+    ]
+    data = {
+        "evidence": {"queue": [], "risks": [], "abstentions": [], "accepted_sample": accepted},
+        "qa": [],
+        "judge": {"rows": []},
+    }
+
+    compact = compact_workbench_data(data, limit=4)
+
+    assert {row["task_type"] for row in compact["evidence"]["accepted_sample"]} == {
+        "AE",
+        "BP",
+        "CM",
+        "SS",
+    }
 
 
 def test_evidence_content_links_visual_unit_to_exact_cached_frame(tmp_path: Path) -> None:
@@ -411,6 +621,8 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
         "subject": "产品",
         "predicate": "认证",
         "value": "国家专利",
+        "start_s": 1.0,
+        "end_s": 2.0,
         "confidence": 0.9,
     }
     annotation = {
@@ -547,6 +759,8 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     assert len({row["id"] for row in data["evidence"]["queue"]}) == 2
     assert all(row["id"].startswith("r1:") for row in data["evidence"]["queue"])
     assert data["evidence"]["queue"][1]["resolution_status"] == "diagnostic"
+    assert data["evidence"]["queue"][0]["audit_bucket"] == "content_review"
+    assert data["evidence"]["queue"][1]["audit_bucket"] == "pipeline_diagnostics"
     assert data["qa"][0]["evidence_items"][0]["semantic_text"] == "产品｜认证｜国家专利"
     assert data["qa"][0]["evidence_items"][0]["frames"][0]["frame_index"] == 1
     assert data["judge"]["rows"][0]["evidence_items"] == data["qa"][0]["evidence_items"]
@@ -556,9 +770,13 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     assert data["counts"]["videos"] == 2
     assert data["counts"]["commercial_records"] == 1
     assert data["counts"]["abstentions"] == 1
+    assert data["counts"]["accepted_sample"] == 1
+    assert data["evidence"]["accepted_sample"][0]["id"] == "a1"
+    assert data["evidence"]["accepted_sample"][0]["audit_bucket"] == "accepted_sample"
     abstention = data["evidence"]["abstentions"][0]
     assert abstention["video_id"] == "v2"
     assert abstention["reason_code"] == "NO_COMMERCIAL_RECORD"
+    assert abstention["audit_bucket"] == "abstention_resample"
     assert abstention["evidence_items"][0]["content_en"] == abstained_unit["content_en"]
     assert abstention["evidence_items"][0]["frames"][0]["frame_index"] == 2
 
