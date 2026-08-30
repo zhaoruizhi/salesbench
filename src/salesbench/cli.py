@@ -88,7 +88,6 @@ def build_evidence_dataset_command(args: argparse.Namespace) -> int:
         base_url=_env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
         max_workers=args.max_workers,
         resume=args.resume,
-        allow_auto_candidates=args.allow_auto_candidates,
         vision_api_key=vision_key,
         vision_model=args.vision_model or os.environ.get("VISION_MODEL") or args.model,
         vision_base_url=args.vision_base_url or os.environ.get("VISION_BASE_URL"),
@@ -134,6 +133,7 @@ def realize_qa_command(args: argparse.Namespace) -> int:
         dataset_filename=args.dataset_file,
         max_workers=args.max_workers,
         resume=args.resume,
+        allow_auto_candidates=args.allow_auto_candidates,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

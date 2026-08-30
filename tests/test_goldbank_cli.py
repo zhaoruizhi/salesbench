@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import sys
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, "src")
 
-from salesbench.cli import build_parser  # noqa: E402
+from salesbench.cli import (  # noqa: E402
+    build_evidence_dataset_command,
+    build_parser,
+    realize_qa_command,
+)
 
 
 class GoldBankCLITest(unittest.TestCase):
@@ -73,6 +80,46 @@ class GoldBankCLITest(unittest.TestCase):
 
         self.assertEqual(args.model, "gpt-4o")
         self.assertEqual(args.batch_size, 20)
+
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=False)
+    @patch("salesbench.goldbank.runner.build_gold_bank_dataset")
+    @patch("salesbench.cli.ensure_output_dirs")
+    @patch("salesbench.cli.load_config")
+    def test_evidence_command_only_passes_supported_runner_arguments(
+        self,
+        load_config,
+        _ensure_output_dirs,
+        build_dataset,
+    ):
+        load_config.return_value = SimpleNamespace(repo_root=Path("/repo"))
+        build_dataset.return_value = {"ok": True}
+        args = build_parser().parse_args(["build-evidence-dataset"])
+
+        self.assertEqual(build_evidence_dataset_command(args), 0)
+        self.assertNotIn("allow_auto_candidates", build_dataset.call_args.kwargs)
+
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=False)
+    @patch("salesbench.vqa.realizer.run_qa_realizer")
+    @patch("salesbench.vlm.api_client.VLMClient")
+    def test_realize_command_forwards_explicit_candidate_mode(
+        self,
+        _client,
+        run_realizer,
+    ):
+        run_realizer.return_value = {"ok": True}
+        args = build_parser().parse_args(
+            [
+                "realize-qa",
+                "--evidence-dir",
+                "evidence",
+                "--output-dir",
+                "qa",
+                "--allow-auto-candidates",
+            ]
+        )
+
+        self.assertEqual(realize_qa_command(args), 0)
+        self.assertTrue(run_realizer.call_args.kwargs["allow_auto_candidates"])
 
 
 if __name__ == "__main__":
