@@ -30,6 +30,57 @@ class EvidenceModality(str, Enum):
     CROSS_MODAL = "cross_modal"
 
 
+class EvidenceAssertionType(str, Enum):
+    """What kind of assertion an EvidenceUnit actually contains."""
+
+    OBSERVED = "OBSERVED"
+    SPOKEN_CLAIM = "SPOKEN_CLAIM"
+    OCR_TEXT = "OCR_TEXT"
+
+
+class EvidenceTemporalScope(str, Enum):
+    """The observation window that the evidence can directly support."""
+
+    FRAME = "FRAME"
+    SHORT_CLIP = "SHORT_CLIP"
+    FULL_VIDEO = "FULL_VIDEO"
+    LONG_TERM_CLAIM = "LONG_TERM_CLAIM"
+    UNSPECIFIED = "UNSPECIFIED"
+
+
+_LONG_TERM_CLAIM_MARKERS = (
+    "after a day",
+    "all day",
+    "whole day",
+    "for hours",
+    "for days",
+    "for weeks",
+    "long-lasting",
+    "long lasting",
+    "lasting effect",
+    "durable over time",
+)
+
+
+def infer_assertion_type(modality: EvidenceModality) -> EvidenceAssertionType:
+    if modality == EvidenceModality.ASR:
+        return EvidenceAssertionType.SPOKEN_CLAIM
+    if modality == EvidenceModality.OCR:
+        return EvidenceAssertionType.OCR_TEXT
+    return EvidenceAssertionType.OBSERVED
+
+
+def infer_temporal_scope(modality: EvidenceModality, content: object = "") -> EvidenceTemporalScope:
+    if modality in {EvidenceModality.VISUAL, EvidenceModality.OCR}:
+        return EvidenceTemporalScope.FRAME
+    if modality == EvidenceModality.ASR:
+        text = clean_text(content).lower()
+        if any(marker in text for marker in _LONG_TERM_CLAIM_MARKERS):
+            return EvidenceTemporalScope.LONG_TERM_CLAIM
+        return EvidenceTemporalScope.SHORT_CLIP
+    return EvidenceTemporalScope.UNSPECIFIED
+
+
 class GoldTier(str, Enum):
     GOLD_A = "Gold-A"
     GOLD_B = "Gold-B"
@@ -149,6 +200,8 @@ class EvidenceUnit:
     timestamp_status: str
     content_en: str = ""
     source_text_native: str = ""
+    assertion_type: EvidenceAssertionType = EvidenceAssertionType.OBSERVED
+    temporal_scope: EvidenceTemporalScope = EvidenceTemporalScope.FRAME
 
     def __post_init__(self) -> None:
         _confidence(self.confidence)
@@ -179,6 +232,8 @@ class EvidenceUnit:
             "extractor": self.extractor,
             "confidence": self.confidence,
             "timestamp_status": self.timestamp_status,
+            "assertion_type": self.assertion_type.value,
+            "temporal_scope": self.temporal_scope.value,
         }
 
 
@@ -339,10 +394,13 @@ class VideoGoldRecord:
 
 def parse_evidence_unit(record: dict[str, object]) -> EvidenceUnit:
     source_text_native = clean_text(record.get("source_text_native")) or clean_text(record.get("text_span"))
+    modality = EvidenceModality(clean_text(record.get("modality")))
+    assertion_raw = clean_text(record.get("assertion_type")).upper()
+    temporal_raw = clean_text(record.get("temporal_scope")).upper()
     return EvidenceUnit(
         evidence_id=clean_text(record.get("evidence_id")),
         video_id=clean_text(record.get("video_id")),
-        modality=EvidenceModality(clean_text(record.get("modality"))),
+        modality=modality,
         start_s=None if record.get("start_s") is None else float(record.get("start_s")),
         end_s=None if record.get("end_s") is None else float(record.get("end_s")),
         frame_indices=tuple(int(value) for value in _tuple(record.get("frame_indices"))),
@@ -357,6 +415,19 @@ def parse_evidence_unit(record: dict[str, object]) -> EvidenceUnit:
         timestamp_status=clean_text(record.get("timestamp_status")),
         content_en=clean_text(record.get("content_en")),
         source_text_native=source_text_native,
+        assertion_type=(
+            EvidenceAssertionType(assertion_raw)
+            if assertion_raw
+            else infer_assertion_type(modality)
+        ),
+        temporal_scope=(
+            EvidenceTemporalScope(temporal_raw)
+            if temporal_raw
+            else infer_temporal_scope(
+                modality,
+                clean_text(record.get("content_en")) or record.get("value"),
+            )
+        ),
     )
 
 

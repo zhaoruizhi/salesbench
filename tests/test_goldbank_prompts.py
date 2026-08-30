@@ -30,6 +30,15 @@ from salesbench.goldbank.prompts import (  # noqa: E402
 
 
 class GoldBankPromptTest(unittest.TestCase):
+    def test_evidence_prompts_require_exact_quality_fields(self):
+        system, _ = build_visual_evidence_prompt(
+            "v1", {"sampled_frames": [{"frame_index": 1, "timestamp_s": 0.5}]}
+        )
+
+        self.assertIn('"confidence"', system)
+        self.assertIn('"assertion_type"', system)
+        self.assertIn('"temporal_scope"', system)
+        self.assertNotIn("numeric confidence", system)
     def test_evidence_extractor_requests_units_not_questions(self):
         system, user_blocks = build_evidence_extractor_prompt("v1", {"C3_text_language": {"title": "hello"}})
         text = system + " " + str(user_blocks)

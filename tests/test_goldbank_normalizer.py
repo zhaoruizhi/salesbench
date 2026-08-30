@@ -14,6 +14,7 @@ from salesbench.goldbank.normalizer import (  # noqa: E402
     normalize_commerce_cues,
     normalize_commercial_relations,
     normalize_evidence_units,
+    normalize_evidence_unit,
     normalize_proposals,
     normalize_task_subtype,
 )
@@ -22,6 +23,73 @@ from salesbench.goldbank.validators import validate_evidence_unit  # noqa: E402
 
 
 class EvidenceNormalizerTest(unittest.TestCase):
+    def test_numeric_confidence_alias_is_preserved(self):
+        unit = normalize_evidence_unit(
+            "v1",
+            {
+                "modality": "visual",
+                "frame_indices": [3],
+                "start_s": 1.0,
+                "end_s": 1.0,
+                "subject": "host",
+                "predicate": "holds",
+                "value": "product",
+                "content_en": "The host holds the product.",
+                "numeric_confidence": 0.93,
+            },
+            0,
+        )
+
+        self.assertEqual(unit.confidence, 0.93)
+
+    def test_missing_confidence_is_rejected_instead_of_becoming_zero(self):
+        with self.assertRaisesRegex(ValueError, "confidence"):
+            normalize_evidence_unit(
+                "v1",
+                {
+                    "modality": "visual",
+                    "frame_indices": [3],
+                    "subject": "host",
+                    "predicate": "holds",
+                    "value": "product",
+                },
+                0,
+            )
+
+    def test_evidence_assertion_and_temporal_scope_are_derived(self):
+        visual = normalize_evidence_unit(
+            "v1",
+            {
+                "modality": "visual",
+                "frame_indices": [3],
+                "start_s": 1.0,
+                "end_s": 1.0,
+                "subject": "host",
+                "predicate": "holds",
+                "value": "product",
+                "confidence": 0.9,
+            },
+            0,
+        )
+        asr = normalize_evidence_unit(
+            "v1",
+            {
+                "modality": "asr",
+                "start_s": 0.0,
+                "end_s": 5.0,
+                "source_text_native": "一天都不会鼓包",
+                "subject": "speaker",
+                "predicate": "claims",
+                "value": "the pants do not bulge after a day",
+                "confidence": 0.9,
+            },
+            1,
+        )
+
+        self.assertEqual(visual.assertion_type.value, "OBSERVED")
+        self.assertEqual(visual.temporal_scope.value, "FRAME")
+        self.assertEqual(asr.assertion_type.value, "SPOKEN_CLAIM")
+        self.assertEqual(asr.temporal_scope.value, "LONG_TERM_CLAIM")
     def test_reasoning_operator_in_subtype_field_maps_back_to_capability(self):
         self.assertEqual(
             normalize_task_subtype(GoldTaskType.SS, "MAP_FEATURE_TO_BENEFIT"),
@@ -56,6 +124,8 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 {
                     "modality": "text",
                     "evidence_id": "asr_subtitles",
+                    "start_s": 0.0,
+                    "end_s": 2.0,
                     "text_span": "这个产品只要十几元",
                     "subject": "speaker",
                     "predicate": "claims a price",
@@ -65,6 +135,8 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 {
                     "modality": "text",
                     "evidence_id": "asr_subtitles",
+                    "start_s": 2.0,
+                    "end_s": 4.0,
                     "text_span": "适合厨房收纳",
                     "subject": "speaker",
                     "predicate": "claims a use",
@@ -89,6 +161,8 @@ class EvidenceNormalizerTest(unittest.TestCase):
             [
                 {
                     "modality": "asr",
+                    "start_s": 0.0,
+                    "end_s": 3.0,
                     "source_text_native": "适合日常妆",
                     "subject": "speaker",
                     "predicate": "claims",

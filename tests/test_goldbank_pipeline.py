@@ -254,6 +254,22 @@ def successful_v7_responses() -> list[dict[str, object]]:
 
 
 class GoldBankPipelineTest(unittest.TestCase):
+    def test_low_confidence_evidence_is_rejected_before_cue_generation(self):
+        responses = successful_responses()
+        responses[0]["evidence_units"][0]["confidence"] = 0.2
+        vlm = FakeGoldClient(responses[:1])
+        llm = FakeGoldClient(responses[1:])
+
+        result = GoldBankPipeline(vlm, llm, min_confidence=0.7).run_video(bundle())
+
+        self.assertEqual(result.status, "failed")
+        self.assertFalse(result.evidence_units)
+        self.assertTrue(
+            any(
+                item["reason_code"] == "EVIDENCE_BELOW_MIN_CONFIDENCE"
+                for item in result.rejected_candidates
+            )
+        )
     def test_pipeline_repairs_visual_evidence_rejected_by_local_validation(self):
         responses = successful_responses_with_two_evidence()
         visual_raw, asr_raw = responses[0]["evidence_units"]

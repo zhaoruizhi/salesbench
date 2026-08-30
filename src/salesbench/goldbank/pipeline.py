@@ -14,7 +14,7 @@ from .commerce_schema import CommerceCue, CommercialRelation, CueType
 from .normalizer import (
     normalize_commerce_cues,
     normalize_commercial_relations,
-    normalize_evidence_units,
+    normalize_evidence_unit,
     normalize_proposals,
     semantic_key,
 )
@@ -132,14 +132,19 @@ def _trace(
     return payload
 
 
-def _empty_result(video_id: str, status: str, traces: list[dict[str, object]]) -> GoldBankResult:
+def _empty_result(
+    video_id: str,
+    status: str,
+    traces: list[dict[str, object]],
+    quality_records: list[dict[str, object]] | None = None,
+) -> GoldBankResult:
     return GoldBankResult(
         video_id=video_id,
         evidence_units=[],
         gold_proposals=[],
         gold_reviews=[],
         video_gold_record=None,
-        human_review_queue=[],
+        human_review_queue=list(quality_records or []),
         agent_traces=traces,
         status=status,
         commerce_cues=[],
@@ -422,6 +427,7 @@ class GoldBankPipeline:
 
         evidence_units: list[EvidenceUnit] = []
         evidence_stage_failed = False
+        evidence_quality_records: list[dict[str, object]] = []
 
         def collect_evidence(
             stage: str,
@@ -431,13 +437,41 @@ class GoldBankPipeline:
         ) -> tuple[list[EvidenceUnit], list[dict[str, object]], list[dict[str, object]]]:
             if not call.success:
                 traces.append(_trace(stage, agent_name, call, error=call.error))
+                evidence_quality_records.append(
+                    _review_queue_item(
+                        video_id,
+                        f"{stage}_failed: {call.error or 'model call failed'}",
+                        stage=stage,
+                        item_type="stage_failure",
+                    )
+                )
                 return [], [], []
             try:
                 raw_units = parse_evidence_response(call.raw_response)
-                normalized = normalize_evidence_units(video_id, raw_units)
                 validation_issues: list[dict[str, object]] = []
                 accepted: list[EvidenceUnit] = []
-                for unit in normalized:
+                for ordinal, raw_unit in enumerate(raw_units):
+                    try:
+                        unit = normalize_evidence_unit(video_id, raw_unit, ordinal)
+                    except ValueError as exc:
+                        issue = ValidationIssue(
+                            "EVIDENCE_NORMALIZATION_FAILED",
+                            "ERROR",
+                            clean_text(raw_unit.get("evidence_id")) or f"{stage}_{ordinal}",
+                            str(exc),
+                        )
+                        validation_issues.append(issue.to_dict())
+                        evidence_quality_records.append(
+                            _review_queue_item(
+                                video_id,
+                                f"evidence_validation_failed: {exc}",
+                                raw_unit,
+                                [issue],
+                                stage=stage,
+                                item_type="evidence_unit",
+                            )
+                        )
+                        continue
                     issues = validate_evidence_unit(unit)
                     if unit.modality not in allowed_modalities:
                         issues.append(
@@ -448,9 +482,34 @@ class GoldBankPipeline:
                                 f"{stage} cannot emit {unit.modality.value}",
                             )
                         )
+                    if unit.confidence < self.min_confidence:
+                        issues.append(
+                            ValidationIssue(
+                                "EVIDENCE_BELOW_MIN_CONFIDENCE",
+                                "ERROR",
+                                unit.evidence_id,
+                                f"Evidence confidence {unit.confidence:.3f} is below {self.min_confidence:.3f}",
+                            )
+                        )
                     validation_issues.extend(issue.to_dict() for issue in issues)
-                    if not any(issue.severity == "ERROR" for issue in issues):
-                        accepted.append(unit)
+                    if any(issue.severity == "ERROR" for issue in issues):
+                        reason = (
+                            "evidence_below_min_confidence"
+                            if any(issue.code == "EVIDENCE_BELOW_MIN_CONFIDENCE" for issue in issues)
+                            else "evidence_validation_failed"
+                        )
+                        evidence_quality_records.append(
+                            _review_queue_item(
+                                video_id,
+                                reason,
+                                unit.to_dict(),
+                                issues,
+                                stage=stage,
+                                item_type="evidence_unit",
+                            )
+                        )
+                        continue
+                    accepted.append(unit)
                 evidence_units.extend(accepted)
                 traces.append(
                     _trace(
@@ -467,6 +526,14 @@ class GoldBankPipeline:
                 return accepted, raw_units, validation_issues
             except (ModelOutputError, ValueError) as exc:
                 traces.append(_trace(stage, agent_name, call, error=str(exc)))
+                evidence_quality_records.append(
+                    _review_queue_item(
+                        video_id,
+                        f"{stage}_parse_error: {exc}",
+                        stage=stage,
+                        item_type="stage_failure",
+                    )
+                )
                 return [], [], []
 
         asr_subtitles = content_context.get("asr_subtitles") or {}
@@ -535,10 +602,10 @@ class GoldBankPipeline:
         evidence_units = list({unit.evidence_id: unit for unit in evidence_units}.values())
 
         if not evidence_units:
-            return _empty_result(video_id, "failed", traces)
+            return _empty_result(video_id, "failed", traces, evidence_quality_records)
 
         evidence_dict = {unit.evidence_id: unit for unit in evidence_units}
-        human_review_queue: list[dict[str, object]] = []
+        human_review_queue: list[dict[str, object]] = list(evidence_quality_records)
         status = "partial" if evidence_stage_failed else "ok"
 
         cue_system, cue_user = build_commerce_cue_prompt(

@@ -20,12 +20,16 @@ from .commerce_schema import (
 )
 from .ontology import allowed_subtypes, default_reasoning_operator
 from .schema import (
+    EvidenceAssertionType,
     EvidenceModality,
+    EvidenceTemporalScope,
     EvidenceUnit,
     GoldItem,
     GoldProposal,
     GoldTaskType,
     make_evidence_id,
+    infer_assertion_type,
+    infer_temporal_scope,
     parse_gold_proposal,
     stable_digest,
 )
@@ -106,6 +110,19 @@ def _normalize_confidence(value: object) -> float:
     return confidence if 0.0 <= confidence <= 1.0 else 0.0
 
 
+def _required_evidence_confidence(raw: dict[str, object]) -> float:
+    if "confidence" in raw:
+        value = raw.get("confidence")
+    elif "numeric_confidence" in raw:
+        value = raw.get("numeric_confidence")
+    else:
+        raise ValueError("Evidence unit requires confidence")
+    normalized = _normalize_confidence(value)
+    if normalized <= 0.0:
+        raise ValueError("Evidence unit confidence must be a number in (0, 1]")
+    return normalized
+
+
 def _contains_model_placeholder(value: object) -> bool:
     if isinstance(value, dict):
         return any(_contains_model_placeholder(item) for item in value.values())
@@ -167,59 +184,82 @@ def _normalize_attributes(value: object) -> dict[str, object]:
     return {"value": normalized} if normalized else {}
 
 
+def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int) -> EvidenceUnit:
+    modality = _normalize_modality(raw)
+    subject = normalize_text(raw.get("subject"))
+    predicate = normalize_text(raw.get("predicate"))
+    if not subject or not predicate or raw.get("value") in (None, ""):
+        raise ValueError("Evidence unit requires subject, predicate, and value")
+    start_s = raw.get("start_s")
+    end_s = raw.get("end_s")
+    if start_s is not None and end_s is not None and float(start_s) > float(end_s):
+        raise ValueError("Evidence start_s cannot exceed end_s")
+    source_locator = normalize_text(raw.get("evidence_id"))
+    expected_prefix = f"{normalize_text(video_id)}_{modality.value}_"
+    evidence_id = source_locator if source_locator.startswith(expected_prefix) else ""
+    if not evidence_id:
+        evidence_id = make_evidence_id(video_id, modality, ordinal)
+    attributes = _normalize_attributes(raw.get("attributes"))
+    if source_locator and source_locator != evidence_id:
+        attributes.setdefault("source_locator", source_locator)
+    text_span = normalize_text(raw.get("source_text_native") or raw.get("text_span"))
+    if not text_span and modality in {EvidenceModality.ASR, EvidenceModality.OCR}:
+        text_span = normalize_text(raw.get("value"))
+    source_domains = tuple(normalize_text(value) for value in raw.get("source_domains", []) or [])
+    if not source_domains:
+        source_domains = {
+            EvidenceModality.ASR: ("C2_audio_speech",),
+            EvidenceModality.OCR: ("C6_raw_video",),
+            EvidenceModality.VISUAL: ("C6_raw_video",),
+        }.get(modality, ())
+    content_en = normalize_text(raw.get("content_en"))
+    assertion_raw = normalize_text(raw.get("assertion_type")).upper()
+    temporal_raw = normalize_text(raw.get("temporal_scope")).upper()
+    return EvidenceUnit(
+        evidence_id=evidence_id,
+        video_id=video_id,
+        modality=modality,
+        start_s=None if start_s is None else float(start_s),
+        end_s=None if end_s is None else float(end_s),
+        frame_indices=_frame_indices(raw, source_locator),
+        text_span=text_span,
+        subject=subject,
+        predicate=predicate,
+        value=raw.get("value"),
+        attributes=attributes,
+        source_domains=source_domains,
+        extractor=normalize_text(raw.get("extractor") or "objective_evidence_extractor"),
+        confidence=_required_evidence_confidence(raw),
+        timestamp_status=normalize_text(raw.get("timestamp_status") or "unavailable"),
+        content_en=content_en,
+        source_text_native=text_span,
+        assertion_type=(
+            EvidenceAssertionType(assertion_raw)
+            if assertion_raw
+            else infer_assertion_type(modality)
+        ),
+        temporal_scope=(
+            EvidenceTemporalScope(temporal_raw)
+            if temporal_raw
+            else infer_temporal_scope(modality, content_en or raw.get("value"))
+        ),
+    )
+
+
 def normalize_evidence_units(video_id: str, raw_units: list[dict[str, object]]) -> list[EvidenceUnit]:
     units: list[EvidenceUnit] = []
     used_ids: set[str] = set()
     for idx, raw in enumerate(raw_units):
-        modality = _normalize_modality(raw)
-        subject = normalize_text(raw.get("subject"))
-        predicate = normalize_text(raw.get("predicate"))
-        if not subject or not predicate or raw.get("value") in (None, ""):
-            raise ValueError("Evidence unit requires subject, predicate, and value")
-        start_s = raw.get("start_s")
-        end_s = raw.get("end_s")
-        if start_s is not None and end_s is not None and float(start_s) > float(end_s):
-            raise ValueError("Evidence start_s cannot exceed end_s")
-        source_locator = normalize_text(raw.get("evidence_id"))
-        expected_prefix = f"{normalize_text(video_id)}_{modality.value}_"
-        evidence_id = source_locator if source_locator.startswith(expected_prefix) else ""
-        if not evidence_id or evidence_id in used_ids:
-            evidence_id = make_evidence_id(video_id, modality, idx)
-        used_ids.add(evidence_id)
-        attributes = _normalize_attributes(raw.get("attributes"))
-        if source_locator and source_locator != evidence_id:
-            attributes.setdefault("source_locator", source_locator)
-        text_span = normalize_text(raw.get("source_text_native") or raw.get("text_span"))
-        if not text_span and modality in {EvidenceModality.ASR, EvidenceModality.OCR}:
-            text_span = normalize_text(raw.get("value"))
-        source_domains = tuple(normalize_text(value) for value in raw.get("source_domains", []) or [])
-        if not source_domains:
-            source_domains = {
-                EvidenceModality.ASR: ("C2_audio_speech",),
-                EvidenceModality.OCR: ("C6_raw_video",),
-                EvidenceModality.VISUAL: ("C6_raw_video",),
-            }.get(modality, ())
-        units.append(
-            EvidenceUnit(
-                evidence_id=evidence_id,
-                video_id=video_id,
-                modality=modality,
-                start_s=None if start_s is None else float(start_s),
-                end_s=None if end_s is None else float(end_s),
-                frame_indices=_frame_indices(raw, source_locator),
-                text_span=text_span,
-                subject=subject,
-                predicate=predicate,
-                value=raw.get("value"),
-                attributes=attributes,
-                source_domains=source_domains,
-                extractor=normalize_text(raw.get("extractor") or "objective_evidence_extractor"),
-                confidence=_normalize_confidence(raw.get("confidence", 0.0)),
-                timestamp_status=normalize_text(raw.get("timestamp_status") or "unavailable"),
-                content_en=normalize_text(raw.get("content_en")),
-                source_text_native=text_span,
+        unit = normalize_evidence_unit(video_id, raw, idx)
+        if unit.evidence_id in used_ids:
+            unit = EvidenceUnit(
+                **{
+                    **unit.__dict__,
+                    "evidence_id": make_evidence_id(video_id, unit.modality, idx),
+                }
             )
-        )
+        used_ids.add(unit.evidence_id)
+        units.append(unit)
     return units
 
 

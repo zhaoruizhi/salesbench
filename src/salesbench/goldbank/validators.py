@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from ..utils import clean_text, contains_cjk
 from .commerce_ontology import DEMONSTRATION_CUES, relation_rule
-from .commerce_schema import CommerceCue, CommercialRelation, RelationType
+from .commerce_schema import CommerceCue, CommercialRelation, CueType, RelationType
 from .normalizer import semantic_key, semantic_target_key
 from .ontology import (
     CM_RELATIONS,
@@ -16,7 +17,16 @@ from .ontology import (
     capability_level,
     default_reasoning_operator,
 )
-from .schema import EvidenceUnit, GoldItem, GoldProposal, GoldTaskType, GoldTier
+from .schema import (
+    EvidenceAssertionType,
+    EvidenceModality,
+    EvidenceTemporalScope,
+    EvidenceUnit,
+    GoldItem,
+    GoldProposal,
+    GoldTaskType,
+    GoldTier,
+)
 
 
 PRIVATE_KEYS = {
@@ -89,6 +99,29 @@ CREATOR_METADATA_MARKERS = (
     "账号",
 )
 
+_CLAIM_FACT_CUE_TYPES = {
+    CueType.PRODUCT_ATTRIBUTE,
+    CueType.PRODUCT_VARIANT,
+    CueType.PRODUCT_DESCRIPTION,
+}
+
+_NUMERIC_CUE_TYPES = {
+    CueType.QUANTITY,
+    CueType.BUNDLE,
+    CueType.PRICE,
+    CueType.DISCOUNT,
+    CueType.OFFER_CONDITION,
+}
+
+_RELATION_STATUS_CONTRACT = {
+    RelationType.CLAIM_SUPPORTED_BY_DEMONSTRATION: "SUPPORTED",
+    RelationType.CLAIM_PARTIALLY_SUPPORTED: "PARTIALLY_SUPPORTED",
+    RelationType.CLAIM_CONTRADICTED: "CONTRADICTED",
+    RelationType.CLAIM_TEMPORALLY_MISALIGNED: "TEMPORALLY_MISALIGNED",
+}
+
+_NUMBER_RE = re.compile(r"(?<![A-Za-z])\d+(?:[.,]\d+)?")
+
 
 @dataclass(frozen=True)
 class ValidationIssue:
@@ -146,6 +179,15 @@ def _text_blob(payload: object) -> str:
     return clean_text(payload).lower()
 
 
+def _normalize_numeric_token(value: str) -> str:
+    token = clean_text(value).replace(",", "")
+    try:
+        number = float(token)
+    except ValueError:
+        return token
+    return str(int(number)) if number.is_integer() else f"{number:g}"
+
+
 def validate_evidence_unit(unit: EvidenceUnit) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if not unit.evidence_id or not unit.video_id:
@@ -154,6 +196,15 @@ def validate_evidence_unit(unit: EvidenceUnit) -> list[ValidationIssue]:
         issues.append(ValidationIssue("INVALID_GOLD_VALUE", "ERROR", unit.evidence_id, "Evidence requires subject, predicate, value"))
     if unit.start_s is not None and unit.end_s is not None and unit.start_s > unit.end_s:
         issues.append(ValidationIssue("INVALID_GOLD_VALUE", "ERROR", unit.evidence_id, "start_s exceeds end_s"))
+    if unit.confidence <= 0.0:
+        issues.append(
+            ValidationIssue(
+                "INVALID_CONFIDENCE",
+                "ERROR",
+                unit.evidence_id,
+                "Evidence confidence must be greater than zero",
+            )
+        )
     if unit.modality.value not in DIRECT_EVIDENCE_MODALITIES:
         issues.append(
             ValidationIssue(
@@ -167,6 +218,49 @@ def validate_evidence_unit(unit: EvidenceUnit) -> list[ValidationIssue]:
         issues.append(ValidationIssue("MISSING_FRAME_REFERENCE", "ERROR", unit.evidence_id, "Visual evidence requires frame_indices"))
     if unit.modality.value in {"asr", "ocr"} and not unit.text_span:
         issues.append(ValidationIssue("MISSING_TEXT_SPAN", "ERROR", unit.evidence_id, "ASR/OCR evidence requires text_span"))
+    if unit.modality in {EvidenceModality.ASR, EvidenceModality.OCR} and (
+        unit.start_s is None or unit.end_s is None
+    ):
+        issues.append(
+            ValidationIssue(
+                "MISSING_TEMPORAL_LOCALIZATION",
+                "ERROR",
+                unit.evidence_id,
+                "ASR/OCR evidence requires both start_s and end_s",
+            )
+        )
+    expected_assertion = {
+        EvidenceModality.VISUAL: EvidenceAssertionType.OBSERVED,
+        EvidenceModality.ASR: EvidenceAssertionType.SPOKEN_CLAIM,
+        EvidenceModality.OCR: EvidenceAssertionType.OCR_TEXT,
+    }.get(unit.modality)
+    if expected_assertion is not None and unit.assertion_type != expected_assertion:
+        issues.append(
+            ValidationIssue(
+                "ASSERTION_MODALITY_MISMATCH",
+                "ERROR",
+                unit.evidence_id,
+                f"{unit.modality.value} evidence must use {expected_assertion.value}",
+            )
+        )
+    allowed_scopes = {
+        EvidenceModality.VISUAL: {EvidenceTemporalScope.FRAME, EvidenceTemporalScope.SHORT_CLIP},
+        EvidenceModality.OCR: {EvidenceTemporalScope.FRAME, EvidenceTemporalScope.SHORT_CLIP},
+        EvidenceModality.ASR: {
+            EvidenceTemporalScope.SHORT_CLIP,
+            EvidenceTemporalScope.FULL_VIDEO,
+            EvidenceTemporalScope.LONG_TERM_CLAIM,
+        },
+    }.get(unit.modality, set())
+    if allowed_scopes and unit.temporal_scope not in allowed_scopes:
+        issues.append(
+            ValidationIssue(
+                "TEMPORAL_SCOPE_MODALITY_MISMATCH",
+                "ERROR",
+                unit.evidence_id,
+                f"{unit.temporal_scope.value} is invalid for {unit.modality.value} evidence",
+            )
+        )
     if contains_cjk((unit.subject, unit.predicate, unit.value, unit.content_en, unit.attributes)):
         issues.append(
             ValidationIssue(
@@ -220,6 +314,34 @@ def validate_commerce_cue(
                     "ERROR",
                     cue.cue_id,
                     f"Evidence {evidence_id} belongs to {unit.video_id}",
+                )
+            )
+    cited_units = [evidence[evidence_id] for evidence_id in cue.evidence_ids if evidence_id in evidence]
+    if cue.cue_type in _CLAIM_FACT_CUE_TYPES and cited_units and all(
+        unit.assertion_type == EvidenceAssertionType.SPOKEN_CLAIM for unit in cited_units
+    ):
+        issues.append(
+            ValidationIssue(
+                "CLAIM_AS_PRODUCT_ATTRIBUTE",
+                "ERROR",
+                cue.cue_id,
+                "A seller claim cannot be normalized as an observed product attribute",
+            )
+        )
+    if cue.cue_type in _NUMERIC_CUE_TYPES:
+        cue_numbers = {_normalize_numeric_token(value) for value in _NUMBER_RE.findall(cue.content_en)}
+        evidence_numbers = {
+            _normalize_numeric_token(value)
+            for value in _NUMBER_RE.findall(_text_blob([unit.to_dict() for unit in cited_units]))
+        }
+        missing_numbers = sorted(cue_numbers - evidence_numbers)
+        if missing_numbers:
+            issues.append(
+                ValidationIssue(
+                    "NUMERIC_VALUE_NOT_IN_EVIDENCE",
+                    "ERROR",
+                    cue.cue_id,
+                    f"Numeric values are not present in cited evidence: {', '.join(missing_numbers)}",
                 )
             )
     if cue.cue_type in DEMONSTRATION_CUES and not any(
@@ -308,6 +430,48 @@ def validate_commercial_relation(
                     "ERROR",
                     relation.relation_id,
                     "Claim-demonstration relations require visual evidence at the demonstration endpoint",
+                )
+            )
+
+    expected_status = _RELATION_STATUS_CONTRACT.get(relation.relation_type)
+    if expected_status is not None and relation.status != expected_status:
+        issues.append(
+            ValidationIssue(
+                "RELATION_STATUS_MISMATCH",
+                "ERROR",
+                relation.relation_id,
+                f"{relation.relation_type.value} requires status={expected_status}",
+            )
+        )
+
+    if relation.relation_type == RelationType.CLAIM_SUPPORTED_BY_DEMONSTRATION:
+        source_units = [
+            evidence[evidence_id]
+            for cue_id in relation.source_cue_ids
+            if cue_id in cues
+            for evidence_id in cues[cue_id].evidence_ids
+            if evidence_id in evidence
+        ]
+        target_units = [
+            evidence[evidence_id]
+            for cue_id in relation.target_cue_ids
+            if cue_id in cues
+            for evidence_id in cues[cue_id].evidence_ids
+            if evidence_id in evidence
+        ]
+        has_long_term_claim = any(
+            unit.temporal_scope == EvidenceTemporalScope.LONG_TERM_CLAIM for unit in source_units
+        )
+        has_matching_observation_scope = any(
+            unit.temporal_scope == EvidenceTemporalScope.FULL_VIDEO for unit in target_units
+        )
+        if has_long_term_claim and not has_matching_observation_scope:
+            issues.append(
+                ValidationIssue(
+                    "UNSUPPORTED_CLAIM_SCOPE",
+                    "ERROR",
+                    relation.relation_id,
+                    "A short visual demonstration cannot fully support a long-term seller claim",
                 )
             )
 
