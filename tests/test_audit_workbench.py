@@ -44,6 +44,8 @@ def test_module_cli_resolves_src_package_despite_salesbench_script_shadowing() -
 
 def test_review_bucket_classification_separates_human_decisions_from_pipeline_noise() -> None:
     assert classify_review_bucket({"item_type": "abstention"}) == "abstention_resample"
+    assert classify_review_bucket({"reason_code": "VALIDATION_FAILED"}) == "auto_rejected"
+    assert classify_review_bucket({"reason_code": "CHALLENGER_REJECT"}) == "auto_rejected"
     assert (
         classify_review_bucket(
             {

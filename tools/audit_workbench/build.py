@@ -81,6 +81,16 @@ def classify_review_bucket(row: dict[str, Any]) -> str:
     risk_codes = {str(code).upper() for code in row.get("risk_codes") or []}
     if item_type == "abstention" or reason_code in {"ABSTENTION", "NO_COMMERCIAL_RECORD"}:
         return "abstention_resample"
+    if reason_code in {
+        "BELOW_MIN_CONFIDENCE",
+        "VALIDATION_FAILED",
+        "SEMANTIC_DUPLICATE",
+        "CONFLICTING_VALUE",
+        "CHALLENGER_REJECT",
+        "CHALLENGER_REJECTED_OR_HUMAN_REVIEW",
+        "SEMANTIC_VERIFIER_REJECT",
+    }:
+        return "auto_rejected"
     if (
         resolution in {"diagnostic", "unresolved"}
         or stage in {"commerce_cue_extraction", "commercial_relation_building"}
