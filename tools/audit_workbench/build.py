@@ -1029,6 +1029,20 @@ def build_workbench_data(
             "evidence_items": deepcopy(qa_item.get("evidence_items") or []),
             }
         )
+    human_review_count = sum(
+        1
+        for row in queue_rows
+        if row.get("audit_bucket") in {"human_review", "content_review"}
+    )
+    pipeline_diagnostic_count = sum(
+        1 for row in queue_rows if row.get("audit_bucket") == "pipeline_diagnostics"
+    )
+    artifact_abstention_count = sum(
+        1 for row in queue_rows if row.get("audit_bucket") == "abstention_resample"
+    )
+    auto_rejected_count = sum(
+        1 for row in queue_rows if row.get("audit_bucket") == "auto_rejected"
+    ) + len(annotation_risks)
     return _strip_private(
         {
             "release": {
@@ -1047,18 +1061,14 @@ def build_workbench_data(
             "counts": {
                 "videos": len(processed_video_ids),
                 "commercial_records": len(video_records),
-                "abstentions": len(abstentions),
+                "abstentions": len(abstentions) + artifact_abstention_count,
                 "accepted_sample": len(accepted_sample),
                 "evidence_units": len(units),
                 "annotations": len(annotations),
                 "review_queue": len(queue_rows),
-                "human_review_queue": len(human_rows),
-                "auto_rejected": len(rejected_rows) + len(annotation_risks),
-                "pipeline_diagnostics": sum(
-                    1
-                    for row in diagnostic_rows
-                    if str(row.get("item_type") or "").lower() != "abstention"
-                ),
+                "human_review_queue": human_review_count,
+                "auto_rejected": auto_rejected_count,
+                "pipeline_diagnostics": pipeline_diagnostic_count,
                 "qa": len(qa_rows),
                 "judge_rows": len(compact_judge),
             },

@@ -801,6 +801,8 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     assert data["counts"]["commercial_records"] == 1
     assert data["counts"]["abstentions"] == 1
     assert data["counts"]["accepted_sample"] == 1
+    assert data["counts"]["human_review_queue"] == 1
+    assert data["counts"]["pipeline_diagnostics"] == 1
     assert data["evidence"]["accepted_sample"][0]["id"] == "a1"
     assert data["evidence"]["accepted_sample"][0]["audit_bucket"] == "accepted_sample"
     abstention = data["evidence"]["abstentions"][0]
