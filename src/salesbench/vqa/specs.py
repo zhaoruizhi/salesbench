@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from ..goldbank.schema import GoldTaskType, stable_digest
 from ..utils import clean_text
+from .item_validator import answer_type_for_task, validate_question_spec
 
 
 def _tuple(value: object) -> tuple[object, ...]:
@@ -44,6 +45,8 @@ class QuestionSpec:
     commerce_cue_ids: tuple[str, ...]
     commercial_relation_ids: tuple[str, ...]
     forbidden_inferences: tuple[str, ...]
+    answer_type: str = "open"
+    lifecycle_status: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -60,6 +63,8 @@ class QuestionSpec:
             "commerce_cue_ids": list(self.commerce_cue_ids),
             "commercial_relation_ids": list(self.commercial_relation_ids),
             "forbidden_inferences": list(self.forbidden_inferences),
+            "answer_type": self.answer_type,
+            "lifecycle_status": self.lifecycle_status,
         }
 
 
@@ -102,6 +107,8 @@ def parse_question_spec(record: dict[str, object]) -> QuestionSpec:
         forbidden_inferences=tuple(
             clean_text(value) for value in _tuple(record.get("forbidden_inferences"))
         ),
+        answer_type=clean_text(record.get("answer_type") or "open"),
+        lifecycle_status=clean_text(record.get("lifecycle_status")),
     )
 
 
@@ -133,7 +140,11 @@ def _answer(gold_value: dict[str, object]) -> str:
     return ""
 
 
-def build_question_specs(video_records: list[dict[str, object]]) -> list[QuestionSpec]:
+def build_question_specs(
+    video_records: list[dict[str, object]],
+    *,
+    allow_auto_candidates: bool = False,
+) -> list[QuestionSpec]:
     specs: list[QuestionSpec] = []
     for record in video_records:
         video_id = clean_text(record.get("video_id"))
@@ -146,8 +157,8 @@ def build_question_specs(video_records: list[dict[str, object]]) -> list[Questio
             task_type = GoldTaskType(clean_text(raw.get("task_type")).upper())
             capability = clean_text(raw.get("capability") or raw.get("task_subtype")).upper()
             gold_value = dict(raw.get("gold_value")) if isinstance(raw.get("gold_value"), dict) else {}
-            specs.append(
-                QuestionSpec(
+            gold_answer = _answer(gold_value)
+            spec = QuestionSpec(
                     spec_id=make_question_spec_id(video_id, annotation_id, capability),
                     video_id=video_id,
                     annotation_id=annotation_id,
@@ -156,7 +167,7 @@ def build_question_specs(video_records: list[dict[str, object]]) -> list[Questio
                     reasoning_operator=clean_text(raw.get("reasoning_operator")).upper(),
                     question_intent=clean_text(raw.get("question_intent")),
                     target=dict(raw.get("target")) if isinstance(raw.get("target"), dict) else {},
-                    gold_answer=_answer(gold_value),
+                    gold_answer=gold_answer,
                     evidence_refs=tuple(
                         clean_text(value) for value in _tuple(raw.get("evidence_refs"))
                     ),
@@ -170,6 +181,12 @@ def build_question_specs(video_records: list[dict[str, object]]) -> list[Questio
                     forbidden_inferences=tuple(
                         clean_text(value) for value in _tuple(raw.get("forbidden_inferences"))
                     ),
+                    answer_type=answer_type_for_task(task_type, gold_answer),
+                    lifecycle_status=clean_text(raw.get("review_status")).lower(),
                 )
-            )
+            if not validate_question_spec(
+                spec,
+                allow_auto_candidates=allow_auto_candidates,
+            ):
+                specs.append(spec)
     return sorted(specs, key=lambda item: (item.video_id, item.task_type.value, item.spec_id))

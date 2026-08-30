@@ -17,6 +17,7 @@ from .prompts import (
     build_question_repair_prompt,
     build_question_realizer_prompt,
 )
+from .item_validator import validate_qa_candidate
 from .specs import QuestionRealization, QuestionSpec, build_question_specs
 
 
@@ -79,7 +80,14 @@ def _parse_realization(raw: str, spec: QuestionSpec, model: str) -> QuestionReal
     if clean_text(payload.get("spec_id")) != spec.spec_id:
         raise ModelOutputError("realizer changed spec_id")
     question = clean_text(payload.get("question"))
-    issues = validate_realized_question(question, spec.gold_answer)
+    issues = list(
+        dict.fromkeys(
+            [
+                *validate_realized_question(question, spec.gold_answer),
+                *validate_qa_candidate(spec, question, spec.gold_answer),
+            ]
+        )
+    )
     if issues:
         raise ModelOutputError(",".join(issues))
     return QuestionRealization(
@@ -100,10 +108,14 @@ def run_qa_realizer(
     dataset_filename: str = "video_evidence_dataset.jsonl",
     max_workers: int = 1,
     resume: bool = True,
+    allow_auto_candidates: bool = False,
 ) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     records = read_jsonl(evidence_dir / dataset_filename)
-    specs = build_question_specs(records)
+    specs = build_question_specs(
+        records,
+        allow_auto_candidates=allow_auto_candidates,
+    )
     write_jsonl(output_dir / "qa_specs.jsonl", [spec.to_dict() for spec in specs])
 
     evidence_lookup = {
@@ -181,7 +193,14 @@ def run_qa_realizer(
                 rejected_question = clean_text(rejected_payload.get("question"))
             except ModelOutputError:
                 rejected_question = ""
-            local_errors = validate_realized_question(rejected_question, spec.gold_answer)
+            local_errors = list(
+                dict.fromkeys(
+                    [
+                        *validate_realized_question(rejected_question, spec.gold_answer),
+                        *validate_qa_candidate(spec, rejected_question, spec.gold_answer),
+                    ]
+                )
+            )
             repair_system, repair_user = build_question_repair_prompt(
                 spec,
                 rejected_question,
@@ -252,6 +271,7 @@ def run_qa_realizer(
         "prompt_version": QUESTION_REALIZER_PROMPT_VERSION,
         "model": client.model,
         "dataset_file": str(evidence_dir / dataset_filename),
+        "allow_auto_candidates": allow_auto_candidates,
         "counts": {
             "specs": len(specs),
             "realized": len(ordered),

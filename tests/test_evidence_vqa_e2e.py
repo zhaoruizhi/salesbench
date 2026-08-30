@@ -312,7 +312,10 @@ class EvidenceVQAE2ETest(unittest.TestCase):
             }
             realizations_path = root / "qa_realizations_reviewed.jsonl"
             with realizations_path.open("w", encoding="utf-8") as handle:
-                for spec in build_question_specs(evidence_records):
+                for spec in build_question_specs(
+                    evidence_records,
+                    allow_auto_candidates=True,
+                ):
                     handle.write(
                         json.dumps(
                             {"spec_id": spec.spec_id, "question": questions[spec.task_type.value]},

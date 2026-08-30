@@ -141,8 +141,20 @@ def test_realizer_writes_specific_english_question_and_resumes(tmp_path: Path):
     _write_evidence_dir(evidence_dir)
     client = FakeClient()
 
-    summary = run_qa_realizer(evidence_dir, output_dir, client, dataset_filename="video_evidence_dataset.jsonl")
-    second = run_qa_realizer(evidence_dir, output_dir, client, dataset_filename="video_evidence_dataset.jsonl")
+    summary = run_qa_realizer(
+        evidence_dir,
+        output_dir,
+        client,
+        dataset_filename="video_evidence_dataset.jsonl",
+        allow_auto_candidates=True,
+    )
+    second = run_qa_realizer(
+        evidence_dir,
+        output_dir,
+        client,
+        dataset_filename="video_evidence_dataset.jsonl",
+        allow_auto_candidates=True,
+    )
     realized = read_jsonl(output_dir / "qa_realizations.jsonl")
     prompt_payload = json.dumps(client.calls, ensure_ascii=False)
 
@@ -170,7 +182,7 @@ def test_realizer_repairs_answer_leakage_once_with_local_feedback(tmp_path: Path
     write_jsonl(evidence_dir / "video_evidence_dataset.jsonl", dataset)
     client = RepairClient()
 
-    summary = run_qa_realizer(evidence_dir, output_dir, client)
+    summary = run_qa_realizer(evidence_dir, output_dir, client, allow_auto_candidates=True)
     realized = read_jsonl(output_dir / "qa_realizations.jsonl")
 
     assert summary["counts"]["realized"] == 1

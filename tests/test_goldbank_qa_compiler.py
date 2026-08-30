@@ -10,7 +10,7 @@ sys.path.insert(0, "src")
 
 from salesbench.vqa.compiler import CompilePolicy, compile_qa_records, compile_vqa_from_gold  # noqa: E402
 from salesbench.vqa.goldbank_loader import load_compilable_gold  # noqa: E402
-from salesbench.vqa.specs import build_question_specs  # noqa: E402
+from salesbench.vqa.specs import build_question_specs, make_question_spec_id  # noqa: E402
 
 
 def gold_record():
@@ -160,7 +160,17 @@ class GoldBankQACompilerTest(unittest.TestCase):
             "answer": "The opening states the desired result before showing the corresponding product.",
         }
 
-        qa, _ = compile_qa_records(load_compilable_gold_from_records([record]), CompilePolicy())
+        spec_id = make_question_spec_id("v1", "g_silver", "HOOK_MECHANISM")
+        qa, _ = compile_qa_records(
+            load_compilable_gold_from_records([record]),
+            CompilePolicy(),
+            {
+                spec_id: {
+                    "spec_id": spec_id,
+                    "question": "How does the opening present the desired result before the product appears?",
+                }
+            },
+        )
         ss_qa = next(item for item in qa if item["task_type"] == "SS")
 
         self.assertEqual(ss_qa["gold_answer"], ss["gold_value"]["answer"])

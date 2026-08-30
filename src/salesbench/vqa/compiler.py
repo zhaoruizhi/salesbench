@@ -12,6 +12,7 @@ from ..goldbank.validators import PRIVATE_KEYS
 from ..io_utils import read_jsonl, write_json, write_jsonl
 from ..utils import clean_text, contains_cjk
 from .goldbank_loader import load_compilable_gold
+from .item_validator import answer_type_for_task, validate_qa_candidate
 from .question_programs import UnsupportedQuestionProgramError, render_question
 from .realizer import validate_realized_question
 from .specs import make_question_spec_id
@@ -148,6 +149,17 @@ def compile_qa_records(
             if contains_cjk((question, answer)):
                 validation.append({"gold_id": item.gold_id, "status": "rejected", "reason": "non_english_public_text"})
                 continue
+            qa_issues = validate_qa_candidate(item, question, answer)
+            if qa_issues:
+                validation.append(
+                    {
+                        "gold_id": item.gold_id,
+                        "status": "rejected",
+                        "reason": qa_issues[0].lower(),
+                        "issues": qa_issues,
+                    }
+                )
+                continue
             normalized_question = _normalize_question(question)
             if normalized_question in seen_questions:
                 validation.append({"gold_id": item.gold_id, "status": "rejected", "reason": "exact_duplicate_question"})
@@ -165,7 +177,7 @@ def compile_qa_records(
                 "task_type": item.task_type.value,
                 "task_subtype": item.task_subtype,
                 "question": question,
-                "answer_type": "open",
+                "answer_type": answer_type_for_task(item.task_type, answer),
                 "gold_answer": answer,
                 "source_annotation_ids": [item.annotation_id],
                 "evidence_refs": list(item.evidence_refs),

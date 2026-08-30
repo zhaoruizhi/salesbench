@@ -88,6 +88,7 @@ def build_evidence_dataset_command(args: argparse.Namespace) -> int:
         base_url=_env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
         max_workers=args.max_workers,
         resume=args.resume,
+        allow_auto_candidates=args.allow_auto_candidates,
         vision_api_key=vision_key,
         vision_model=args.vision_model or os.environ.get("VISION_MODEL") or args.model,
         vision_base_url=args.vision_base_url or os.environ.get("VISION_BASE_URL"),
@@ -177,6 +178,7 @@ def compile_vqa_command(args: argparse.Namespace) -> int:
             max_questions_per_video=args.max_questions_per_video,
             max_per_task=args.max_per_task,
             require_all_tasks=not args.allow_missing_tasks,
+            allow_auto_candidates=args.allow_auto_candidates,
         ),
         bank_filename=args.dataset_file,
         realizations_path=Path(args.realizations),
@@ -312,6 +314,11 @@ def build_parser() -> argparse.ArgumentParser:
     realize.add_argument("--text-model", default="gpt-4o")
     realize.add_argument("--max-workers", type=int, default=2)
     realize.add_argument("--no-resume", action="store_false", dest="resume")
+    realize.add_argument(
+        "--allow-auto-candidates",
+        action="store_true",
+        help="候选集调试模式；正式 QA 仅接受人工确认的 annotation",
+    )
     realize.set_defaults(func=realize_qa_command, resume=True)
 
     translations = sub.add_parser("build-audit-translations", help="生成仅供人工审计的中文翻译 sidecar")
@@ -332,6 +339,11 @@ def build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--max-questions-per-video", type=int, default=8)
     compile_parser.add_argument("--max-per-task", type=int, default=2)
     compile_parser.add_argument("--allow-missing-tasks", action="store_true", help="仅限 pilot 调试")
+    compile_parser.add_argument(
+        "--allow-auto-candidates",
+        action="store_true",
+        help="候选集调试模式；正式编译默认关闭",
+    )
     compile_parser.set_defaults(func=compile_vqa_command)
 
     run_parser = sub.add_parser("run-vqa-benchmark", help="OpenAI-compatible 便利 runner，输出 predictions.jsonl")

@@ -44,7 +44,7 @@ def _record() -> dict[str, object]:
 
 
 def test_question_spec_round_trips_without_audit_translation_fields():
-    specs = build_question_specs([_record()])
+    specs = build_question_specs([_record()], allow_auto_candidates=True)
     spec = specs[0]
 
     assert spec.spec_id == make_question_spec_id("v1", "a1", "CLAIM_DEMONSTRATION_STATUS")
@@ -52,6 +52,10 @@ def test_question_spec_round_trips_without_audit_translation_fields():
     assert spec.gold_answer.startswith("The wiping demonstration")
     assert "question_zh" not in spec.to_dict()
     assert "translated_text" not in spec.to_dict()
+
+
+def test_formal_question_specs_exclude_legacy_verified_candidates():
+    assert build_question_specs([_record()]) == []
 
 
 def test_question_realization_round_trips_as_english_surface_form():
