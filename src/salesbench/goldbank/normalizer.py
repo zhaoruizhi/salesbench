@@ -22,14 +22,13 @@ from .ontology import allowed_subtypes, default_reasoning_operator
 from .schema import (
     EvidenceAssertionType,
     EvidenceModality,
-    EvidenceTemporalScope,
     EvidenceUnit,
     GoldItem,
     GoldProposal,
     GoldTaskType,
     make_evidence_id,
     infer_assertion_type,
-    infer_temporal_scope,
+    resolve_temporal_scope,
     parse_gold_proposal,
     stable_digest,
 )
@@ -214,7 +213,6 @@ def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int)
         }.get(modality, ())
     content_en = normalize_text(raw.get("content_en"))
     assertion_raw = normalize_text(raw.get("assertion_type")).upper()
-    temporal_raw = normalize_text(raw.get("temporal_scope")).upper()
     return EvidenceUnit(
         evidence_id=evidence_id,
         video_id=video_id,
@@ -238,10 +236,10 @@ def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int)
             if assertion_raw
             else infer_assertion_type(modality)
         ),
-        temporal_scope=(
-            EvidenceTemporalScope(temporal_raw)
-            if temporal_raw
-            else infer_temporal_scope(modality, content_en or raw.get("value"))
+        temporal_scope=resolve_temporal_scope(
+            modality,
+            content_en or raw.get("value"),
+            raw.get("temporal_scope"),
         ),
     )
 

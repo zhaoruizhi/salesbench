@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -59,6 +60,13 @@ _LONG_TERM_CLAIM_MARKERS = (
     "long lasting",
     "lasting effect",
     "durable over time",
+    "overnight",
+    "24/7",
+)
+
+_LONG_TERM_DURATION_RE = re.compile(
+    r"\b(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)"
+    r"[\s-]+(?:hours?|days?|weeks?|months?|years?)\b"
 )
 
 
@@ -75,10 +83,26 @@ def infer_temporal_scope(modality: EvidenceModality, content: object = "") -> Ev
         return EvidenceTemporalScope.FRAME
     if modality == EvidenceModality.ASR:
         text = clean_text(content).lower()
-        if any(marker in text for marker in _LONG_TERM_CLAIM_MARKERS):
+        if any(marker in text for marker in _LONG_TERM_CLAIM_MARKERS) or (
+            _LONG_TERM_DURATION_RE.search(text)
+        ):
             return EvidenceTemporalScope.LONG_TERM_CLAIM
         return EvidenceTemporalScope.SHORT_CLIP
     return EvidenceTemporalScope.UNSPECIFIED
+
+
+def resolve_temporal_scope(
+    modality: EvidenceModality,
+    content: object = "",
+    declared_scope: object = "",
+) -> EvidenceTemporalScope:
+    """Resolve scope without allowing a model declaration to understate a detected claim window."""
+
+    inferred = infer_temporal_scope(modality, content)
+    if inferred == EvidenceTemporalScope.LONG_TERM_CLAIM:
+        return inferred
+    declared = clean_text(declared_scope).upper()
+    return EvidenceTemporalScope(declared) if declared else inferred
 
 
 class GoldTier(str, Enum):
@@ -396,7 +420,6 @@ def parse_evidence_unit(record: dict[str, object]) -> EvidenceUnit:
     source_text_native = clean_text(record.get("source_text_native")) or clean_text(record.get("text_span"))
     modality = EvidenceModality(clean_text(record.get("modality")))
     assertion_raw = clean_text(record.get("assertion_type")).upper()
-    temporal_raw = clean_text(record.get("temporal_scope")).upper()
     return EvidenceUnit(
         evidence_id=clean_text(record.get("evidence_id")),
         video_id=clean_text(record.get("video_id")),
@@ -420,13 +443,10 @@ def parse_evidence_unit(record: dict[str, object]) -> EvidenceUnit:
             if assertion_raw
             else infer_assertion_type(modality)
         ),
-        temporal_scope=(
-            EvidenceTemporalScope(temporal_raw)
-            if temporal_raw
-            else infer_temporal_scope(
-                modality,
-                clean_text(record.get("content_en")) or record.get("value"),
-            )
+        temporal_scope=resolve_temporal_scope(
+            modality,
+            clean_text(record.get("content_en")) or record.get("value"),
+            record.get("temporal_scope"),
         ),
     )
 

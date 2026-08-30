@@ -90,6 +90,42 @@ class EvidenceNormalizerTest(unittest.TestCase):
         self.assertEqual(visual.temporal_scope.value, "FRAME")
         self.assertEqual(asr.assertion_type.value, "SPOKEN_CLAIM")
         self.assertEqual(asr.temporal_scope.value, "LONG_TERM_CLAIM")
+
+    def test_week_long_spoken_claim_is_not_treated_as_short_clip_evidence(self):
+        asr = normalize_evidence_unit(
+            "v1",
+            {
+                "modality": "asr",
+                "start_s": 0.0,
+                "end_s": 5.0,
+                "subject": "speaker",
+                "predicate": "claims",
+                "value": "the mask allowed the speaker to go a week without makeup",
+                "confidence": 0.9,
+            },
+            0,
+        )
+
+        self.assertEqual(asr.temporal_scope.value, "LONG_TERM_CLAIM")
+
+    def test_declared_short_clip_cannot_override_detected_long_term_claim(self):
+        asr = normalize_evidence_unit(
+            "v1",
+            {
+                "modality": "asr",
+                "start_s": 0.0,
+                "end_s": 5.0,
+                "subject": "speaker",
+                "predicate": "claims",
+                "value": "the effect lasts one month",
+                "temporal_scope": "SHORT_CLIP",
+                "confidence": 0.9,
+            },
+            0,
+        )
+
+        self.assertEqual(asr.temporal_scope.value, "LONG_TERM_CLAIM")
+
     def test_reasoning_operator_in_subtype_field_maps_back_to_capability(self):
         self.assertEqual(
             normalize_task_subtype(GoldTaskType.SS, "MAP_FEATURE_TO_BENEFIT"),
