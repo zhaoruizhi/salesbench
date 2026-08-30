@@ -164,3 +164,31 @@ def test_canonical_v8_row_round_trips() -> None:
 
     for key, value in row.items():
         assert normalized[key] == value
+
+
+def test_v10_candidate_snapshot_is_readable_without_proposal_lookup() -> None:
+    normalized = normalize_review_queue_row(
+        {
+            "review_item_id": "r-v10",
+            "video_id": "v1",
+            "stage": "semantic_relation_verification",
+            "item_type": "commercial_relation",
+            "reason_code": "SEMANTIC_VERIFIER_AMBIGUOUS",
+            "reason": "The sampled frames allow two interpretations.",
+            "candidate_snapshot": {
+                "relation_id": "rel1",
+                "relation_type": "CLAIM_PARTIALLY_SUPPORTED",
+                "status": "PARTIALLY_SUPPORTED",
+                "rationale_en": "Only the immediate visible change is shown.",
+                "evidence_ids": ["e1", "e2"],
+                "source_cue_ids": ["c1"],
+                "target_cue_ids": ["c2"],
+            },
+        },
+        {},
+    )
+
+    assert normalized["candidate_snapshot"]["relation_id"] == "rel1"
+    assert normalized["evidence_refs"] == ["e1", "e2"]
+    assert normalized["commercial_relation_ids"] == ["rel1"]
+    assert normalized["resolution_status"] == "resolved"

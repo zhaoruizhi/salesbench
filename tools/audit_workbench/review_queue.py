@@ -88,7 +88,8 @@ def normalize_review_queue_row(
 ) -> dict[str, Any]:
     """Return one readable canonical queue item from any v6-v8 queue shape."""
     video_id = str(row.get("video_id") or "")
-    nested = _dict(row.get("proposal"))
+    candidate_snapshot = _first_dict(row.get("candidate_snapshot"), row.get("proposal"))
+    nested = _first_dict(row.get("proposal"), candidate_snapshot)
     abstention = _dict(row.get("abstention"))
 
     source_ids = _strings(row.get("source_proposal_ids"))
@@ -150,6 +151,15 @@ def normalize_review_queue_row(
             primary.get("commercial_relation_ids"),
         )
     )
+    if not commerce_cue_ids and candidate_snapshot:
+        commerce_cue_ids = _strings(
+            [
+                *(candidate_snapshot.get("source_cue_ids") or []),
+                *(candidate_snapshot.get("target_cue_ids") or []),
+            ]
+        )
+    if not commercial_relation_ids and candidate_snapshot.get("relation_id"):
+        commercial_relation_ids = [str(candidate_snapshot["relation_id"])]
     if linked:
         if not commerce_cue_ids:
             commerce_cue_ids = _strings(
@@ -229,4 +239,7 @@ def normalize_review_queue_row(
         "unresolved_proposal_ids": unresolved,
         "display_summary": display_summary,
         "proposal_id": row_proposal_id or nested_proposal_id or (source_ids[0] if len(source_ids) == 1 else ""),
+        "candidate_snapshot": candidate_snapshot,
+        "quality_disposition": str(row.get("quality_disposition") or ""),
+        "semantic_verifier": _dict(candidate_snapshot.get("semantic_verifier")),
     }

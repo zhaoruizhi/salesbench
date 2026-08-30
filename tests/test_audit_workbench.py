@@ -327,6 +327,36 @@ def test_review_views_render_one_case_pagers_and_four_evidence_queues() -> None:
     assert "slice(0,200)" not in html
 
 
+def test_v10_read_only_buckets_do_not_render_review_decision_controls() -> None:
+    data = {
+        "release": {"status": "candidate", "prompt_version": "evidence-prompt-v10"},
+        "counts": {"videos": 1, "review_queue": 0, "qa": 0, "judge_rows": 0},
+        "delivery": {},
+        "evidence": {
+            "queue": [
+                {
+                    "id": "rejected-1",
+                    "video_id": "v1",
+                    "audit_bucket": "auto_rejected",
+                    "reason": "invalid relation",
+                }
+            ],
+            "risks": [],
+            "abstentions": [],
+            "accepted_sample": [],
+            "missing_task_videos": [],
+        },
+        "qa": [],
+        "judge": {"summary": {}, "metrics": {}, "rows": []},
+    }
+
+    html = render_workbench(data, collect_prompt_snapshot(), fragment=True)
+
+    assert "自动拒绝" in html
+    assert "只读记录" in html
+    assert "x.audit_bucket==='human_review'" in html
+
+
 def test_preview_renderer_reduces_record_limit_to_fit_byte_budget() -> None:
     large = "x" * 10_000
     rows = [{"id": f"row-{index}", "reason": large} for index in range(12)]
@@ -779,6 +809,101 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     assert abstention["audit_bucket"] == "abstention_resample"
     assert abstention["evidence_items"][0]["content_en"] == abstained_unit["content_en"]
     assert abstention["evidence_items"][0]["frames"][0]["frame_index"] == 2
+
+
+def test_v10_workbench_consumes_separated_quality_artifacts_directly(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    qa_dir = tmp_path / "qa"
+    _write(
+        evidence_dir / "generation_meta.json",
+        json.dumps({"video_ids": ["v1"], "prompt_version": "evidence-prompt-v10"}),
+    )
+    _write(
+        evidence_dir / "evidence_units.jsonl",
+        json.dumps(
+            {
+                "evidence_id": "e1",
+                "video_id": "v1",
+                "modality": "visual",
+                "frame_indices": [0],
+                "content_en": "The host holds the product.",
+            }
+        )
+        + "\n",
+    )
+    _write(evidence_dir / "video_evidence_dataset.jsonl", "")
+    _write(evidence_dir / "gold_proposals.jsonl", "")
+    common = {
+        "video_id": "v1",
+        "item_type": "commercial_relation",
+        "evidence_refs": ["e1"],
+        "candidate_snapshot": {
+            "relation_id": "r1",
+            "evidence_ids": ["e1"],
+            "rationale_en": "The relation candidate cites the visible product.",
+        },
+    }
+    _write(
+        evidence_dir / "human_review_queue.jsonl",
+        json.dumps(
+            {
+                **common,
+                "review_item_id": "human-1",
+                "reason_code": "SEMANTIC_VERIFIER_AMBIGUOUS",
+                "reason": "Two readings remain possible.",
+            }
+        )
+        + "\n",
+    )
+    _write(
+        evidence_dir / "rejected_candidates.jsonl",
+        json.dumps(
+            {
+                **common,
+                "review_item_id": "reject-1",
+                "reason_code": "SEMANTIC_VERIFIER_REJECT",
+                "reason": "The cited frame does not support the relation.",
+            }
+        )
+        + "\n",
+    )
+    _write(
+        evidence_dir / "pipeline_diagnostics.jsonl",
+        json.dumps(
+            {
+                "review_item_id": "diag-1",
+                "video_id": "v1",
+                "item_type": "stage_failure",
+                "reason_code": "RELATION_PARSE_ERROR",
+                "reason": "Invalid JSON.",
+            }
+        )
+        + "\n",
+    )
+    _write(evidence_dir / "quality_decisions.jsonl", "")
+    _write(qa_dir / "vqa_gold_private.jsonl", "")
+    manifest = {
+        "frame_cache_root": "frames",
+        "formal": {
+            "artifacts": {
+                "evidence": {"source": "evidence"},
+                "qa": {"source": "qa"},
+            }
+        },
+    }
+
+    data = build_workbench_data(manifest, tmp_path, {})
+
+    buckets = {row["id"]: row["audit_bucket"] for row in data["evidence"]["queue"]}
+    assert buckets == {
+        "human-1": "human_review",
+        "reject-1": "auto_rejected",
+        "diag-1": "pipeline_diagnostics",
+    }
+    assert data["counts"]["human_review_queue"] == 1
+    assert data["counts"]["auto_rejected"] == 1
+    assert data["counts"]["pipeline_diagnostics"] == 1
+    assert data["evidence"]["queue"][0]["candidate_snapshot"]
 
 
 def test_workbench_renders_chinese_translation_and_english_source(tmp_path: Path) -> None:
