@@ -254,6 +254,87 @@ def successful_v7_responses() -> list[dict[str, object]]:
 
 
 class GoldBankPipelineTest(unittest.TestCase):
+    def test_strict_semantic_ambiguity_is_the_only_relation_case_sent_to_humans(self):
+        responses = successful_responses_with_two_evidence()
+        relation_id = responses[3]["proposals"][0]["commercial_relation_ids"][0]
+        verifier = FakeGoldClient(
+            [
+                {
+                    "verifications": [
+                        {
+                            "relation_id": relation_id,
+                            "verdict": "AMBIGUOUS",
+                            "reason": "The sampled frame does not resolve whether the material claim is shown.",
+                        }
+                    ]
+                }
+            ]
+        )
+        result = GoldBankPipeline(
+            FakeGoldClient(responses[:1]),
+            FakeGoldClient(responses[1:]),
+            strict_semantic_verification=True,
+            semantic_verifier_client=verifier,
+        ).run_video(bundle())
+
+        self.assertEqual(result.commercial_relations, [])
+        self.assertEqual(len(result.human_review_queue), 1)
+        self.assertEqual(result.human_review_queue[0]["reason_code"], "SEMANTIC_VERIFIER_AMBIGUOUS")
+        self.assertEqual(result.human_review_queue[0]["candidate_snapshot"]["relation_id"], relation_id)
+
+    def test_strict_semantic_rejection_never_enters_human_queue(self):
+        responses = successful_responses_with_two_evidence()
+        relation_id = responses[3]["proposals"][0]["commercial_relation_ids"][0]
+        verifier = FakeGoldClient(
+            [
+                {
+                    "verifications": [
+                        {
+                            "relation_id": relation_id,
+                            "verdict": "REJECT",
+                            "reason": "The frame shows use but not the claimed material.",
+                        }
+                    ]
+                }
+            ]
+        )
+        result = GoldBankPipeline(
+            FakeGoldClient(responses[:1]),
+            FakeGoldClient(responses[1:]),
+            strict_semantic_verification=True,
+            semantic_verifier_client=verifier,
+        ).run_video(bundle())
+
+        self.assertFalse(result.human_review_queue)
+        self.assertTrue(
+            any(item["reason_code"] == "SEMANTIC_VERIFIER_REJECT" for item in result.rejected_candidates)
+        )
+
+    def test_challenger_revise_receives_exactly_one_automatic_repair_attempt(self):
+        responses = successful_responses_with_two_evidence()
+        responses[6]["reviews"][0].update(
+            {
+                "verdict": "REVISE",
+                "issues": ["Make the claim target explicit."],
+                "suggested_revision": {"target": {"claim": "the braided-material claim"}},
+            }
+        )
+        repaired = deepcopy(responses[3]["proposals"][0])
+        repaired["target"] = {"claim": "the braided-material claim"}
+        llm_responses = [*responses[1:7], {"repaired_proposal": repaired}, *responses[7:]]
+
+        result = GoldBankPipeline(
+            FakeGoldClient(responses[:1]),
+            FakeGoldClient(llm_responses),
+        ).run_video(bundle())
+
+        repair_traces = [trace for trace in result.agent_traces if trace["stage"] == "proposal_repair"]
+        self.assertEqual(len(repair_traces), 1)
+        self.assertEqual(len(result.repaired_candidates), 1)
+        self.assertFalse(result.human_review_queue)
+        repaired_output = next(item for item in result.gold_proposals if item["proposal_id"] == "p_cm")
+        self.assertEqual(repaired_output["target"], {"claim": "the braided-material claim"})
+
     def test_low_confidence_evidence_is_rejected_before_cue_generation(self):
         responses = successful_responses()
         responses[0]["evidence_units"][0]["confidence"] = 0.2

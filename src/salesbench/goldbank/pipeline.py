@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -41,6 +42,7 @@ from .prompts import (
     build_visual_commerce_cue_prompt,
 )
 from .quality_gate import LifecycleStatus, route_quality_record
+from .quality_prompts import build_proposal_repair_prompt
 from .schema import (
     SCHEMA_VERSION,
     EvidenceModality,
@@ -56,6 +58,7 @@ from .schema import (
     parse_gold_review,
     stable_digest,
 )
+from .semantic_verifier import SemanticVerdict, verify_relations
 from .validators import (
     ValidationIssue,
     find_duplicate_and_conflicting_items,
@@ -399,10 +402,14 @@ class GoldBankPipeline:
         vlm_client: VLMClient,
         llm_client: VLMClient,
         min_confidence: float = 0.70,
+        strict_semantic_verification: bool = False,
+        semantic_verifier_client: VLMClient | None = None,
     ):
         self.vlm_client = vlm_client
         self.llm_client = llm_client
         self.min_confidence = min_confidence
+        self.strict_semantic_verification = strict_semantic_verification
+        self.semantic_verifier_client = semantic_verifier_client or vlm_client
 
     def run_video(
         self,
@@ -414,10 +421,12 @@ class GoldBankPipeline:
         content_context = public_observation_context(bundle)
         frame_metadata = list(content_context.get("sampled_frames") or [])
         image_blocks: list[dict[str, object]] = []
+        frame_images: dict[int, str] = {}
         for position, image_b64 in enumerate(frames_b64 or []):
             metadata = frame_metadata[position] if position < len(frame_metadata) else {}
             frame_index = metadata.get("frame_index", position)
             timestamp_s = metadata.get("timestamp_s")
+            frame_images[int(frame_index)] = image_b64
             image_blocks.extend(
                 [
                     {"type": "text", "text": f"[FRAME frame_index={frame_index} timestamp_s={timestamp_s}]"},
@@ -948,6 +957,71 @@ class GoldBankPipeline:
                 status="partial",
             )
 
+        if self.strict_semantic_verification and commercial_relations:
+            try:
+                verification_batch = verify_relations(
+                    self.semantic_verifier_client,
+                    video_id,
+                    commercial_relations,
+                    cue_dict,
+                    evidence_dict,
+                    frame_images,
+                )
+                traces.append(
+                    _trace(
+                        "semantic_relation_verification",
+                        "frame_aware_relation_verifier",
+                        verification_batch.call,
+                        {
+                            "verifications": [
+                                verification.to_dict()
+                                for verification in verification_batch.verifications
+                            ]
+                        },
+                    )
+                )
+                relation_by_id = {
+                    relation.relation_id: relation for relation in commercial_relations
+                }
+                verified_relations: list[CommercialRelation] = []
+                for verification in verification_batch.verifications:
+                    relation = relation_by_id[verification.relation_id]
+                    if verification.verdict == SemanticVerdict.PASS:
+                        verified_relations.append(relation)
+                        continue
+                    reason = (
+                        "semantic_verifier_ambiguous"
+                        if verification.verdict == SemanticVerdict.AMBIGUOUS
+                        else "semantic_verifier_reject"
+                    )
+                    snapshot = relation.to_dict()
+                    snapshot["semantic_verifier"] = verification.to_dict()
+                    human_review_queue.append(
+                        _review_queue_item(
+                            video_id,
+                            reason,
+                            snapshot,
+                            stage="semantic_relation_verification",
+                            item_type="commercial_relation",
+                        )
+                    )
+                commercial_relations = verified_relations
+                relation_dict = {
+                    relation.relation_id: relation for relation in commercial_relations
+                }
+            except ValueError as exc:
+                status = "partial"
+                human_review_queue.append(
+                    _review_queue_item(
+                        video_id,
+                        f"semantic_relation_verification_failed: {exc}",
+                        stage="semantic_relation_verification",
+                        item_type="stage_failure",
+                    )
+                )
+                commercial_relations = []
+                relation_dict = {}
+
         bp_proposals = build_bp_proposals_from_graph(
             video_id,
             evidence_units,
@@ -1063,10 +1137,145 @@ class GoldBankPipeline:
             )
 
         proposals_by_id = {proposal.proposal_id: proposal for proposal in all_proposals}
+        eligible_proposal_ids = {
+            clean_text(proposal.get("proposal_id"))
+            for proposal in eligible_proposal_dicts
+            if clean_text(proposal.get("proposal_id"))
+        }
+        repaired_proposal_ids: set[str] = set()
+        repair_attempted_ids: set[str] = set()
+        repaired_candidates: list[dict[str, object]] = []
         for review in reviews:
             if review.verdict == ReviewVerdict.PASS:
                 continue
             proposal = proposals_by_id.get(review.proposal_id)
+            if (
+                review.verdict == ReviewVerdict.REVISE
+                and proposal is not None
+                and proposal.proposal_id in eligible_proposal_ids
+                and proposal.source_agent != "bp_compiler"
+                and proposal.proposal_id not in repair_attempted_ids
+            ):
+                repair_attempted_ids.add(proposal.proposal_id)
+                repair_system, repair_user = build_proposal_repair_prompt(
+                    video_id,
+                    proposal.to_dict(),
+                    review.to_dict(),
+                    [unit.to_dict() for unit in evidence_units],
+                    [cue.to_dict() for cue in commerce_cues],
+                    [relation.to_dict() for relation in commercial_relations],
+                )
+                repair_call = self.llm_client.call_text_only(
+                    repair_system,
+                    repair_user,
+                    response_format="json_object",
+                )
+                repaired_proposal: GoldProposal | None = None
+                repair_error = repair_call.error or ""
+                if repair_call.success:
+                    try:
+                        repair_payload = json.loads(repair_call.raw_response)
+                        raw_repaired = (
+                            repair_payload.get("repaired_proposal")
+                            if isinstance(repair_payload, dict)
+                            else None
+                        )
+                        if not isinstance(raw_repaired, dict):
+                            raise ValueError("repairer returned no repaired_proposal")
+                        for identity_field, expected in {
+                            "proposal_id": proposal.proposal_id,
+                            "video_id": proposal.video_id,
+                            "source_agent": proposal.source_agent,
+                            "task_type": proposal.task_type.value,
+                        }.items():
+                            if clean_text(raw_repaired.get(identity_field)) != clean_text(expected):
+                                raise ValueError(f"repairer changed {identity_field}")
+                        supplied_evidence_ids = {
+                            clean_text(value)
+                            for value in raw_repaired.get("evidence_ids", []) or []
+                            if clean_text(value)
+                        }
+                        supplied_cue_ids = {
+                            clean_text(value)
+                            for value in raw_repaired.get("commerce_cue_ids", []) or []
+                            if clean_text(value)
+                        }
+                        supplied_relation_ids = {
+                            clean_text(value)
+                            for value in raw_repaired.get("commercial_relation_ids", []) or []
+                            if clean_text(value)
+                        }
+                        if not supplied_evidence_ids <= set(evidence_dict):
+                            raise ValueError("repairer invented an EvidenceUnit ID")
+                        if not supplied_cue_ids <= set(cue_dict):
+                            raise ValueError("repairer invented a CommerceCue ID")
+                        if not supplied_relation_ids <= set(relation_dict):
+                            raise ValueError("repairer invented a CommercialRelation ID")
+                        repaired_proposal = normalize_proposals(
+                            video_id,
+                            proposal.source_agent,
+                            [raw_repaired],
+                            cue_dict,
+                            relation_dict,
+                            set(evidence_dict),
+                        )[0]
+                        repaired_proposal = replace(
+                            repaired_proposal,
+                            proposal_id=proposal.proposal_id,
+                        )
+                        repair_issues = validate_gold_proposal(
+                            repaired_proposal,
+                            evidence_dict,
+                            cue_dict,
+                            relation_dict,
+                        )
+                        if repaired_proposal.proposal_confidence < self.min_confidence:
+                            raise ValueError("repaired proposal is below min_confidence")
+                        if any(issue.severity == "ERROR" for issue in repair_issues):
+                            codes = ", ".join(issue.code for issue in repair_issues)
+                            raise ValueError(f"repaired proposal failed validation: {codes}")
+                    except (json.JSONDecodeError, ValueError, IndexError) as exc:
+                        repair_error = str(exc)
+                        repaired_proposal = None
+                traces.append(
+                    _trace(
+                        "proposal_repair",
+                        "proposal_repairer",
+                        repair_call,
+                        (
+                            {"repaired_proposal": repaired_proposal.to_dict()}
+                            if repaired_proposal is not None
+                            else None
+                        ),
+                        error=repair_error or None,
+                    )
+                )
+                if repaired_proposal is not None:
+                    proposals_by_id[proposal.proposal_id] = repaired_proposal
+                    repaired_proposal_ids.add(proposal.proposal_id)
+                    repair_record = _review_queue_item(
+                        video_id,
+                        "challenger_revise_repaired",
+                        repaired_proposal.to_dict(),
+                        stage="proposal_repair",
+                        item_type="candidate",
+                        source_proposal_ids=[proposal.proposal_id],
+                    )
+                    repair_record["challenger_review"] = review.to_dict()
+                    repair_record["original_candidate"] = proposal.to_dict()
+                    repaired_candidates.append(repair_record)
+                    continue
+                human_review_queue.append(
+                    _review_queue_item(
+                        video_id,
+                        f"challenger_repair_exhausted: {repair_error or 'invalid repair'}",
+                        proposal.to_dict(),
+                        stage="proposal_repair",
+                        item_type="candidate",
+                        source_proposal_ids=[proposal.proposal_id],
+                    )
+                )
+                continue
             human_review_queue.append(
                 _review_queue_item(
                     video_id,
@@ -1078,11 +1287,6 @@ class GoldBankPipeline:
                 )
             )
 
-        eligible_proposal_ids = {
-            clean_text(proposal.get("proposal_id"))
-            for proposal in eligible_proposal_dicts
-            if clean_text(proposal.get("proposal_id"))
-        }
         rejected_proposal_ids = {
             review.proposal_id
             for review in reviews
@@ -1094,25 +1298,40 @@ class GoldBankPipeline:
             for review in reviews
             if review.proposal_id in eligible_proposal_ids
             and review.verdict == ReviewVerdict.PASS
-        }
+        } | repaired_proposal_ids
         passed_proposals_by_id = {
-            proposal.proposal_id: proposal
-            for proposal in all_proposals
-            if proposal.proposal_id in passed_proposal_ids
+            proposal_id: proposal
+            for proposal_id, proposal in proposals_by_id.items()
+            if proposal_id in passed_proposal_ids
         }
 
         adjudicator_proposals = [
-            proposal
-            for proposal in eligible_proposal_dicts
-            if clean_text(proposal.get("proposal_id")) in passed_proposal_ids
-            and clean_text(proposal.get("task_type")).upper() != GoldTaskType.BP.value
+            proposal.to_dict()
+            for proposal_id, proposal in passed_proposals_by_id.items()
+            if proposal_id in passed_proposal_ids
+            and proposal.task_type != GoldTaskType.BP
         ]
         adjudicator_proposal_ids = {
             clean_text(proposal.get("proposal_id")) for proposal in adjudicator_proposals
         }
-        adjudicator_reviews = [
-            review.to_dict() for review in reviews if review.proposal_id in adjudicator_proposal_ids
-        ]
+        adjudicator_reviews = []
+        for review in reviews:
+            if review.proposal_id not in adjudicator_proposal_ids:
+                continue
+            payload = review.to_dict()
+            if review.proposal_id in repaired_proposal_ids:
+                payload.update(
+                    {
+                        "verdict": ReviewVerdict.PASS.value,
+                        "issues": [],
+                        "suggested_revision": None,
+                        "checks": {
+                            **dict(payload.get("checks") or {}),
+                            "automatic_repair_validated": True,
+                        },
+                    }
+                )
+            adjudicator_reviews.append(payload)
         system, user = build_adjudicator_prompt(
             video_id,
             adjudicator_proposals,
@@ -1311,7 +1530,10 @@ class GoldBankPipeline:
         return GoldBankResult(
             video_id=video_id,
             evidence_units=[unit.to_dict() for unit in evidence_units],
-            gold_proposals=proposal_dicts,
+            gold_proposals=[
+                proposals_by_id.get(proposal.proposal_id, proposal).to_dict()
+                for proposal in all_proposals
+            ],
             gold_reviews=[review.to_dict() for review in reviews],
             video_gold_record=record.to_dict(),
             human_review_queue=human_review_queue,
@@ -1319,6 +1541,7 @@ class GoldBankPipeline:
             status=status,
             commerce_cues=[cue.to_dict() for cue in commerce_cues],
             commercial_relations=[relation.to_dict() for relation in commercial_relations],
+            repaired_candidates=repaired_candidates,
         )
 
     def _review_only_result(

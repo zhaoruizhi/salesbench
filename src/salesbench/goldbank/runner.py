@@ -16,6 +16,7 @@ from ..utils import clean_text
 from ..vlm.api_client import VLMClient
 from ..vlm.frame_sampler import Frame, sample_frames
 from .pipeline import GoldBankPipeline, GoldBankResult
+from .quality_prompts import QUALITY_PROMPT_VERSION
 from .schema import stable_digest
 
 
@@ -175,10 +176,17 @@ def _pipeline_fingerprint(
             "frame_strategy": pilot_config.get("frame_strategy"),
             "frames_per_video": pilot_config.get("frames_per_video"),
             "min_confidence": pilot_config.get("min_confidence"),
+            "strict_semantic_verification": bool(
+                pilot_config.get("strict_semantic_verification", False)
+            ),
+            "quality_prompt_version": QUALITY_PROMPT_VERSION,
             "video_id": clean_text(record.get("video_id")),
             "video_sha256": _file_digest(_video_path(record)),
             "vision_model": getattr(getattr(pipeline, "vlm_client", None), "model", ""),
             "text_model": getattr(getattr(pipeline, "llm_client", None), "model", ""),
+            "semantic_verifier_model": getattr(
+                getattr(pipeline, "semantic_verifier_client", None), "model", ""
+            ),
         },
         length=24,
     )
@@ -261,6 +269,10 @@ def _merge_outputs(
         "version": pilot_config.get("version"),
         "prompt_version": pilot_config.get("prompt_version"),
         "schema_version": pilot_config.get("schema_version"),
+        "quality_prompt_version": QUALITY_PROMPT_VERSION,
+        "strict_semantic_verification": bool(
+            pilot_config.get("strict_semantic_verification", False)
+        ),
         "video_ids": list(pilot_config.get("video_ids") or []),
         "counts": {
             "video_samples": len(video_samples),
@@ -397,6 +409,9 @@ def build_gold_bank_dataset(
         vlm_client=vlm_client,
         llm_client=llm_client,
         min_confidence=float(pilot_config.get("min_confidence", 0.7)),
+        strict_semantic_verification=bool(
+            pilot_config.get("strict_semantic_verification", False)
+        ),
     )
     return run_gold_bank_records(
         records,
