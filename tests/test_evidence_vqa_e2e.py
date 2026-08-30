@@ -324,7 +324,7 @@ class EvidenceVQAE2ETest(unittest.TestCase):
             compile_meta = compile_vqa_from_gold(
                 evidence_dir,
                 qa_dir,
-                CompilePolicy(),
+                CompilePolicy(allow_auto_candidates=True),
                 bank_filename="video_evidence_dataset.jsonl",
                 realizations_path=realizations_path,
             )

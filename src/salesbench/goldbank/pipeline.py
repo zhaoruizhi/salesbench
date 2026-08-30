@@ -40,6 +40,7 @@ from .prompts import (
     build_visual_evidence_repair_prompt,
     build_visual_commerce_cue_prompt,
 )
+from .quality_gate import LifecycleStatus, route_quality_record
 from .schema import (
     SCHEMA_VERSION,
     EvidenceModality,
@@ -78,6 +79,33 @@ class GoldBankResult:
     status: str
     commerce_cues: list[dict[str, object]] = field(default_factory=list)
     commercial_relations: list[dict[str, object]] = field(default_factory=list)
+    repaired_candidates: list[dict[str, object]] = field(default_factory=list)
+    rejected_candidates: list[dict[str, object]] = field(default_factory=list)
+    pipeline_diagnostics: list[dict[str, object]] = field(default_factory=list)
+    quality_decisions: list[dict[str, object]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Partition legacy queue writes into canonical quality artifacts."""
+
+        actionable: list[dict[str, object]] = []
+        known_decision_ids = {
+            clean_text(record.get("decision_id")) for record in self.quality_decisions
+        }
+        for raw in self.human_review_queue:
+            record = dict(raw)
+            decision = route_quality_record(record)
+            record["quality_disposition"] = decision.disposition.value
+            record["quality_decision_id"] = decision.decision_id
+            if decision.decision_id not in known_decision_ids:
+                self.quality_decisions.append(decision.to_dict())
+                known_decision_ids.add(decision.decision_id)
+            if decision.output_channel == "human_review_queue":
+                actionable.append(record)
+            elif decision.output_channel == "rejected_candidates":
+                self.rejected_candidates.append(record)
+            else:
+                self.pipeline_diagnostics.append(record)
+        self.human_review_queue = actionable
 
 
 def _trace(
@@ -223,7 +251,7 @@ def _bp_items_from_proposals(proposals: list[GoldProposal]) -> list[GoldItem]:
                 eligible_question_formats=eligible_question_formats(proposal.task_type, proposal.task_subtype),
                 source_proposal_ids=(proposal.proposal_id,),
                 gold_tier=GoldTier.GOLD_A,
-                review_status="verified",
+                review_status=LifecycleStatus.AUTO_ACCEPTED_CANDIDATE.value,
                 confidence=proposal.proposal_confidence,
                 capability=proposal.capability,
                 reasoning_operator=proposal.reasoning_operator,
@@ -299,6 +327,8 @@ def _review_queue_item(
         "source_proposal_ids": source_ids,
         "issues": issue_payloads,
         "proposal_id": proposal_id,
+        "candidate_snapshot": dict(candidate),
+        "proposal": dict(candidate) if candidate.get("proposal_id") else {},
     }
 
 
@@ -1113,7 +1143,9 @@ class GoldBankPipeline:
                     )
                 task_type = GoldTaskType(clean_text(local_payload.get("task_type")).upper())
                 local_payload["quality_status"] = "DIRECT" if task_type in {GoldTaskType.BP, GoldTaskType.CM} else "INFERRED"
-                local_payload.setdefault("review_status", "verified")
+                local_payload["review_status"] = (
+                    LifecycleStatus.AUTO_ACCEPTED_CANDIDATE.value
+                )
                 item = parse_gold_item(local_payload)
             except ValueError as exc:
                 human_review_queue.append(_review_queue_item(video_id, f"parse_error: {exc}", raw_item))

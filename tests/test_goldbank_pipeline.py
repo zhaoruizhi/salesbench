@@ -487,7 +487,7 @@ class GoldBankPipelineTest(unittest.TestCase):
         gold_ids = [item["annotation_id"] for item in result.video_gold_record["grounded_annotations"]]
         self.assertNotIn("g_cm", gold_ids)
 
-    def test_low_confidence_proposal_enters_review_and_cannot_be_passed(self):
+    def test_low_confidence_proposal_is_rejected_and_cannot_be_passed(self):
         responses = successful_responses()
         responses[3]["proposals"][0]["proposal_confidence"] = 0.6
         vlm = FakeGoldClient(responses[:1])
@@ -495,10 +495,11 @@ class GoldBankPipelineTest(unittest.TestCase):
 
         result = GoldBankPipeline(vlm, llm, min_confidence=0.7).run_video(bundle())
 
+        self.assertFalse(result.human_review_queue)
         self.assertTrue(
             any(
                 item["proposal_id"] == "p_cm" and item["reason"] == "below_min_confidence"
-                for item in result.human_review_queue
+                for item in result.rejected_candidates
             )
         )
         self.assertNotIn(
@@ -506,14 +507,14 @@ class GoldBankPipelineTest(unittest.TestCase):
             [item["annotation_id"] for item in result.video_gold_record["grounded_annotations"]],
         )
 
-        queue_item = next(item for item in result.human_review_queue if item["proposal_id"] == "p_cm")
+        queue_item = next(item for item in result.rejected_candidates if item["proposal_id"] == "p_cm")
         self.assertEqual(queue_item["stage"], "proposal")
         self.assertEqual(queue_item["item_type"], "candidate")
         self.assertEqual(queue_item["task_type"], "CM")
         self.assertEqual(queue_item["candidate_gold"], {"relation": "SUPPORTED"})
         self.assertEqual(queue_item["evidence_refs"], ["v1_visual_000_abc"])
 
-    def test_abstention_uses_canonical_review_queue_shape(self):
+    def test_abstention_is_a_pipeline_diagnostic(self):
         responses = successful_responses()
         responses[4]["abstentions"] = [
             {
@@ -527,7 +528,8 @@ class GoldBankPipelineTest(unittest.TestCase):
 
         result = GoldBankPipeline(vlm, llm).run_video(bundle())
 
-        abstention = next(item for item in result.human_review_queue if item["item_type"] == "abstention")
+        self.assertFalse(result.human_review_queue)
+        abstention = next(item for item in result.pipeline_diagnostics if item["item_type"] == "abstention")
         self.assertEqual(abstention["stage"], "proposal")
         self.assertEqual(abstention["task_type"], "SS")
         self.assertEqual(abstention["candidate_gold"], {})
@@ -619,7 +621,7 @@ class GoldBankPipelineTest(unittest.TestCase):
             item for item in result.video_gold_record["grounded_annotations"] if item["task_type"] == "CM"
         ]
         self.assertEqual(len(cm_items), 1)
-        self.assertTrue(any(item["reason"] == "semantic_duplicate" for item in result.human_review_queue))
+        self.assertTrue(any(item["reason"] == "semantic_duplicate" for item in result.rejected_candidates))
 
     def test_invalid_proposal_is_isolated_instead_of_dropping_agent_batch(self):
         responses = successful_responses_with_two_evidence()
@@ -643,7 +645,7 @@ class GoldBankPipelineTest(unittest.TestCase):
         self.assertEqual(result.status, "partial")
         self.assertTrue(any(item["task_type"] == "CM" for item in result.video_gold_record["grounded_annotations"]))
         self.assertTrue(
-            any("ss_proposer_proposal_parse_error" in item["reason"] for item in result.human_review_queue)
+            any("ss_proposer_proposal_parse_error" in item["reason"] for item in result.pipeline_diagnostics)
         )
 
     def test_parse_failure_is_visible_and_not_passed(self):

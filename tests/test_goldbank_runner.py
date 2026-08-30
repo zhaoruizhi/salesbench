@@ -50,6 +50,27 @@ class FakePipeline:
                 "observation_scope": {},
             },
             human_review_queue=[],
+            rejected_candidates=[
+                {
+                    "review_item_id": f"reject_{bundle.video_id}",
+                    "video_id": bundle.video_id,
+                    "reason_code": "BELOW_MIN_CONFIDENCE",
+                }
+            ],
+            pipeline_diagnostics=[
+                {
+                    "review_item_id": f"diag_{bundle.video_id}",
+                    "video_id": bundle.video_id,
+                    "reason_code": "ABSTENTION",
+                }
+            ],
+            quality_decisions=[
+                {
+                    "decision_id": f"decision_{bundle.video_id}",
+                    "video_id": bundle.video_id,
+                    "disposition": "REJECT",
+                }
+            ],
             agent_traces=[{"stage": "evidence_extraction", "video_id": bundle.video_id}],
             status="ok",
         )
@@ -87,6 +108,9 @@ class GoldBankRunnerTest(unittest.TestCase):
             visible = {path.name for path in output_dir.iterdir() if path.is_file()}
             self.assertTrue((output_dir / "commerce_cues.jsonl").is_file())
             self.assertTrue((output_dir / "commercial_relations.jsonl").is_file())
+            self.assertTrue((output_dir / "rejected_candidates.jsonl").is_file())
+            self.assertTrue((output_dir / "pipeline_diagnostics.jsonl").is_file())
+            self.assertTrue((output_dir / "quality_decisions.jsonl").is_file())
 
         self.assertEqual(visible, set(GOLD_BANK_OUTPUT_FILES))
 

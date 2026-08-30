@@ -27,6 +27,7 @@ class CompilePolicy:
     max_per_task: int = 2
     include_tiers: tuple[str, ...] = ("Gold-A", "Gold-B")
     require_all_tasks: bool = True
+    allow_auto_candidates: bool = False
 
 
 def _contains_private(payload: object) -> bool:
@@ -253,7 +254,10 @@ def compile_vqa_from_gold(
     if not bank_path.exists():
         raise FileNotFoundError(f"EvidenceDataset file not found: {bank_path}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    gold_items = load_compilable_gold(bank_path)
+    gold_items = load_compilable_gold(
+        bank_path,
+        allow_auto_candidates=policy.allow_auto_candidates,
+    )
     bank_records = read_jsonl(bank_path)
     if realizations_path is None and any(
         clean_text(record.get("schema_version")) == "evidence-dataset-schema-v3"

@@ -31,7 +31,7 @@ def gold_record():
                 "eligible_question_formats": ["direct_question"],
                 "source_proposal_ids": ["p_bp"],
                 "quality_status": "DIRECT",
-                "review_status": "verified",
+                "review_status": "human_accepted",
                 "confidence": 0.9,
             },
             {
@@ -154,7 +154,7 @@ class GoldBankQACompilerTest(unittest.TestCase):
         record = gold_record()
         ss = record["grounded_annotations"][1]
         ss["quality_status"] = "INFERRED"
-        ss["review_status"] = "verified"
+        ss["review_status"] = "human_accepted"
         ss["gold_value"] = {
             "label": "result first",
             "answer": "The opening states the desired result before showing the corresponding product.",

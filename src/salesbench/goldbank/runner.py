@@ -31,6 +31,10 @@ GOLD_BANK_OUTPUT_FILES = (
     "gold_reviews.jsonl",
     "video_evidence_dataset.jsonl",
     "human_review_queue.jsonl",
+    "repaired_candidates.jsonl",
+    "rejected_candidates.jsonl",
+    "pipeline_diagnostics.jsonl",
+    "quality_decisions.jsonl",
     "agent_traces.jsonl",
     "generation_meta.json",
 )
@@ -55,6 +59,10 @@ def _result_to_payload(result: GoldBankResult, pipeline_fingerprint: str) -> dic
         "gold_reviews": result.gold_reviews,
         "video_gold_record": result.video_gold_record,
         "human_review_queue": result.human_review_queue,
+        "repaired_candidates": result.repaired_candidates,
+        "rejected_candidates": result.rejected_candidates,
+        "pipeline_diagnostics": result.pipeline_diagnostics,
+        "quality_decisions": result.quality_decisions,
         "agent_traces": result.agent_traces,
         "status": result.status,
     }
@@ -70,6 +78,10 @@ def _payload_to_result(payload: dict[str, object]) -> GoldBankResult:
         gold_reviews=list(payload.get("gold_reviews") or []),
         video_gold_record=payload.get("video_gold_record") if isinstance(payload.get("video_gold_record"), dict) else None,
         human_review_queue=list(payload.get("human_review_queue") or []),
+        repaired_candidates=list(payload.get("repaired_candidates") or []),
+        rejected_candidates=list(payload.get("rejected_candidates") or []),
+        pipeline_diagnostics=list(payload.get("pipeline_diagnostics") or []),
+        quality_decisions=list(payload.get("quality_decisions") or []),
         agent_traces=list(payload.get("agent_traces") or []),
         status=clean_text(payload.get("status")),
     )
@@ -191,6 +203,10 @@ def _merge_outputs(
     reviews: list[dict[str, object]] = []
     gold_records: list[dict[str, object]] = []
     queue: list[dict[str, object]] = []
+    repaired: list[dict[str, object]] = []
+    rejected: list[dict[str, object]] = []
+    diagnostics: list[dict[str, object]] = []
+    decisions: list[dict[str, object]] = []
     traces: list[dict[str, object]] = []
     for result in results:
         evidence_units.extend(result.evidence_units)
@@ -201,6 +217,10 @@ def _merge_outputs(
         if result.video_gold_record is not None:
             gold_records.append(result.video_gold_record)
         queue.extend(result.human_review_queue)
+        repaired.extend(result.repaired_candidates)
+        rejected.extend(result.rejected_candidates)
+        diagnostics.extend(result.pipeline_diagnostics)
+        decisions.extend(result.quality_decisions)
         for trace in result.agent_traces:
             trace_record = dict(trace)
             trace_record.setdefault("video_id", result.video_id)
@@ -219,6 +239,22 @@ def _merge_outputs(
     write_jsonl(output_dir / "gold_reviews.jsonl", _sort_records(reviews, "video_id", "review_id"))
     write_jsonl(output_dir / "video_evidence_dataset.jsonl", _sort_records(gold_records, "video_id"))
     write_jsonl(output_dir / "human_review_queue.jsonl", _sort_records(queue, "video_id", "review_item_id"))
+    write_jsonl(
+        output_dir / "repaired_candidates.jsonl",
+        _sort_records(repaired, "video_id", "review_item_id"),
+    )
+    write_jsonl(
+        output_dir / "rejected_candidates.jsonl",
+        _sort_records(rejected, "video_id", "review_item_id"),
+    )
+    write_jsonl(
+        output_dir / "pipeline_diagnostics.jsonl",
+        _sort_records(diagnostics, "video_id", "review_item_id"),
+    )
+    write_jsonl(
+        output_dir / "quality_decisions.jsonl",
+        _sort_records(decisions, "video_id", "decision_id"),
+    )
     write_jsonl(output_dir / "agent_traces.jsonl", _sort_records(traces, "video_id", "stage"))
 
     summary = {
@@ -235,6 +271,10 @@ def _merge_outputs(
             "gold_reviews": len(reviews),
             "video_gold_records": len(gold_records),
             "human_review_queue": len(queue),
+            "repaired_candidates": len(repaired),
+            "rejected_candidates": len(rejected),
+            "pipeline_diagnostics": len(diagnostics),
+            "quality_decisions": len(decisions),
             "agent_traces": len(traces),
         },
         "statuses": {result.video_id: result.status for result in results},
