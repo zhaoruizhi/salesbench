@@ -288,3 +288,25 @@ def test_strict_qa_verifier_parse_failure_is_pipeline_diagnostic(tmp_path: Path)
     assert summary["counts"]["pipeline_diagnostics"] == 1
     assert summary["counts"]["human_review"] == 0
     assert len(read_jsonl(output_dir / "qa_pipeline_diagnostics.jsonl")) == 1
+
+
+def test_strict_pass_writes_small_monitoring_sample_not_a_full_review_queue(tmp_path: Path):
+    evidence_dir = tmp_path / "evidence"
+    output_dir = tmp_path / "qa"
+    _write_evidence_dir(evidence_dir)
+
+    summary = run_qa_realizer(
+        evidence_dir,
+        output_dir,
+        StrictQAClient("PASS"),
+        allow_auto_candidates=True,
+        strict_semantic_verification=True,
+        accepted_sample_fraction=0.1,
+    )
+
+    assert summary["counts"]["realized"] == 1
+    assert summary["counts"]["accepted_sample"] == 1
+    assert read_jsonl(output_dir / "qa_human_review_queue.jsonl") == []
+    sample = read_jsonl(output_dir / "qa_accepted_sample.jsonl")
+    assert sample[0]["reason_code"] == "QA_ACCEPTED_MONITORING_SAMPLE"
+    assert sample[0]["candidate_snapshot"]["question_spec"]["task_type"] == "CM"

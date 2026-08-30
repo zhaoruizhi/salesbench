@@ -13,10 +13,17 @@ FORMAL_COMPILABLE_STATUSES = {"human_accepted"}
 CANDIDATE_COMPILABLE_STATUSES = {"auto_accepted_candidate", "verified"}
 
 
-def load_compilable_gold(path: Path, *, allow_auto_candidates: bool = False) -> list[GoldItem]:
+def load_compilable_gold(
+    path: Path,
+    *,
+    allow_auto_candidates: bool = False,
+    allow_quality_verified_candidates: bool = False,
+) -> list[GoldItem]:
     statuses = set(FORMAL_COMPILABLE_STATUSES)
     if allow_auto_candidates:
         statuses.update(CANDIDATE_COMPILABLE_STATUSES)
+    elif allow_quality_verified_candidates:
+        statuses.add("auto_accepted_candidate")
     items: list[GoldItem] = []
     for record in read_jsonl(path):
         annotations = record.get("grounded_annotations")

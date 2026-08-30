@@ -71,7 +71,7 @@
   "prompt_version": "evidence-prompt-v10",
   "schema_version": "evidence-dataset-schema-v4",
   "pipeline_version": "evidence-first-pipeline-v10",
-  "compiler_version": "evidence-qa-compiler-v6",
+  "compiler_version": "evidence-qa-compiler-v7",
   "question_realizer_prompt_version": "question-realizer-prompt-v2",
   "quality_prompt_version": "quality-gate-prompt-v1",
   "judge_prompt_version": "judge-prompt-v5",

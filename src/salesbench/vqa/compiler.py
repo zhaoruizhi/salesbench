@@ -9,16 +9,17 @@ import re
 
 from ..goldbank.schema import GoldItem, stable_digest
 from ..goldbank.validators import PRIVATE_KEYS
-from ..io_utils import read_jsonl, write_json, write_jsonl
+from ..io_utils import read_json, read_jsonl, write_json, write_jsonl
 from ..utils import clean_text, contains_cjk
 from .goldbank_loader import load_compilable_gold
 from .item_validator import answer_type_for_task, validate_qa_candidate
+from .prompts import QA_QUALITY_PROMPT_VERSION
 from .question_programs import UnsupportedQuestionProgramError, render_question
 from .realizer import validate_realized_question
 from .specs import make_question_spec_id
 
 
-COMPILER_VERSION = "evidence-qa-compiler-v6"
+COMPILER_VERSION = "evidence-qa-compiler-v7"
 
 
 @dataclass(frozen=True)
@@ -255,6 +256,28 @@ def build_diversity_report(records: list[dict[str, object]]) -> dict[str, object
     }
 
 
+def _strict_qa_pass_ids(realizations_path: Path | None) -> tuple[bool, set[str]]:
+    if realizations_path is None:
+        return False, set()
+    stage_dir = realizations_path.parent
+    meta_path = stage_dir / "qa_realizer_meta.json"
+    verification_path = stage_dir / "qa_semantic_verifications.jsonl"
+    if not meta_path.exists() or not verification_path.exists():
+        return False, set()
+    meta = read_json(meta_path)
+    enabled = bool(meta.get("strict_semantic_verification")) and (
+        clean_text(meta.get("quality_prompt_version")) == QA_QUALITY_PROMPT_VERSION
+    )
+    if not enabled:
+        return False, set()
+    return True, {
+        clean_text(row.get("spec_id"))
+        for row in read_jsonl(verification_path)
+        if clean_text(row.get("spec_id"))
+        and clean_text(row.get("verdict")).upper() == "PASS"
+    }
+
+
 def compile_vqa_from_gold(
     gold_bank_dir: Path,
     output_dir: Path,
@@ -266,10 +289,26 @@ def compile_vqa_from_gold(
     if not bank_path.exists():
         raise FileNotFoundError(f"EvidenceDataset file not found: {bank_path}")
     output_dir.mkdir(parents=True, exist_ok=True)
+    strict_qa_verified_candidates, strict_pass_ids = _strict_qa_pass_ids(realizations_path)
     gold_items = load_compilable_gold(
         bank_path,
         allow_auto_candidates=policy.allow_auto_candidates,
+        allow_quality_verified_candidates=(
+            strict_qa_verified_candidates and not policy.allow_auto_candidates
+        ),
     )
+    if strict_qa_verified_candidates and not policy.allow_auto_candidates:
+        gold_items = [
+            item
+            for item in gold_items
+            if item.review_status == "human_accepted"
+            or make_question_spec_id(
+                item.video_id,
+                item.annotation_id,
+                item.capability or item.task_subtype,
+            )
+            in strict_pass_ids
+        ]
     bank_records = read_jsonl(bank_path)
     if realizations_path is None and any(
         clean_text(record.get("schema_version"))
@@ -380,6 +419,8 @@ def compile_vqa_from_gold(
         "public_tasks": list(policy.task_priority),
         "bank_file": str(bank_path),
         "realizations_file": str(realizations_path) if realizations_path is not None else "legacy_question_programs",
+        "strict_qa_verified_candidates": strict_qa_verified_candidates,
+        "strict_qa_pass_count": len(strict_pass_ids),
         "counts": {
             "qa_plan": len(qa_plan),
             "qa_candidates": len(qa_records),

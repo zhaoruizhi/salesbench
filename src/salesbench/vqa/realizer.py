@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -136,7 +137,10 @@ def run_qa_realizer(
     allow_auto_candidates: bool = False,
     strict_semantic_verification: bool = False,
     semantic_verifier_client: VLMClient | None = None,
+    accepted_sample_fraction: float = 0.1,
 ) -> dict[str, object]:
+    if not 0.0 <= accepted_sample_fraction <= 1.0:
+        raise ValueError("accepted_sample_fraction must be between 0 and 1")
     output_dir.mkdir(parents=True, exist_ok=True)
     records = read_jsonl(evidence_dir / dataset_filename)
     specs = build_question_specs(
@@ -157,6 +161,44 @@ def run_qa_realizer(
         clean_text(item.get("relation_id")): item
         for item in read_jsonl(evidence_dir / "commercial_relations.jsonl")
     }
+
+    def contexts_for(
+        spec: QuestionSpec,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+        return (
+            _context_by_ids(
+                spec.evidence_refs,
+                evidence_lookup,
+                ("evidence_id", "modality", "content_en", "start_s", "end_s", "frame_indices"),
+            ),
+            _context_by_ids(
+                spec.commerce_cue_ids,
+                cue_lookup,
+                ("cue_id", "cue_type", "content_en", "evidence_ids", "attributes"),
+            ),
+            _context_by_ids(
+                spec.commercial_relation_ids,
+                relation_lookup,
+                (
+                    "relation_id",
+                    "relation_type",
+                    "source_cue_ids",
+                    "target_cue_ids",
+                    "status",
+                    "rationale_en",
+                ),
+            ),
+        )
+
+    def candidate_snapshot(spec: QuestionSpec, question: str) -> dict[str, object]:
+        evidence_context, cue_context, relation_context = contexts_for(spec)
+        return {
+            "question_spec": spec.to_dict(),
+            "question": question,
+            "evidence_units": evidence_context,
+            "commerce_cues": cue_context,
+            "commercial_relations": relation_context,
+        }
 
     verifier_client = semantic_verifier_client or client
     realizations: dict[str, QuestionRealization] = {}
@@ -198,28 +240,7 @@ def run_qa_realizer(
     def realize(
         spec: QuestionSpec,
     ) -> _RealizeOutcome:
-        evidence_context = _context_by_ids(
-            spec.evidence_refs,
-            evidence_lookup,
-            ("evidence_id", "modality", "content_en", "start_s", "end_s", "frame_indices"),
-        )
-        cue_context = _context_by_ids(
-            spec.commerce_cue_ids,
-            cue_lookup,
-            ("cue_id", "cue_type", "content_en", "evidence_ids", "attributes"),
-        )
-        relation_context = _context_by_ids(
-            spec.commercial_relation_ids,
-            relation_lookup,
-            (
-                "relation_id",
-                "relation_type",
-                "source_cue_ids",
-                "target_cue_ids",
-                "status",
-                "rationale_en",
-            ),
-        )
+        evidence_context, cue_context, relation_context = contexts_for(spec)
         system, user = build_question_realizer_prompt(
             spec,
             evidence_context,
@@ -298,19 +319,13 @@ def run_qa_realizer(
                 repair_attempted=repair_attempted,
                 disposition="PIPELINE_DIAGNOSTIC",
             )
-        candidate_snapshot = {
-            "question_spec": spec.to_dict(),
-            "question": realization.question,
-            "evidence_units": evidence_context,
-            "commerce_cues": cue_context,
-            "commercial_relations": relation_context,
-        }
+        candidate = candidate_snapshot(spec, realization.question)
         if not strict_semantic_verification:
             return _RealizeOutcome(
                 spec,
                 realization=realization,
                 repair_attempted=repair_attempted,
-                candidate_snapshot=candidate_snapshot,
+                candidate_snapshot=candidate,
             )
         try:
             verification = verify_qa_candidate(
@@ -327,7 +342,7 @@ def run_qa_realizer(
                 error=str(exc),
                 repair_attempted=repair_attempted,
                 disposition="PIPELINE_DIAGNOSTIC",
-                candidate_snapshot=candidate_snapshot,
+                candidate_snapshot=candidate,
             )
         disposition = {
             QASemanticVerdict.PASS: "PASS",
@@ -340,7 +355,7 @@ def run_qa_realizer(
             repair_attempted=repair_attempted,
             disposition=disposition,
             verification=verification,
-            candidate_snapshot=candidate_snapshot,
+            candidate_snapshot=candidate,
         )
 
     workers = max(1, int(max_workers))
@@ -435,6 +450,35 @@ def run_qa_realizer(
         )
 
     ordered = [realizations[spec.spec_id].to_dict() for spec in specs if spec.spec_id in realizations]
+    accepted_sample: list[dict[str, object]] = []
+    accepted_by_task: dict[str, list[QuestionSpec]] = {}
+    for spec in specs:
+        if spec.spec_id in realizations:
+            accepted_by_task.setdefault(spec.task_type.value, []).append(spec)
+    if accepted_sample_fraction > 0:
+        for task_type in sorted(accepted_by_task):
+            task_specs = sorted(
+                accepted_by_task[task_type],
+                key=lambda item: stable_digest(
+                    {"sample_version": "qa-accepted-sample-v1", "spec_id": item.spec_id},
+                    length=24,
+                ),
+            )
+            sample_size = max(1, math.ceil(len(task_specs) * accepted_sample_fraction))
+            for spec in task_specs[:sample_size]:
+                realization = realizations[spec.spec_id]
+                accepted_sample.append(
+                    {
+                        "spec_id": spec.spec_id,
+                        "video_id": spec.video_id,
+                        "annotation_id": spec.annotation_id,
+                        "task_type": spec.task_type.value,
+                        "reason_code": "QA_ACCEPTED_MONITORING_SAMPLE",
+                        "reason": "Deterministic task-stratified monitoring sample from QA candidates that passed all enabled gates.",
+                        "candidate_snapshot": candidate_snapshot(spec, realization.question),
+                        "semantic_verification": semantic_verifications.get(spec.spec_id),
+                    }
+                )
     write_jsonl(output_dir / "qa_realizations.jsonl", ordered)
     write_jsonl(output_dir / "qa_realizer_failures.jsonl", sorted(failures, key=lambda item: item["spec_id"]))
     write_jsonl(
@@ -453,6 +497,10 @@ def run_qa_realizer(
         output_dir / "qa_pipeline_diagnostics.jsonl",
         sorted(pipeline_diagnostics, key=lambda item: item["spec_id"]),
     )
+    write_jsonl(
+        output_dir / "qa_accepted_sample.jsonl",
+        sorted(accepted_sample, key=lambda item: (str(item["task_type"]), str(item["spec_id"]))),
+    )
     summary = {
         "prompt_version": QUESTION_REALIZER_PROMPT_VERSION,
         "model": client.model,
@@ -463,6 +511,7 @@ def run_qa_realizer(
         "semantic_verifier_model": (
             verifier_client.model if strict_semantic_verification else "disabled"
         ),
+        "accepted_sample_fraction": accepted_sample_fraction,
         "dataset_file": str(evidence_dir / dataset_filename),
         "allow_auto_candidates": allow_auto_candidates,
         "counts": {
@@ -484,6 +533,7 @@ def run_qa_realizer(
             ),
             "human_review": len(human_review_queue),
             "pipeline_diagnostics": len(pipeline_diagnostics),
+            "accepted_sample": len(accepted_sample),
         },
         "fingerprint": stable_digest(
             {
@@ -496,6 +546,7 @@ def run_qa_realizer(
                 "semantic_verifier_model": (
                     verifier_client.model if strict_semantic_verification else "disabled"
                 ),
+                "accepted_sample_fraction": accepted_sample_fraction,
             },
             length=24,
         ),

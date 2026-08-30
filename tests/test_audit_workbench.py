@@ -20,6 +20,7 @@ from tools.audit_workbench.build import (
     render_preview_workbench,
     render_workbench,
     select_accepted_annotation_sample,
+    select_accepted_qa_sample,
 )
 from tools.audit_workbench.evidence_assets import (
     enrich_evidence_refs,
@@ -99,6 +100,23 @@ def test_accepted_annotation_sample_is_stable_stratified_and_excludes_risks() ->
     assert {row["task_type"] for row in first} == {"BP", "CM"}
     assert not risk_ids.intersection(str(row["annotation_id"]) for row in first)
     assert [row["annotation_id"] for row in first] == [row["annotation_id"] for row in second]
+
+
+def test_accepted_qa_sample_is_stable_stratified_and_excludes_rejected_rows() -> None:
+    rows = [
+        {"vqa_id": f"{task.lower()}-{index}", "task_type": task}
+        for task in ("BP", "CM", "SS", "AE")
+        for index in range(10)
+    ]
+    excluded = {"bp-0", "cm-0", "ss-0", "ae-0"}
+
+    first = select_accepted_qa_sample(rows, excluded, fraction=0.1)
+    second = select_accepted_qa_sample(list(reversed(rows)), excluded, fraction=0.1)
+
+    assert len(first) == 4
+    assert {row["task_type"] for row in first} == {"BP", "CM", "SS", "AE"}
+    assert not excluded.intersection(str(row["vqa_id"]) for row in first)
+    assert [row["vqa_id"] for row in first] == [row["vqa_id"] for row in second]
 
 
 def _write(path: Path, text: str) -> None:
@@ -360,6 +378,35 @@ def test_v10_read_only_buckets_do_not_render_review_decision_controls() -> None:
     assert "rows.some(x=>x.audit_bucket==='human_review')" in html
 
 
+def test_qa_audit_uses_quality_buckets_and_only_reviews_ambiguity_or_monitoring_sample() -> None:
+    data = {
+        "release": {"status": "candidate", "prompt_version": "evidence-prompt-v10"},
+        "counts": {"videos": 1, "review_queue": 0, "qa": 3, "judge_rows": 0},
+        "delivery": {},
+        "evidence": {
+            "queue": [],
+            "risks": [],
+            "abstentions": [],
+            "accepted_sample": [],
+            "missing_task_videos": [],
+        },
+        "qa": [
+            {"vqa_id": "q-human", "task_type": "AE", "audit_bucket": "human_review"},
+            {"vqa_id": "q-sample", "task_type": "BP", "audit_bucket": "accepted_sample"},
+            {"vqa_id": "q-reject", "task_type": "SS", "audit_bucket": "auto_rejected"},
+        ],
+        "judge": {"summary": {}, "metrics": {}, "rows": []},
+    }
+
+    html = render_workbench(data, collect_prompt_snapshot(), fragment=True)
+
+    assert "QA 人工语义审核" in html
+    assert "自动通过全集（只读）" in html
+    assert "x.audit_bucket==='human_review'||x.audit_bucket==='accepted_sample'" in html
+    assert "该 QA 是只读生产记录" in html
+    assert "rows.some(x=>x.audit_bucket==='human_review')" in html
+
+
 def test_preview_renderer_reduces_record_limit_to_fit_byte_budget() -> None:
     large = "x" * 10_000
     rows = [{"id": f"row-{index}", "reason": large} for index in range(12)]
@@ -438,6 +485,8 @@ def test_prompt_snapshot_includes_question_surface_repairer() -> None:
     assert "Question Surface Repairer" in prompts["question_repairer"]["system"]
     assert "model_runner" in prompts
     assert "final answer in English" in prompts["model_runner"]["system"]
+    assert "qa_semantic_quality_gate" in prompts
+    assert "Plain insufficiency is REJECT" in prompts["qa_semantic_quality_gate"]["system"]
 
 
 def test_prompt_snapshot_includes_split_language_and_visual_evidence_stages() -> None:
@@ -886,7 +935,91 @@ def test_v10_workbench_consumes_separated_quality_artifacts_directly(tmp_path: P
         + "\n",
     )
     _write(evidence_dir / "quality_decisions.jsonl", "")
-    _write(qa_dir / "vqa_gold_private.jsonl", "")
+    qa_pass = {
+        "vqa_id": "q-pass",
+        "video_id": "v1",
+        "task_type": "BP",
+        "task_subtype": "PRODUCT_IDENTITY",
+        "question": "What product is held by the host?",
+        "gold_answer": "The featured product.",
+        "spec_id": "qs-pass",
+        "evidence_refs": ["e1"],
+        "source_annotation_ids": [],
+    }
+    _write(qa_dir / "vqa_gold_private.jsonl", json.dumps(qa_pass) + "\n")
+    qa_spec = {
+        "spec_id": "qs-human",
+        "video_id": "v1",
+        "annotation_id": "a-human",
+        "task_type": "AE",
+        "capability": "CONTENT_IMPLIED_NEED",
+        "reasoning_operator": "INFER_BOUNDED_NEED",
+        "gold_answer": "A bounded need.",
+        "evidence_refs": ["e1"],
+        "commerce_cue_ids": [],
+        "commercial_relation_ids": [],
+    }
+    qa_quality_common = {
+        "video_id": "v1",
+        "task_type": "AE",
+        "reason": "Quality decision.",
+        "candidate_snapshot": {
+            "question_spec": qa_spec,
+            "question": "What bounded need is indicated by the content?",
+        },
+    }
+    _write(
+        qa_dir / "qa_human_review_queue.jsonl",
+        json.dumps(
+            {
+                **qa_quality_common,
+                "spec_id": "qs-human",
+                "reason_code": "QA_SEMANTIC_AMBIGUITY",
+            }
+        )
+        + "\n",
+    )
+    rejected_spec = {**qa_spec, "spec_id": "qs-reject", "annotation_id": "a-reject"}
+    _write(
+        qa_dir / "qa_rejected_candidates.jsonl",
+        json.dumps(
+            {
+                **qa_quality_common,
+                "spec_id": "qs-reject",
+                "reason_code": "QA_SEMANTIC_REJECT",
+                "candidate_snapshot": {
+                    "question_spec": rejected_spec,
+                    "question": "What unsupported need will make everyone buy?",
+                },
+            }
+        )
+        + "\n",
+    )
+    diagnostic_spec = {**qa_spec, "spec_id": "qs-diagnostic", "annotation_id": "a-diagnostic"}
+    _write(
+        qa_dir / "qa_pipeline_diagnostics.jsonl",
+        json.dumps(
+            {
+                **qa_quality_common,
+                "spec_id": "qs-diagnostic",
+                "reason_code": "QA_PIPELINE_FAILURE",
+                "candidate_snapshot": {"question_spec": diagnostic_spec},
+            }
+        )
+        + "\n",
+    )
+    _write(
+        qa_dir / "qa_accepted_sample.jsonl",
+        json.dumps(
+            {
+                "spec_id": "qs-pass",
+                "video_id": "v1",
+                "task_type": "BP",
+                "reason_code": "QA_ACCEPTED_MONITORING_SAMPLE",
+            }
+        )
+        + "\n",
+    )
     manifest = {
         "frame_cache_root": "frames",
         "formal": {
@@ -909,6 +1042,17 @@ def test_v10_workbench_consumes_separated_quality_artifacts_directly(tmp_path: P
     assert data["counts"]["auto_rejected"] == 1
     assert data["counts"]["pipeline_diagnostics"] == 1
     assert data["evidence"]["queue"][0]["candidate_snapshot"]
+    qa_buckets = {row["spec_id"]: row["audit_bucket"] for row in data["qa"]}
+    assert qa_buckets == {
+        "qs-pass": "accepted_sample",
+        "qs-human": "human_review",
+        "qs-reject": "auto_rejected",
+        "qs-diagnostic": "pipeline_diagnostics",
+    }
+    assert data["counts"]["qa_human_review"] == 1
+    assert data["counts"]["qa_accepted_sample"] == 1
+    assert data["counts"]["qa_auto_rejected"] == 1
+    assert data["counts"]["qa_pipeline_diagnostics"] == 1
 
 
 def test_workbench_renders_chinese_translation_and_english_source(tmp_path: Path) -> None:

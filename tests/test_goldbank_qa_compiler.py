@@ -248,11 +248,102 @@ class GoldBankQACompilerTest(unittest.TestCase):
             private = json.loads((out_dir / "vqa_gold_private.jsonl").read_text(encoding="utf-8").splitlines()[0])
             public = json.loads((out_dir / "vqa_public.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
-        self.assertEqual(summary["compiler_version"], "evidence-qa-compiler-v6")
+        self.assertEqual(summary["compiler_version"], "evidence-qa-compiler-v7")
         self.assertEqual(diversity["exact_duplicate_count"], 0)
         self.assertIn("normalized_stem_clusters", diversity)
         self.assertEqual(private["graph_context"]["commerce_cues"][0]["cue_id"], "c1")
         self.assertNotIn("graph_context", public)
+
+    def test_formal_compiler_accepts_auto_candidate_only_with_strict_qa_pass_artifacts(self):
+        record = gold_record()
+        record["schema_version"] = "evidence-dataset-schema-v4"
+        annotation = record["grounded_annotations"][0]
+        annotation.update(
+            {
+                "review_status": "auto_accepted_candidate",
+                "task_subtype": "USAGE_STEP",
+                "capability": "USAGE_STEP",
+                "reasoning_operator": "SEQUENCE_ACTION",
+                "question_intent": "Ask what step is shown.",
+                "commerce_cue_ids": [],
+                "commercial_relation_ids": [],
+                "forbidden_inferences": [],
+                "gold_value": {"answer": "The host opens the package."},
+                "eligible_question_formats": ["grounded_question"],
+            }
+        )
+        spec = build_question_specs([record], allow_auto_candidates=True)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gold_dir = root / "gold"
+            qa_stage = root / "qa-stage"
+            out_dir = root / "compiled"
+            gold_dir.mkdir()
+            qa_stage.mkdir()
+            write_jsonl(gold_dir / "video_evidence_dataset.jsonl", [record])
+            write_jsonl(gold_dir / "evidence_units.jsonl", [{"evidence_id": "e1", "video_id": "v1"}])
+            realizations = qa_stage / "qa_realizations.jsonl"
+            write_jsonl(
+                realizations,
+                [{"spec_id": spec.spec_id, "question": "What does the host open before showing the product?"}],
+            )
+            write_jsonl(
+                qa_stage / "qa_semantic_verifications.jsonl",
+                [{"spec_id": spec.spec_id, "verdict": "PASS", "reason": "Supported."}],
+            )
+            (qa_stage / "qa_realizer_meta.json").write_text(
+                json.dumps(
+                    {
+                        "strict_semantic_verification": True,
+                        "quality_prompt_version": "qa-quality-prompt-v1",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = compile_vqa_from_gold(
+                gold_dir,
+                out_dir,
+                CompilePolicy(require_all_tasks=False),
+                bank_filename="video_evidence_dataset.jsonl",
+                realizations_path=realizations,
+            )
+
+        self.assertEqual(summary["counts"]["vqa_gold_private"], 1)
+        self.assertTrue(summary["strict_qa_verified_candidates"])
+
+    def test_formal_compiler_does_not_promote_auto_candidate_without_strict_artifacts(self):
+        record = gold_record()
+        annotation = record["grounded_annotations"][0]
+        annotation["review_status"] = "auto_accepted_candidate"
+        annotation["capability"] = annotation["task_subtype"]
+        annotation["reasoning_operator"] = "LOCALIZE_ACTION"
+        annotation["question_intent"] = "Ask what action is shown."
+        spec = build_question_specs([record], allow_auto_candidates=True)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gold_dir = root / "gold"
+            qa_stage = root / "qa-stage"
+            out_dir = root / "compiled"
+            gold_dir.mkdir()
+            qa_stage.mkdir()
+            write_jsonl(gold_dir / "video_evidence_dataset.jsonl", [record])
+            realizations = qa_stage / "qa_realizations.jsonl"
+            write_jsonl(
+                realizations,
+                [{"spec_id": spec.spec_id, "question": "What action is shown with the product?"}],
+            )
+
+            summary = compile_vqa_from_gold(
+                gold_dir,
+                out_dir,
+                CompilePolicy(require_all_tasks=False),
+                bank_filename="video_evidence_dataset.jsonl",
+                realizations_path=realizations,
+            )
+
+        self.assertEqual(summary["counts"]["vqa_gold_private"], 0)
+        self.assertFalse(summary["strict_qa_verified_candidates"])
 
     def test_question_does_not_leak_answer(self):
         qa, validation = compile_qa_records(load_compilable_gold_from_records([gold_record()]), CompilePolicy())

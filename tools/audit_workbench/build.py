@@ -34,6 +34,8 @@ from salesbench.goldbank.prompts import (
 from salesbench.goldbank.validators import PRIVATE_KEYS
 from salesbench.vqa_evaluate.prompts import JUDGE_PROMPT_VERSION, JUDGE_SYSTEM_PROMPT, build_judge_user_prompt
 from salesbench.vqa.prompts import (
+    QA_QUALITY_PROMPT_VERSION,
+    QA_QUALITY_SYSTEM_PROMPT,
     QUESTION_REALIZER_PROMPT_VERSION,
     QUESTION_REALIZER_SYSTEM_PROMPT,
     QUESTION_REPAIR_SYSTEM_PROMPT,
@@ -130,6 +132,34 @@ def select_accepted_annotation_sample(
             key=lambda row: (
                 hashlib.sha256(str(row.get("annotation_id") or "").encode("utf-8")).hexdigest(),
                 str(row.get("annotation_id") or ""),
+            ),
+        )
+        selected.extend(ranked[: max(1, math.ceil(len(ranked) * fraction))])
+    return selected
+
+
+def select_accepted_qa_sample(
+    qa_rows: list[dict[str, Any]],
+    excluded_vqa_ids: set[str],
+    *,
+    fraction: float = 0.1,
+) -> list[dict[str, Any]]:
+    """Select a deterministic per-task QA monitoring sample without turning all PASS rows into review work."""
+    if not 0 < fraction <= 1:
+        raise ValueError("accepted QA sample fraction must be in (0, 1]")
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in qa_rows:
+        vqa_id = str(row.get("vqa_id") or "")
+        if not vqa_id or vqa_id in excluded_vqa_ids:
+            continue
+        groups.setdefault(str(row.get("task_type") or "UNKNOWN"), []).append(row)
+    selected: list[dict[str, Any]] = []
+    for task_type in sorted(groups):
+        ranked = sorted(
+            groups[task_type],
+            key=lambda row: (
+                hashlib.sha256(str(row.get("vqa_id") or "").encode("utf-8")).hexdigest(),
+                str(row.get("vqa_id") or ""),
             ),
         )
         selected.extend(ranked[: max(1, math.ceil(len(ranked) * fraction))])
@@ -510,6 +540,18 @@ def collect_prompt_snapshot() -> list[dict[str, Any]]:
     )
     prompts.append(
         {
+            "id": "qa_semantic_quality_gate",
+            "name": "QA Semantic Quality Gate",
+            "stage": "QA / Semantic production gate",
+            "version": QA_QUALITY_PROMPT_VERSION,
+            "system": QA_QUALITY_SYSTEM_PROMPT,
+            "user_template": "QuestionSpec + realized question + Gold + cited English Evidence/Commerce graph context",
+            "observed": ["明确缺证据、Gold 过度推断、答案不唯一、任务错位和领域性不足会在生产阶段自动拒绝。"],
+            "recommendations": ["HUMAN_REVIEW 只用于证据支持两种实质性解释且图上下文无法消歧的少量案例。"],
+        }
+    )
+    prompts.append(
+        {
             "id": "model_runner",
             "name": "OpenAI-compatible VQA Model Runner",
             "stage": "Evaluation / Model answer",
@@ -641,6 +683,36 @@ def _risk_record(annotation: dict[str, Any], codes: set[str]) -> dict[str, Any]:
         "evidence_refs": annotation.get("evidence_refs") or [],
         "source_proposal_ids": annotation.get("source_proposal_ids") or [],
         "confidence": annotation.get("confidence"),
+    }
+
+
+def _qa_quality_source_row(record: dict[str, Any], bucket: str) -> dict[str, Any]:
+    snapshot = record.get("candidate_snapshot")
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    spec = snapshot.get("question_spec")
+    spec = spec if isinstance(spec, dict) else {}
+    spec_id = str(record.get("spec_id") or spec.get("spec_id") or "")
+    annotation_id = str(record.get("annotation_id") or spec.get("annotation_id") or "")
+    reason_code = str(record.get("reason_code") or "QA_QUALITY_EVENT")
+    return {
+        "vqa_id": f"qa-quality:{spec_id or hashlib.sha256(json.dumps(record, sort_keys=True).encode('utf-8')).hexdigest()[:16]}",
+        "video_id": record.get("video_id") or spec.get("video_id"),
+        "task_type": record.get("task_type") or spec.get("task_type") or "UNKNOWN",
+        "task_subtype": spec.get("capability") or "",
+        "question": snapshot.get("question") or snapshot.get("rejected_question") or "",
+        "gold_answer": spec.get("gold_answer") or "",
+        "capability": spec.get("capability") or "",
+        "reasoning_operator": spec.get("reasoning_operator") or "",
+        "spec_id": spec_id,
+        "commerce_cue_ids": spec.get("commerce_cue_ids") or [],
+        "commercial_relation_ids": spec.get("commercial_relation_ids") or [],
+        "evidence_refs": spec.get("evidence_refs") or [],
+        "source_annotation_ids": [annotation_id] if annotation_id else [],
+        "audit_bucket": bucket,
+        "reason": record.get("reason") or reason_code,
+        "risk_codes": [reason_code],
+        "semantic_verification": record.get("semantic_verification"),
+        "candidate_snapshot": snapshot,
     }
 
 
@@ -828,6 +900,26 @@ def build_workbench_data(
         queue_rows.append(normalized)
     audit = _read_json(evidence_dir / "audit_before_review.json", {})
     qa_rows = _read_jsonl(qa_dir / "vqa_gold_private.jsonl")
+    qa_human_rows = _read_jsonl(qa_dir / "qa_human_review_queue.jsonl")
+    qa_rejected_rows = _read_jsonl(qa_dir / "qa_rejected_candidates.jsonl")
+    qa_diagnostic_rows = _read_jsonl(qa_dir / "qa_pipeline_diagnostics.jsonl")
+    qa_accepted_sample_rows = _read_jsonl(qa_dir / "qa_accepted_sample.jsonl")
+    qa_sample_spec_ids = {
+        str(row.get("spec_id") or "")
+        for row in qa_accepted_sample_rows
+        if row.get("spec_id")
+    }
+    compiled_spec_ids = {str(row.get("spec_id") or "") for row in qa_rows if row.get("spec_id")}
+    qa_quality_source_rows = [
+        *[_qa_quality_source_row(row, "human_review") for row in qa_human_rows],
+        *[_qa_quality_source_row(row, "auto_rejected") for row in qa_rejected_rows],
+        *[_qa_quality_source_row(row, "pipeline_diagnostics") for row in qa_diagnostic_rows],
+        *[
+            _qa_quality_source_row(row, "accepted_sample")
+            for row in qa_accepted_sample_rows
+            if str(row.get("spec_id") or "") not in compiled_spec_ids
+        ],
+    ]
     annotation_risks = detect_annotation_risks(annotations, evidence_by_id)
     for risk in annotation_risks:
         risk["audit_bucket"] = "auto_rejected"
@@ -941,12 +1033,24 @@ def build_workbench_data(
     annotation_risk_index = {row["id"]: row["risk_codes"] for row in annotation_risks}
     question_counts = Counter(str(row.get("question") or "") for row in qa_rows)
     compact_qa: list[dict[str, Any]] = []
-    for row in qa_rows:
-        risk_codes: set[str] = set()
+    for row in [*qa_rows, *qa_quality_source_rows]:
+        risk_codes: set[str] = {
+            str(code) for code in row.get("risk_codes") or [] if str(code)
+        }
         for source_id in row.get("source_annotation_ids") or []:
             risk_codes.update(annotation_risk_index.get(str(source_id), []))
         if question_counts[str(row.get("question") or "")] >= 8:
             risk_codes.add("TEMPLATE_REPETITION")
+        explicit_bucket = str(row.get("audit_bucket") or "")
+        audit_bucket = explicit_bucket or (
+            "auto_rejected"
+            if risk_codes
+            else (
+                "accepted_sample"
+                if str(row.get("spec_id") or "") in qa_sample_spec_ids
+                else "accepted_all"
+            )
+        )
         question_translation = _translation(
             translations, "qa", row.get("vqa_id"), "question", row.get("question")
         )
@@ -979,8 +1083,11 @@ def build_workbench_data(
                 "commercial_relation_ids": row.get("commercial_relation_ids") or [],
                 "evidence_refs": row.get("evidence_refs") or [],
                 "source_annotation_ids": row.get("source_annotation_ids") or [],
+                "audit_bucket": audit_bucket,
+                "reason": row.get("reason") or "",
+                "semantic_verification": row.get("semantic_verification"),
                 "risk_codes": sorted(risk_codes),
-                "risk_labels": [RISK_LABELS[code] for code in sorted(risk_codes)],
+                "risk_labels": [RISK_LABELS.get(code, code) for code in sorted(risk_codes)],
                 "source_annotations": [
                     annotation_by_id[str(source_id)]
                     for source_id in row.get("source_annotation_ids") or []
@@ -999,6 +1106,20 @@ def build_workbench_data(
                 "evidence_items": evidence_items,
             }
         )
+    if not qa_accepted_sample_rows:
+        excluded_ids = {
+            str(row.get("vqa_id") or "")
+            for row in compact_qa
+            if row.get("audit_bucket") != "accepted_all"
+        }
+        legacy_sample_ids = {
+            str(row.get("vqa_id") or "")
+            for row in select_accepted_qa_sample(compact_qa, excluded_ids, fraction=0.1)
+        }
+        for row in compact_qa:
+            if row.get("audit_bucket") == "accepted_all" and str(row.get("vqa_id") or "") in legacy_sample_ids:
+                row["audit_bucket"] = "accepted_sample"
+                row["reason"] = "该 QA 通过现有自动规则，进入按任务分层的约 10% 监控抽样；这不是全量人工审核。"
     judge_report_files = sorted(evaluation_dir.glob("*_salesbench_qa_eval.json"))
     judge_detail_files = sorted(evaluation_dir.glob("*_judge_details.jsonl"))
     judge_report = _read_json(judge_report_files[0], {}) if judge_report_files else {}
@@ -1080,6 +1201,21 @@ def build_workbench_data(
                 "auto_rejected": auto_rejected_count,
                 "pipeline_diagnostics": pipeline_diagnostic_count,
                 "qa": len(qa_rows),
+                "qa_audit_rows": len(compact_qa),
+                "qa_human_review": sum(
+                    1 for row in compact_qa if row.get("audit_bucket") == "human_review"
+                ),
+                "qa_accepted_sample": sum(
+                    1 for row in compact_qa if row.get("audit_bucket") == "accepted_sample"
+                ),
+                "qa_auto_rejected": sum(
+                    1 for row in compact_qa if row.get("audit_bucket") == "auto_rejected"
+                ),
+                "qa_pipeline_diagnostics": sum(
+                    1
+                    for row in compact_qa
+                    if row.get("audit_bucket") == "pipeline_diagnostics"
+                ),
                 "judge_rows": len(compact_judge),
             },
             "translations": translations.summary() if translations else {"loaded": 0, "missing": 0, "stale": 0},
@@ -1186,7 +1322,7 @@ def render_workbench(
 <script type="application/json" id="sbaw-data">__PAYLOAD__</script>
 <script>
 (()=>{const ROOT=document.getElementById('salesbench-audit-workbench');const PACK=JSON.parse(document.getElementById('sbaw-data').textContent);const D=PACK.data;const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const pretty=v=>esc(JSON.stringify(v,null,2));const key=id=>`salesbench-audit:${D.release.prompt_version}:${id}`;
-function stat(label,value){return `<div class="stat"><span class="muted">${esc(label)}</span><b>${esc(value)}</b></div>`}document.getElementById('runtime-prompt-version').textContent=D.release.runtime_prompt_version||D.release.prompt_version||'unknown';document.getElementById('current-prompt-version').textContent=D.release.current_prompt_version||'evidence-prompt-v9';document.getElementById('translation-warning-count').textContent=Number(D.translations?.missing||0)+Number(D.translations?.stale||0);document.getElementById('sbaw-stats').innerHTML=[stat('已处理视频',D.counts.videos),stat('商业记录',D.counts.commercial_records??D.counts.videos),stat('Abstention',D.counts.abstentions??0),stat('EvidenceUnit',D.counts.evidence_units),stat('Annotation',D.counts.annotations),stat('人工待审',D.counts.human_review_queue??D.counts.review_queue),stat('自动拒绝',D.counts.auto_rejected??0),stat('原始诊断队列',D.counts.pipeline_diagnostics??0),stat('QA',D.counts.qa),stat('Judge',D.counts.judge_rows)].join('');document.getElementById('preview-note').textContent=D.preview_notice||'完整本地审计视图；审核决定仅保存在当前浏览器。';
+function stat(label,value){return `<div class="stat"><span class="muted">${esc(label)}</span><b>${esc(value)}</b></div>`}document.getElementById('runtime-prompt-version').textContent=D.release.runtime_prompt_version||D.release.prompt_version||'unknown';document.getElementById('current-prompt-version').textContent=D.release.current_prompt_version||'evidence-prompt-v9';document.getElementById('translation-warning-count').textContent=Number(D.translations?.missing||0)+Number(D.translations?.stale||0);document.getElementById('sbaw-stats').innerHTML=[stat('已处理视频',D.counts.videos),stat('商业记录',D.counts.commercial_records??D.counts.videos),stat('Abstention',D.counts.abstentions??0),stat('EvidenceUnit',D.counts.evidence_units),stat('Annotation',D.counts.annotations),stat('Evidence 人工待审',D.counts.human_review_queue??D.counts.review_queue),stat('Evidence 自动拒绝',D.counts.auto_rejected??0),stat('原始诊断队列',D.counts.pipeline_diagnostics??0),stat('QA',D.counts.qa),stat('QA 人工待审',D.counts.qa_human_review??0),stat('QA 抽样',D.counts.qa_accepted_sample??0),stat('Judge',D.counts.judge_rows)].join('');document.getElementById('preview-note').textContent=D.preview_notice||'完整本地审计视图；审核决定仅保存在当前浏览器。';
 function showTab(id){ROOT.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===id)));ROOT.querySelectorAll('[data-panel]').forEach(p=>p.classList.toggle('active',p.dataset.panel===id));}ROOT.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
 function renderDelivery(){const f=D.delivery.formal_root||'',s=D.delivery.smoke_root||'';document.getElementById('delivery-view').innerHTML=`<div class="grid"><article class="card"><h2>物理目录</h2><p><span class="tag">FORMAL</span> <span class="mono">${esc(f)}</span></p><p><span class="tag">SMOKE</span> <span class="mono">${esc(s)}</span></p><p class="muted">smoke 与 64 条正式 candidate 结果物理分离，不能互相覆盖。</p><p><b>当前数据：</b>${esc(D.release.runtime_prompt_version)} · <b>审计组：</b>${esc(D.release.group||'formal')}</p></article><article class="card"><h2>四层正式交付</h2><ol><li><b>EvidenceDataset</b>：人工审核并冻结后才是 Gold 来源</li><li><b>Prompt manifest</b>：全英文版本与运行契约</li><li><b>QA</b>：全英文公开问题 + 私有 Gold</li><li><b>Evaluation</b>：predictions、Judge 明细、校准报告</li></ol><p class="muted">中文审计翻译和互动分析都不进入公开 benchmark。</p></article></div><h2 style="margin-top:18px">三道人工质量门</h2><div class="flow"><article class="gate primary"><h3>Gate E · Evidence Graph</h3><p>核查 EvidenceUnit、CommerceCue、CommercialRelation、Annotation 及关联帧。</p></article><article class="gate"><h3>冻结 EvidenceDataset</h3><p>接受、修订、拒绝都写入审核记录；冻结后重新实现并编译 QA。</p></article><article class="gate"><h3>Gate Q · QA</h3><p>逐题检查自然度、领域特异性、答案和图引用。</p></article><article class="gate"><h3>Gate J · Judge</h3><p>抽取人工评分集校准五档主评分和错误标签。</p></article></div>`}
 function translationWarning(status){return status&&status!=='current'&&status!=='not_applicable'?`<div class="translation-warning">中文审计翻译状态：${esc(status)}。请以英文 canonical 原文为准并重新生成 sidecar。</div>`:''}
@@ -1197,14 +1333,14 @@ function renderEvidenceItems(items){return `<div class="evidence-stack">${(items
 function renderGraph(cues,relations){const cueHtml=(cues||[]).map(c=>`<section class="graph-item"><div><span class="tag">Cue</span><span class="tag">${esc(c.cue_type)}</span><span class="mono">${esc(c.cue_id)}</span></div>${translationWarning(c.translation_status)}<b>${esc(c.content_zh||c.content_en||'')}</b><details><summary>English canonical cue 与完整引用</summary><p>${esc(c.content_en)}</p><pre>${pretty({evidence_ids:c.evidence_ids,directness:c.directness,theory_tags:c.theory_tags,attributes:c.attributes})}</pre></details></section>`).join('');const relationHtml=(relations||[]).map(r=>`<section class="graph-item"><div><span class="tag">Relation</span><span class="tag">${esc(r.relation_type)}</span><span class="mono">${esc(r.relation_id)}</span></div>${translationWarning(r.translation_status)}<b>${esc(r.content_zh||r.rationale_en||'')}</b><details><summary>English rationale 与图端点</summary><p>${esc(r.rationale_en)}</p><pre>${pretty({source_cue_ids:r.source_cue_ids,target_cue_ids:r.target_cue_ids,evidence_ids:r.evidence_ids,status:r.status,provenance:r.provenance})}</pre></details></section>`).join('');return `<div class="graph-stack">${cueHtml}${relationHtml}</div>`}
 function renderReviewDetails(x){if(x.kind==='AUTO_RISK'||x.kind==='ACCEPTED_SAMPLE')return `<details open><summary>${x.kind==='ACCEPTED_SAMPLE'?'自动通过抽样详情':'Annotation risk details'}</summary><pre>${pretty({target:x.target,gold_value:x.gold_value,evidence_refs:x.evidence_refs,risk_codes:x.risk_codes,capability:x.capability,reasoning_operator:x.reasoning_operator})}</pre></details>`;if(x.item_type==='abstention')return `<div class="empty-state"><b>${esc(x.display_summary||'No candidate generated')}</b><p>${esc(x.reason||'The generator abstained.')}</p></div><details><summary>Abstention details</summary><pre>${pretty({stage:x.stage,task_type:x.task_type,task_subtype:x.task_subtype,reason_code:x.reason_code})}</pre></details>`;if(x.resolution_status==='unresolved')return `<div class="empty-state"><b>${esc(x.display_summary||'Candidate source could not be resolved')}</b><p>${esc(x.reason)}</p></div><details><summary>Unresolved source details</summary><pre>${pretty({source_proposal_ids:x.source_proposal_ids,unresolved_proposal_ids:x.unresolved_proposal_ids,stage:x.stage})}</pre></details>`;if(x.resolution_status==='diagnostic')return `<div class="empty-state"><b>管线诊断记录，不包含候选 Target 或 Gold</b><p>${esc(x.reason)}</p></div><details open><summary>诊断错误与来源</summary><pre>${pretty({stage:x.stage,item_type:x.item_type,reason_code:x.reason_code,issues:x.issues,evidence_refs:x.evidence_refs,commerce_cue_ids:x.commerce_cue_ids,commercial_relation_ids:x.commercial_relation_ids,candidate_snapshot:x.candidate_snapshot})}</pre></details>`;return `<p><span class="tag">${esc(x.capability||x.task_subtype||'')}</span><span class="tag">${esc(x.reasoning_operator||'')}</span></p><div class="review-fields"><section class="review-field"><b>Target</b><pre>${pretty(x.target||{})}</pre></section><section class="review-field"><b>Candidate Gold</b><pre>${pretty(x.candidate_gold||{})}</pre></section></div><details open><summary>Candidate content and evidence / 完整候选内容与验证结果</summary><pre>${pretty({candidate_snapshot:x.candidate_snapshot,semantic_verifier:x.semantic_verifier,stage:x.stage,item_type:x.item_type,task_subtype:x.task_subtype,question_intent:x.question_intent,issues:x.issues,evidence_refs:x.evidence_refs,commerce_cue_ids:x.commerce_cue_ids,commercial_relation_ids:x.commercial_relation_ids,source_proposal_ids:x.source_proposal_ids,source_candidates:x.source_candidates})}</pre></details>`}
 window.openLightbox=function openLightbox(src,caption){const box=document.getElementById('frame-lightbox');const image=document.getElementById('frame-lightbox-image');image.src=src;image.alt=caption||'放大的证据帧';box.classList.add('open')};window.closeLightbox=function closeLightbox(){const box=document.getElementById('frame-lightbox');box.classList.remove('open');document.getElementById('frame-lightbox-image').removeAttribute('src')};document.getElementById('frame-lightbox').addEventListener('click',event=>{if(event.target.id==='frame-lightbox')closeLightbox()});
-function toolbar(prefix,withBucket=false){const bucket=withBucket?`<select class="control" id="${prefix}-bucket" aria-label="审计队列"><option value="human_review">人工语义审核</option><option value="content_review">历史内容审核</option><option value="accepted_sample">自动通过抽样</option><option value="auto_rejected">自动拒绝</option><option value="pipeline_diagnostics">流水线诊断</option><option value="abstention_resample">Abstention / 补采样</option><option value="">全部队列</option></select>`:'';return `<div class="toolbar ${withBucket?'with-bucket':''}"><input class="control" id="${prefix}-search" placeholder="搜索 ID、问题、理由…"><select class="control" id="${prefix}-task"><option value="">全部任务</option><option>BP</option><option>CM</option><option>SS</option><option>AE</option><option>UNKNOWN</option></select>${bucket}<select class="control" id="${prefix}-risk"><option value="">全部风险</option>${Object.entries(PACK.risk_labels).map(([k,v])=>`<option value="${k}">${esc(v)}</option>`).join('')}</select><span class="muted" id="${prefix}-count"></span></div>`}
+function toolbar(prefix,withBucket=false){const bucket=withBucket?`<select class="control" id="${prefix}-bucket" aria-label="审计队列"><option value="human_review">人工语义审核</option><option value="content_review">历史内容审核</option><option value="accepted_sample">自动通过抽样</option><option value="auto_rejected">自动拒绝</option><option value="pipeline_diagnostics">流水线诊断</option><option value="abstention_resample">Abstention / 补采样</option><option value="accepted_all">自动通过全集（只读）</option><option value="">全部队列</option></select>`:'';return `<div class="toolbar ${withBucket?'with-bucket':''}"><input class="control" id="${prefix}-search" placeholder="搜索 ID、问题、理由…"><select class="control" id="${prefix}-task"><option value="">全部任务</option><option>BP</option><option>CM</option><option>SS</option><option>AE</option><option>UNKNOWN</option></select>${bucket}<select class="control" id="${prefix}-risk"><option value="">全部风险</option>${Object.entries(PACK.risk_labels).map(([k,v])=>`<option value="${k}">${esc(v)}</option>`).join('')}</select><span class="muted" id="${prefix}-count"></span></div>`}
 const pageState={ev:0,qa:0,jd:0};const pageDraws={};
 function pager(prefix){return `<nav class="case-pager" aria-label="案例翻页"><button type="button" id="${prefix}-prev" aria-label="上一条">← 上一条</button><strong id="${prefix}-page">第 0 / 0 条</strong><label>跳转到第 <input id="${prefix}-jump" type="number" min="1" value="1" aria-label="跳转到案例序号"> 条</label><button type="button" id="${prefix}-next" aria-label="下一条">下一条 →</button></nav>`}
 function movePage(prefix,delta){const draw=pageDraws[prefix];if(!draw)return;pageState[prefix]+=delta;draw()}
 function bindPager(prefix,total,draw){pageDraws[prefix]=draw;const last=Math.max(0,total-1);pageState[prefix]=Math.max(0,Math.min(pageState[prefix],last));const prev=document.getElementById(`${prefix}-prev`),next=document.getElementById(`${prefix}-next`),jump=document.getElementById(`${prefix}-jump`),label=document.getElementById(`${prefix}-page`);label.textContent=total?`第 ${pageState[prefix]+1} / ${total} 条`:'第 0 / 0 条';prev.disabled=!total||pageState[prefix]===0;next.disabled=!total||pageState[prefix]===last;jump.disabled=!total;jump.max=String(Math.max(1,total));jump.value=String(total?pageState[prefix]+1:1);prev.onclick=()=>movePage(prefix,-1);next.onclick=()=>movePage(prefix,1);const applyJump=()=>{const requested=Math.max(1,Math.min(total,Number(jump.value)||1));pageState[prefix]=requested-1;draw()};jump.onchange=applyJump;jump.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();applyJump()}}}
 function tags(codes){return (codes||[]).map(code=>`<span class="tag bad">${esc(PACK.risk_labels[code]||code)}</span>`).join('')}
 function renderEvidence(){const queue=(D.evidence.queue||[]).map(x=>({...x,kind:'QUEUE',risk_codes:[...(x.risk_codes||[]),...(x.audit_bucket==='human_review'?['HUMAN_QUEUE']:[])]}));const abstentions=(D.evidence.abstentions||[]).map(x=>({...x,kind:'ABSTENTION',audit_bucket:'abstention_resample'}));const risks=(D.evidence.risks||[]).map(x=>({...x,kind:'AUTO_RISK',audit_bucket:x.audit_bucket||'auto_rejected'}));const accepted=(D.evidence.accepted_sample||[]).map(x=>({...x,kind:'ACCEPTED_SAMPLE',audit_bucket:'accepted_sample'}));const rows=[...queue,...abstentions,...risks,...accepted];const bucketLabels={human_review:'人工语义审核',content_review:'历史内容审核',accepted_sample:'自动通过抽样',auto_rejected:'自动拒绝',pipeline_diagnostics:'流水线诊断',abstention_resample:'Abstention / 补采样'};const bucketCounts=rows.reduce((acc,row)=>{const bucket=row.audit_bucket||'human_review';acc[bucket]=(acc[bucket]||0)+1;return acc},{});const bucketSummary=Object.entries(bucketLabels).map(([bucket,label])=>`<span class="tag">${esc(label)} · ${bucketCounts[bucket]||0}</span>`).join('');document.getElementById('evidence-view').innerHTML=`<div class="grid"><article class="card"><h2>六类质量视图</h2><p>${bucketSummary}</p><p class="muted">只有人工语义审核提供决定按钮；自动拒绝与流水线诊断是只读生产记录，Abstention 用于补帧或重采样，自动通过抽样用于监控漏检。</p></article><article class="card"><h2>商业图资产</h2><p>CommerceCue：<b>${D.evidence.commerce_cues?.length||0}</b> · CommercialRelation：<b>${D.evidence.commercial_relations?.length||0}</b></p><p>缺任务视频：<b>${D.evidence.missing_task_videos.length}</b> · 自动通过抽样：<b>${D.counts.accepted_sample||accepted.length}</b></p></article></div>${toolbar('ev',true)}${pager('ev')}<div id="ev-list" class="list"></div>`;document.getElementById('ev-bucket').value=rows.some(x=>x.audit_bucket==='human_review')?'human_review':(rows.some(x=>x.audit_bucket==='content_review')?'content_review':'');const draw=()=>{const q=document.getElementById('ev-search').value.toLowerCase(),task=document.getElementById('ev-task').value,bucket=document.getElementById('ev-bucket').value,risk=document.getElementById('ev-risk').value;const found=rows.filter(x=>(!task||x.task_type===task)&&(!bucket||x.audit_bucket===bucket)&&(!risk||(x.risk_codes||[]).includes(risk))&&(!q||JSON.stringify(x).toLowerCase().includes(q)));pageState.ev=Math.max(0,Math.min(pageState.ev,Math.max(0,found.length-1)));const x=found[pageState.ev];document.getElementById('ev-count').textContent=`匹配 ${found.length} / ${rows.length}`;document.getElementById('ev-list').innerHTML=x?`<article class="item"><div class="item-head"><div><span class="tag">${esc(bucketLabels[x.audit_bucket]||x.audit_bucket||x.kind)}</span><span class="tag">${esc(x.task_type||(x.resolution_status==='diagnostic'?'PIPELINE':'UNRESOLVED'))}</span>${x.stage?`<span class="tag">${esc(x.stage)}</span>`:''}${x.item_type?`<span class="tag">${esc(x.item_type)}</span>`:''}${tags(x.risk_codes)}</div><span class="mono">${esc(x.video_id)}</span></div><h3>${esc(x.id)}</h3><p>${esc(x.reason||'自动接受记录命中本地风险规则')}</p>${renderReviewDetails(x)}<h3>CommerceCue / CommercialRelation</h3>${renderGraph(x.commerce_cues,x.commercial_relations)}<h3>可核对 Evidence 与关联帧</h3>${renderEvidenceItems(x.evidence_items)}${x.audit_bucket==='human_review'||x.audit_bucket==='content_review'?decisionButtons(x.id):'<p class="muted">只读记录：该案例不应产生人工发布决定。</p>'}</article>`:'<p class="muted">没有匹配记录。</p>';bindDecisions();bindPager('ev',found.length,draw)};['ev-search','ev-task','ev-bucket','ev-risk'].forEach(id=>document.getElementById(id).addEventListener('input',()=>{pageState.ev=0;draw()}));draw()}
-function renderQA(){document.getElementById('qa-view').innerHTML=`<div class="card"><h2>QA 是第二道审核门</h2><p>当前 ${D.counts.qa} 题是未完成人工冻结的 candidate QA。中文只用于通读，审核结论必须同时核对英文 canonical QA、商业图、Evidence 与帧。</p></div>${toolbar('qa')}${pager('qa')}<div id="qa-list" class="list"></div>`;const draw=()=>{const q=document.getElementById('qa-search').value.toLowerCase(),task=document.getElementById('qa-task').value,risk=document.getElementById('qa-risk').value;const found=D.qa.filter(x=>(!task||x.task_type===task)&&(!risk||(x.risk_codes||[]).includes(risk))&&(!q||JSON.stringify(x).toLowerCase().includes(q)));pageState.qa=Math.max(0,Math.min(pageState.qa,Math.max(0,found.length-1)));const x=found[pageState.qa];document.getElementById('qa-count').textContent=`匹配 ${found.length} / ${D.qa.length}`;document.getElementById('qa-list').innerHTML=x?`<article class="item"><div class="item-head"><div><span class="tag">${esc(x.task_type)}</span><span class="tag">${esc(x.task_subtype)}</span><span class="tag">${esc(x.capability||'')}</span><span class="tag">${esc(x.reasoning_operator||'')}</span>${tags(x.risk_codes)}</div><span class="mono">${esc(x.vqa_id)}</span></div>${translationWarning(x.question_translation_status)}${translationWarning(x.gold_translation_status)}<h3>${esc(x.question_zh||x.question)}</h3><p><b>中文 Gold：</b>${esc(x.gold_answer_zh||x.gold_answer)}</p><details open><summary>English canonical question and Gold</summary><p><b>Question:</b> ${esc(x.question)}</p><p><b>Gold:</b> ${esc(typeof x.gold_answer==='string'?x.gold_answer:JSON.stringify(x.gold_answer))}</p></details><h3>CommerceCue / CommercialRelation</h3>${renderGraph(x.commerce_cues,x.commercial_relations)}<h3>可读 Evidence 与关联帧</h3>${renderEvidenceItems(x.evidence_items)}<details><summary>来源 Annotation 与完整引用</summary><pre>${pretty({source_annotations:x.source_annotations,source_annotation_ids:x.source_annotation_ids,evidence_refs:x.evidence_refs,commerce_cue_ids:x.commerce_cue_ids,commercial_relation_ids:x.commercial_relation_ids,spec_id:x.spec_id})}</pre></details>${decisionButtons(x.vqa_id)}</article>`:'<p class="muted">没有匹配记录。</p>';bindDecisions();bindPager('qa',found.length,draw)};['qa-search','qa-task','qa-risk'].forEach(id=>document.getElementById(id).addEventListener('input',()=>{pageState.qa=0;draw()}));draw()}
+function renderQA(){const rows=D.qa||[];const bucketLabels={human_review:'QA 人工语义审核',content_review:'历史 QA 内容审核',accepted_sample:'QA 自动通过抽样',auto_rejected:'QA 自动拒绝',pipeline_diagnostics:'QA 流水线诊断',accepted_all:'自动通过全集（只读）'};document.getElementById('qa-view').innerHTML=`<div class="card"><h2>QA 生产质量视图</h2><p>人工只处理语义歧义和约 10% 自动通过监控样本；明确错误、公式化问题、缺证据和工程故障在生产阶段分流。中文只用于通读，结论必须同时核对英文 canonical QA、商业图、Evidence 与帧。</p></div>${toolbar('qa',true)}${pager('qa')}<div id="qa-list" class="list"></div>`;document.getElementById('qa-bucket').value=rows.some(x=>x.audit_bucket==='human_review')?'human_review':(rows.some(x=>x.audit_bucket==='accepted_sample')?'accepted_sample':(rows.some(x=>x.audit_bucket==='content_review')?'content_review':'accepted_all'));const draw=()=>{const q=document.getElementById('qa-search').value.toLowerCase(),task=document.getElementById('qa-task').value,bucket=document.getElementById('qa-bucket').value,risk=document.getElementById('qa-risk').value;const found=rows.filter(x=>(!task||x.task_type===task)&&(!bucket||x.audit_bucket===bucket)&&(!risk||(x.risk_codes||[]).includes(risk))&&(!q||JSON.stringify(x).toLowerCase().includes(q)));pageState.qa=Math.max(0,Math.min(pageState.qa,Math.max(0,found.length-1)));const x=found[pageState.qa];document.getElementById('qa-count').textContent=`匹配 ${found.length} / ${rows.length}`;document.getElementById('qa-list').innerHTML=x?`<article class="item"><div class="item-head"><div><span class="tag">${esc(bucketLabels[x.audit_bucket]||x.audit_bucket||'QA')}</span><span class="tag">${esc(x.task_type)}</span><span class="tag">${esc(x.task_subtype)}</span><span class="tag">${esc(x.capability||'')}</span><span class="tag">${esc(x.reasoning_operator||'')}</span>${tags(x.risk_codes)}</div><span class="mono">${esc(x.vqa_id)}</span></div>${x.reason?`<p><b>质量路由：</b>${esc(x.reason)}</p>`:''}${translationWarning(x.question_translation_status)}${translationWarning(x.gold_translation_status)}<h3>${esc(x.question_zh||x.question||'无可展示问题')}</h3><p><b>中文 Gold：</b>${esc(x.gold_answer_zh||x.gold_answer||'无')}</p><details open><summary>English canonical question and Gold</summary><p><b>Question:</b> ${esc(x.question)}</p><p><b>Gold:</b> ${esc(typeof x.gold_answer==='string'?x.gold_answer:JSON.stringify(x.gold_answer))}</p></details>${x.semantic_verification?`<details open><summary>QA semantic quality verification</summary><pre>${pretty(x.semantic_verification)}</pre></details>`:''}<h3>CommerceCue / CommercialRelation</h3>${renderGraph(x.commerce_cues,x.commercial_relations)}<h3>可读 Evidence 与关联帧</h3>${renderEvidenceItems(x.evidence_items)}<details><summary>来源 Annotation 与完整引用</summary><pre>${pretty({source_annotations:x.source_annotations,source_annotation_ids:x.source_annotation_ids,evidence_refs:x.evidence_refs,commerce_cue_ids:x.commerce_cue_ids,commercial_relation_ids:x.commercial_relation_ids,spec_id:x.spec_id})}</pre></details>${x.audit_bucket==='human_review'||x.audit_bucket==='accepted_sample'?decisionButtons(x.vqa_id):'<p class="muted">该 QA 是只读生产记录，不产生人工发布决定。</p>'}</article>`:'<p class="muted">没有匹配记录。</p>';bindDecisions();bindPager('qa',found.length,draw)};['qa-search','qa-task','qa-bucket','qa-risk'].forEach(id=>document.getElementById(id).addEventListener('input',()=>{pageState.qa=0;draw()}));draw()}
 function renderJudge(){const per=D.judge.metrics.per_task||{};const bars=Object.entries(per).map(([task,m])=>`<div class="bar"><b>${esc(task)}</b><div class="track"><div class="fill" style="width:${Math.max(0,Math.min(100,Number(m.relaxed_accuracy||0)*100))}%"></div></div><span>${(Number(m.relaxed_accuracy||0)*100).toFixed(1)}%</span></div>`).join('');document.getElementById('judge-view').innerHTML=`<div class="grid"><article class="card"><h2>Candidate 诊断分数</h2><div class="bars">${bars}</div><p>Macro relaxed：<b>${(Number(D.judge.metrics.macro_average?.relaxed_accuracy||0)*100).toFixed(2)}%</b> · Judge failures：<b>${esc(D.judge.summary.judge_failed_count||0)}</b></p></article><article class="card"><h2>Judge v5 与后续校准</h2><ol><li>四任务独立 rubric 与五档主分数；</li><li>英文 canonical 理由和诊断标签；</li><li>中文理由只由 audit sidecar 生成；</li><li>仍需人工样本校准一致性和偏差。</li></ol></article></div>${toolbar('jd')}${pager('jd')}<div id="jd-list" class="list"></div>`;document.querySelector('#jd-risk').innerHTML='<option value="">全部分数</option><option value="LOW">≤ 0.5</option><option value="HIGH">≥ 0.75</option>';const draw=()=>{const q=document.getElementById('jd-search').value.toLowerCase(),task=document.getElementById('jd-task').value,risk=document.getElementById('jd-risk').value;const found=D.judge.rows.filter(x=>(!task||x.task_type===task)&&(!risk||(risk==='LOW'?Number(x.score)<=.5:Number(x.score)>=.75))&&(!q||JSON.stringify(x).toLowerCase().includes(q)));pageState.jd=Math.max(0,Math.min(pageState.jd,Math.max(0,found.length-1)));const x=found[pageState.jd];document.getElementById('jd-count').textContent=`匹配 ${found.length} / ${D.judge.rows.length}`;document.getElementById('jd-list').innerHTML=x?`<article class="item"><div class="item-head"><div><span class="tag">${esc(x.task_type)}</span><span class="tag ${Number(x.score)<=.5?'bad':''}">score ${esc(x.score)}</span></div><span class="mono">${esc(x.vqa_id)}</span></div><h3>${esc(x.question)}</h3><p><b>Reference：</b>${esc(x.reference_answer)}</p><p><b>Model：</b>${esc(x.model_output)}</p>${x.correctness==null?'<p class="muted">当前结果没有完整分项分数。</p>':`<p><span class="tag">correctness ${esc(x.correctness)}</span> <span class="tag">grounding ${esc(x.grounding)}</span> <span class="tag">completeness ${esc(x.completeness)}</span></p>`}<h3>Judge 实际依据的 Evidence</h3>${renderEvidenceItems(x.evidence_items)}${translationWarning(x.reason_translation_status)}${translationWarning(x.evidence_alignment_translation_status)}<details open><summary>中文 Judge 理由与证据对齐</summary><p>${esc(x.reason_zh||'尚无中文审计翻译')}</p><p>${esc(x.evidence_alignment_zh||'')}</p></details><details><summary>English canonical Judge output</summary><p>${esc(x.reason)}</p><p>${esc(x.evidence_alignment)}</p></details>${decisionButtons(`judge:${x.vqa_id}`)}</article>`:'<p class="muted">没有匹配记录。</p>';bindDecisions();bindPager('jd',found.length,draw)};['jd-search','jd-task','jd-risk'].forEach(id=>document.getElementById(id).addEventListener('input',()=>{pageState.jd=0;draw()}));draw()}
 document.addEventListener('keydown',event=>{if(event.key!=='ArrowLeft'&&event.key!=='ArrowRight')return;if(['INPUT','SELECT','TEXTAREA'].includes(String(event.target?.tagName||''))||document.getElementById('frame-lightbox').classList.contains('open'))return;const panel=ROOT.querySelector('[data-panel].active')?.dataset.panel;const prefix={evidence:'ev',qa:'qa',judge:'jd'}[panel];if(!prefix)return;event.preventDefault();movePage(prefix,event.key==='ArrowLeft'?-1:1)});
 window.exportDecisions=function exportDecisions(){const decisions={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(`salesbench-audit:${D.release.prompt_version}:`))decisions[k.split(':').slice(2).join(':')]=localStorage.getItem(k)}const blob=new Blob([JSON.stringify({prompt_version:D.release.prompt_version,exported_at:new Date().toISOString(),decisions},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`salesbench-audit-decisions-${D.release.prompt_version}.json`;a.click();URL.revokeObjectURL(url)};renderDelivery();renderPrompts();renderEvidence();renderQA();renderJudge();})();

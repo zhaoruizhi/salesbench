@@ -23,7 +23,7 @@ HUMAN_REVIEW -> 仅限无法由帧和证据唯一判定的语义歧义
 | Evidence/Commerce prompt | `evidence-prompt-v10` |
 | Pipeline | `evidence-first-pipeline-v10` |
 | Semantic quality prompt | `quality-gate-prompt-v1` |
-| QA compiler | `evidence-qa-compiler-v6` |
+| QA compiler | `evidence-qa-compiler-v7` |
 | Question realizer | `question-realizer-prompt-v2` |
 | Judge | `judge-prompt-v5` |
 
@@ -86,9 +86,18 @@ python salesbench.py compile-vqa \
   --allow-missing-tasks
 ```
 
-`--allow-auto-candidates` 只用于 smoke/pilot 质量检查。没有该参数时，QuestionSpec 和 compiler 只接受 `human_accepted`，因此候选数据不会被误发成正式 benchmark。
+`--allow-auto-candidates` 只用于 smoke/pilot 阶段读取尚未冻结的 Evidence annotation。Question Realizer 没有该参数时只读取 `human_accepted`。Compiler v7 在正式模式下还有一条受限自动路径：只有同目录 `qa_realizer_meta.json` 明确启用当前版本的严格 QA 门禁，并且相同 `spec_id` 在 `qa_semantic_verifications.jsonl` 中为 `PASS`，`auto_accepted_candidate` 才能进入编译；旧版 `verified`、缺少门禁元数据或没有 PASS 记录的候选仍会失败关闭。这样不需要逐题人工确认全部 PASS QA，同时也不能把普通候选误发为正式集。
 
 `--strict-semantic-verification` 会在英文问题实现后增加独立 QA 语义门禁：明确缺证据、Gold 过度推断、任务错位、答案不唯一或领域性不足的候选写入 `qa_rejected_candidates.jsonl`；API/解析故障写入 `qa_pipeline_diagnostics.jsonl`；只有真正存在两种合理解释的候选进入 `qa_human_review_queue.jsonl`。只有 `PASS` 项写入 `qa_realizations.jsonl`，因此坏 QA 不会再依赖人工审核阶段淘汰。
+
+QA 输出目录的质量文件含义如下：
+
+- `qa_realizations.jsonl`：通过本地表面规则和严格语义门禁的 QA；
+- `qa_semantic_verifications.jsonl`：每题五个语义质量维度与英文理由；
+- `qa_rejected_candidates.jsonl`：确定性或语义上明确不合格的 QA，只读；
+- `qa_human_review_queue.jsonl`：仅保存无法由现有证据唯一消歧的 QA；
+- `qa_pipeline_diagnostics.jsonl`：API、解析或执行故障，不交给内容审核员；
+- `qa_accepted_sample.jsonl`：按任务稳定抽取约 10% 的 PASS QA，用来估计自动通过精度，不要求全量人工逐题确认。
 
 ## 5. 构建翻页式审计 HTML
 
@@ -116,7 +125,8 @@ python -m tools.audit_workbench.build \
 3. 自动拒绝：只读，检查生产门禁是否按预期淘汰；
 4. 流水线诊断：只读，供修代码而不是标内容；
 5. Abstention/补采样：决定是否补尾帧、重采样或替换视频；
-6. QA/Judge：逐题翻页查看问题、Gold、完整 Evidence、商业图和关联帧。
+6. QA：再分为人工语义审核、自动通过抽样、自动拒绝、流水线诊断和自动通过全集只读五个翻页队列；
+7. Judge：逐题翻页查看问题、Gold、模型输出、评分理由和实际使用的 Evidence。
 
 ## 6. Smoke 验收后再启动 64 视频
 
