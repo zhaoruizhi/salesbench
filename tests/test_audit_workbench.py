@@ -357,6 +357,7 @@ def test_v10_read_only_buckets_do_not_render_review_decision_controls() -> None:
     assert "自动拒绝" in html
     assert "只读记录" in html
     assert "x.audit_bucket==='human_review'" in html
+    assert "rows.some(x=>x.audit_bucket==='human_review')" in html
 
 
 def test_preview_renderer_reduces_record_limit_to_fit_byte_budget() -> None:
