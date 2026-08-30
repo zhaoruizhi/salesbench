@@ -12,7 +12,7 @@ from .schema import GoldTaskType
 from .validators import PRIVATE_KEYS
 
 
-PROMPT_VERSION = "evidence-prompt-v9"
+PROMPT_VERSION = "evidence-prompt-v10"
 
 BP_COMPILER_CONTRACT = (
     "BP is produced by a deterministic local compiler, not by an LLM proposer. "

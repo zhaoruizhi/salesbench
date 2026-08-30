@@ -248,7 +248,7 @@ class GoldBankQACompilerTest(unittest.TestCase):
             private = json.loads((out_dir / "vqa_gold_private.jsonl").read_text(encoding="utf-8").splitlines()[0])
             public = json.loads((out_dir / "vqa_public.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
-        self.assertEqual(summary["compiler_version"], "evidence-qa-compiler-v5")
+        self.assertEqual(summary["compiler_version"], "evidence-qa-compiler-v6")
         self.assertEqual(diversity["exact_duplicate_count"], 0)
         self.assertIn("normalized_stem_clusters", diversity)
         self.assertEqual(private["graph_context"]["commerce_cues"][0]["cue_id"], "c1")

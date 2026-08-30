@@ -11,7 +11,7 @@ from typing import Any
 from ..utils import clean_text
 
 
-SCHEMA_VERSION = "evidence-dataset-schema-v3"
+SCHEMA_VERSION = "evidence-dataset-schema-v4"
 
 
 class GoldTaskType(str, Enum):

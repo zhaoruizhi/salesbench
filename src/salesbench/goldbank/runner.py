@@ -20,7 +20,7 @@ from .quality_prompts import QUALITY_PROMPT_VERSION
 from .schema import stable_digest
 
 
-PIPELINE_VERSION = "evidence-first-pipeline-v9"
+PIPELINE_VERSION = "evidence-first-pipeline-v10"
 
 
 GOLD_BANK_OUTPUT_FILES = (
@@ -235,6 +235,15 @@ def _merge_outputs(
             traces.append(trace_record)
 
     video_samples = [_sample_record(record, pilot_config) for record in records]
+    accepted_annotation_count = sum(
+        len(record.get("grounded_annotations") or []) for record in gold_records
+    )
+    quality_candidate_count = accepted_annotation_count + len(queue) + len(rejected)
+    human_ambiguity_rate = (
+        len(queue) / quality_candidate_count if quality_candidate_count else 0.0
+    )
+    ambiguity_target_rate = float(pilot_config.get("human_ambiguity_target_rate", 0.05))
+    ambiguity_block_rate = float(pilot_config.get("human_ambiguity_block_rate", 0.10))
 
     write_jsonl(output_dir / "video_samples.jsonl", _sort_records(video_samples, "video_id"))
     write_jsonl(output_dir / "evidence_units.jsonl", _sort_records(evidence_units, "video_id", "evidence_id"))
@@ -290,6 +299,16 @@ def _merge_outputs(
             "agent_traces": len(traces),
         },
         "statuses": {result.video_id: result.status for result in results},
+        "quality_gate": {
+            "accepted_annotation_count": accepted_annotation_count,
+            "quality_candidate_count": quality_candidate_count,
+            "human_ambiguity_count": len(queue),
+            "human_ambiguity_rate": round(human_ambiguity_rate, 6),
+            "target_rate": ambiguity_target_rate,
+            "block_rate": ambiguity_block_rate,
+            "target_met": human_ambiguity_rate <= ambiguity_target_rate,
+            "release_blocked": human_ambiguity_rate > ambiguity_block_rate,
+        },
         "pipeline_version": PIPELINE_VERSION,
         "config_fingerprint": stable_digest(
             {"pilot_config": pilot_config, "video_fingerprints": fingerprints},

@@ -35,9 +35,9 @@ C1-C6 内部资产
 互动快照 -> 独立私有分析（不进入上述链路）
 ```
 
-核心质量状态是 `DIRECT`、`INFERRED`、`NEEDS_REVIEW`、`REJECTED`。BP/CM 的合格项由直接证据支撑；SS/AE 是受控推理，必须保留证据引用。低置信度、证据冲突和语义歧义进入人工复核，不能自动编译成 VQA。
+Grounding 状态与发布生命周期现在分离。低置信度、解析失败、规则失败、重复和明确不支持的候选在生产阶段自动拒绝；`REVISE` 最多自动修复一次。只有无法从引用证据与帧唯一判定的语义歧义进入人工队列。自动候选使用 `auto_accepted_candidate`，正式编译只接受 `human_accepted`。
 
-64 视频小样本全流程、模型配置、逐步产物与验收标准见 [64 视频 Pilot 完整执行方案](docs/Pilot_64_Video_Execution_Guide.md)。
+当前 v10 质量门禁、5 视频 smoke、64 视频 pilot、翻页审计页与验收标准见 [v10 质量门禁执行指南](docs/Pilot_v10_Quality_Gate_Execution_Guide.md)。v9 执行记录保留在 [64 视频 Pilot 历史方案](docs/Pilot_64_Video_Execution_Guide.md)，不应覆盖或直接升级为 v10 Gold。
 
 ## 快速开始
 
@@ -71,12 +71,13 @@ export OPENAI_API_KEY="..."
 
 python salesbench.py build-evidence-dataset \
   --config configs/benchmark_v1.json \
-  --cohort-config configs/evidence_pilot_5videos.json \
-  --output-dir outputs/evidence/v2_pilot \
-  --model gpt-4o
+  --cohort-config configs/evidence_smoke_v10_5videos.json \
+  --output-dir outputs/evidence/v10_smoke5_gpt4o_yunwu \
+  --vision-model gpt-4o \
+  --text-model gpt-4o
 ```
 
-主要产物包括 `evidence_units.jsonl`、`video_evidence_dataset.jsonl`、`human_review_queue.jsonl` 和 `generation_meta.json`。运行支持断点续跑；缓存指纹包含视频哈希、采帧策略、帧数、模型和契约版本。
+主要产物还包括 `repaired_candidates.jsonl`、`rejected_candidates.jsonl`、`pipeline_diagnostics.jsonl` 和 `quality_decisions.jsonl`。`human_review_queue.jsonl` 只保留语义歧义。运行支持断点续跑；缓存指纹包含视频哈希、采帧策略、帧数、模型、严格验证配置和契约版本。
 
 应用人工复核并编译四任务 VQA：
 

@@ -125,6 +125,28 @@ class BenchmarkConvergenceTest(unittest.TestCase):
         for legacy in ("v6_", "v7_", "v8_"):
             self.assertNotIn(legacy, serialized)
 
+    def test_v10_configs_enable_strict_fail_closed_quality_pipeline(self):
+        repo = Path(__file__).resolve().parents[1]
+        smoke = json.loads((repo / "configs/evidence_smoke_v10_5videos.json").read_text(encoding="utf-8"))
+        formal = json.loads((repo / "configs/evidence_pilot_v10_64videos.json").read_text(encoding="utf-8"))
+        delivery = json.loads((repo / "configs/pilot64_gpt4o_v10_delivery.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(len(smoke["video_ids"]), 5)
+        self.assertEqual(len(formal["video_ids"]), 64)
+        for config in (smoke, formal):
+            self.assertEqual(config["prompt_version"], "evidence-prompt-v10")
+            self.assertEqual(config["schema_version"], "evidence-dataset-schema-v4")
+            self.assertEqual(config["pipeline_version"], "evidence-first-pipeline-v10")
+            self.assertEqual(config["compiler_version"], "evidence-qa-compiler-v6")
+            self.assertEqual(config["quality_prompt_version"], "quality-gate-prompt-v1")
+            self.assertTrue(config["strict_semantic_verification"])
+            self.assertLessEqual(config["human_ambiguity_target_rate"], 0.05)
+            self.assertEqual(config["human_ambiguity_block_rate"], 0.1)
+        serialized = json.dumps(delivery)
+        self.assertIn("v10_smoke5", serialized)
+        self.assertIn("v10_pilot64", serialized)
+        self.assertNotIn("v9_pilot64", serialized)
+
     def test_public_task_contract_has_exactly_four_tasks(self):
         self.assertEqual([task.value for task in GoldTaskType], ["BP", "CM", "SS", "AE"])
 

@@ -127,7 +127,7 @@ def select_goldbank_cohort(
     selected_records = [lookup[video_id] for video_id in selected]
     cell_counts = Counter("|".join(_cell(record)) for record in selected_records)
     return {
-        "version": "evidence-alpha-v3",
+        "version": "evidence-alpha-v4",
         "video_ids": selected,
         "frame_strategy": "hook_plus_uniform",
         "frames_per_video": 16,

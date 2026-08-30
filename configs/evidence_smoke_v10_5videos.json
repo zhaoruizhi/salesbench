@@ -1,0 +1,27 @@
+{
+  "version": "evidence-smoke-v10",
+  "video_ids": [
+    "7362856271365606683",
+    "7360594186715909416",
+    "7360565413341613348",
+    "7359538830657064192",
+    "7365054535036849420"
+  ],
+  "frame_strategy": "hook_plus_uniform",
+  "frames_per_video": 16,
+  "prompt_version": "evidence-prompt-v10",
+  "schema_version": "evidence-dataset-schema-v4",
+  "pipeline_version": "evidence-first-pipeline-v10",
+  "compiler_version": "evidence-qa-compiler-v6",
+  "question_realizer_prompt_version": "question-realizer-prompt-v2",
+  "quality_prompt_version": "quality-gate-prompt-v1",
+  "judge_prompt_version": "judge-prompt-v5",
+  "audit_translation_prompt_version": "audit-translation-prompt-v1",
+  "min_confidence": 0.7,
+  "strict_semantic_verification": true,
+  "human_ambiguity_target_rate": 0.05,
+  "human_ambiguity_block_rate": 0.1,
+  "accepted_sample_fraction": 0.1,
+  "seed": 42,
+  "run_class": "smoke_only"
+}

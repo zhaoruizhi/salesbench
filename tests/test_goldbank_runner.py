@@ -174,6 +174,23 @@ class GoldBankRunnerTest(unittest.TestCase):
         self.assertIn("evidence-prompt-v9", meta)
         self.assertIn("evidence-dataset-schema-v3", meta)
 
+    def test_generation_meta_reports_human_ambiguity_release_gate(self):
+        config = self.pilot_config()
+        config.update(
+            {
+                "human_ambiguity_target_rate": 0.05,
+                "human_ambiguity_block_rate": 0.10,
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = run_gold_bank_records(
+                self.records(), config, Path(tmp), FakePipeline()
+            )
+
+        self.assertIn("human_ambiguity_rate", summary["quality_gate"])
+        self.assertEqual(summary["quality_gate"]["target_rate"], 0.05)
+        self.assertEqual(summary["quality_gate"]["block_rate"], 0.10)
+
 
 if __name__ == "__main__":
     unittest.main()

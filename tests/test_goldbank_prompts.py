@@ -43,7 +43,7 @@ class GoldBankPromptTest(unittest.TestCase):
         system, user_blocks = build_evidence_extractor_prompt("v1", {"C3_text_language": {"title": "hello"}})
         text = system + " " + str(user_blocks)
 
-        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v9")
+        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v10")
         self.assertIn("EvidenceUnit", text)
         self.assertIn("Do not generate questions", system)
         self.assertIn("English", system)

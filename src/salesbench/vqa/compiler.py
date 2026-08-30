@@ -18,7 +18,7 @@ from .realizer import validate_realized_question
 from .specs import make_question_spec_id
 
 
-COMPILER_VERSION = "evidence-qa-compiler-v5"
+COMPILER_VERSION = "evidence-qa-compiler-v6"
 
 
 @dataclass(frozen=True)
@@ -272,7 +272,8 @@ def compile_vqa_from_gold(
     )
     bank_records = read_jsonl(bank_path)
     if realizations_path is None and any(
-        clean_text(record.get("schema_version")) == "evidence-dataset-schema-v3"
+        clean_text(record.get("schema_version"))
+        in {"evidence-dataset-schema-v3", "evidence-dataset-schema-v4"}
         for record in bank_records
     ):
         raise ValueError("EvidenceDataset v3 requires reviewed QA realizations")
