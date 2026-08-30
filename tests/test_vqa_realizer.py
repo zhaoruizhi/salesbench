@@ -61,6 +61,38 @@ class RepairClient(FakeClient):
         )
 
 
+class StrictQAClient(FakeClient):
+    def __init__(self, verdict: str = "PASS", malformed: bool = False) -> None:
+        super().__init__()
+        self.verdict = verdict
+        self.malformed = malformed
+
+    def call_text_only(self, system_prompt: str, user_text: str, response_format: str | None = None):
+        if "strict semantic quality gate" not in system_prompt:
+            return super().call_text_only(system_prompt, user_text, response_format)
+        self.calls.append({"system": system_prompt, "user": user_text})
+        spec_id = json.loads(user_text)["question_spec"]["spec_id"]
+        payload = {"unexpected": True} if self.malformed else {
+            "spec_id": spec_id,
+            "verdict": self.verdict,
+            "reason": "The supplied graph determines whether this candidate is valid.",
+            "answerable_from_evidence": self.verdict != "REJECT",
+            "gold_supported": self.verdict != "REJECT",
+            "unique_answer": self.verdict == "PASS",
+            "task_aligned": True,
+            "domain_specific": True,
+        }
+        return APICallResult(
+            raw_response=json.dumps(payload),
+            model=self.model,
+            input_tokens=10,
+            output_tokens=10,
+            latency_s=0.01,
+            cost_usd=0.0,
+            success=True,
+        )
+
+
 def _write_evidence_dir(root: Path) -> None:
     write_jsonl(
         root / "video_evidence_dataset.jsonl",
@@ -197,3 +229,62 @@ def test_realizer_rejects_formulaic_or_non_english_questions():
         "What mechanism is used? Support the answer with evidence.", "An answer."
     )
     assert "NON_ENGLISH_QUESTION" in validate_realized_question("视频展示了什么？", "An answer.")
+
+
+def test_strict_qa_verifier_rejects_bad_candidate_before_realization_output(tmp_path: Path):
+    evidence_dir = tmp_path / "evidence"
+    output_dir = tmp_path / "qa"
+    _write_evidence_dir(evidence_dir)
+
+    summary = run_qa_realizer(
+        evidence_dir,
+        output_dir,
+        StrictQAClient("REJECT"),
+        allow_auto_candidates=True,
+        strict_semantic_verification=True,
+    )
+
+    assert summary["counts"]["realized"] == 0
+    assert summary["counts"]["semantic_rejected"] == 1
+    assert read_jsonl(output_dir / "qa_realizations.jsonl") == []
+    rejected = read_jsonl(output_dir / "qa_rejected_candidates.jsonl")
+    assert rejected[0]["candidate_snapshot"]["question_spec"]["spec_id"]
+    assert read_jsonl(output_dir / "qa_human_review_queue.jsonl") == []
+
+
+def test_strict_qa_verifier_routes_only_ambiguity_to_human_review(tmp_path: Path):
+    evidence_dir = tmp_path / "evidence"
+    output_dir = tmp_path / "qa"
+    _write_evidence_dir(evidence_dir)
+
+    summary = run_qa_realizer(
+        evidence_dir,
+        output_dir,
+        StrictQAClient("HUMAN_REVIEW"),
+        allow_auto_candidates=True,
+        strict_semantic_verification=True,
+    )
+
+    assert summary["counts"]["human_review"] == 1
+    assert summary["counts"]["realized"] == 0
+    queue = read_jsonl(output_dir / "qa_human_review_queue.jsonl")
+    assert queue[0]["reason_code"] == "QA_SEMANTIC_AMBIGUITY"
+    assert read_jsonl(output_dir / "qa_rejected_candidates.jsonl") == []
+
+
+def test_strict_qa_verifier_parse_failure_is_pipeline_diagnostic(tmp_path: Path):
+    evidence_dir = tmp_path / "evidence"
+    output_dir = tmp_path / "qa"
+    _write_evidence_dir(evidence_dir)
+
+    summary = run_qa_realizer(
+        evidence_dir,
+        output_dir,
+        StrictQAClient(malformed=True),
+        allow_auto_candidates=True,
+        strict_semantic_verification=True,
+    )
+
+    assert summary["counts"]["pipeline_diagnostics"] == 1
+    assert summary["counts"]["human_review"] == 0
+    assert len(read_jsonl(output_dir / "qa_pipeline_diagnostics.jsonl")) == 1

@@ -115,11 +115,13 @@ class GoldBankCLITest(unittest.TestCase):
                 "--output-dir",
                 "qa",
                 "--allow-auto-candidates",
+                "--strict-semantic-verification",
             ]
         )
 
         self.assertEqual(realize_qa_command(args), 0)
         self.assertTrue(run_realizer.call_args.kwargs["allow_auto_candidates"])
+        self.assertTrue(run_realizer.call_args.kwargs["strict_semantic_verification"])
 
 
 if __name__ == "__main__":

@@ -134,6 +134,7 @@ def realize_qa_command(args: argparse.Namespace) -> int:
         max_workers=args.max_workers,
         resume=args.resume,
         allow_auto_candidates=args.allow_auto_candidates,
+        strict_semantic_verification=args.strict_semantic_verification,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
@@ -318,6 +319,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-auto-candidates",
         action="store_true",
         help="候选集调试模式；正式 QA 仅接受人工确认的 annotation",
+    )
+    realize.add_argument(
+        "--strict-semantic-verification",
+        action="store_true",
+        help="生成后使用同一文本模型进行严格 QA 语义门禁",
     )
     realize.set_defaults(func=realize_qa_command, resume=True)
 

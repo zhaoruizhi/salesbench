@@ -74,6 +74,7 @@ python salesbench.py realize-qa \
   --dataset-file video_evidence_dataset.jsonl \
   --output-dir outputs/vqa/v10_smoke5_gpt4o_yunwu \
   --text-model gpt-4o \
+  --strict-semantic-verification \
   --allow-auto-candidates
 
 python salesbench.py compile-vqa \
@@ -86,6 +87,8 @@ python salesbench.py compile-vqa \
 ```
 
 `--allow-auto-candidates` 只用于 smoke/pilot 质量检查。没有该参数时，QuestionSpec 和 compiler 只接受 `human_accepted`，因此候选数据不会被误发成正式 benchmark。
+
+`--strict-semantic-verification` 会在英文问题实现后增加独立 QA 语义门禁：明确缺证据、Gold 过度推断、任务错位、答案不唯一或领域性不足的候选写入 `qa_rejected_candidates.jsonl`；API/解析故障写入 `qa_pipeline_diagnostics.jsonl`；只有真正存在两种合理解释的候选进入 `qa_human_review_queue.jsonl`。只有 `PASS` 项写入 `qa_realizations.jsonl`，因此坏 QA 不会再依赖人工审核阶段淘汰。
 
 ## 5. 构建翻页式审计 HTML
 

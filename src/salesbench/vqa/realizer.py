@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..goldbank.parsing import ModelOutputError, parse_json_object
@@ -13,11 +14,13 @@ from ..io_utils import read_jsonl, write_json, write_jsonl
 from ..utils import clean_text, contains_cjk
 from ..vlm.api_client import VLMClient
 from .prompts import (
+    QA_QUALITY_PROMPT_VERSION,
     QUESTION_REALIZER_PROMPT_VERSION,
     build_question_repair_prompt,
     build_question_realizer_prompt,
 )
 from .item_validator import validate_qa_candidate
+from .semantic_verifier import QASemanticVerdict, QASemanticVerification, verify_qa_candidate
 from .specs import QuestionRealization, QuestionSpec, build_question_specs
 
 
@@ -64,15 +67,37 @@ def _part_path(output_dir: Path, spec_id: str) -> Path:
     return output_dir / ".parts" / f"{spec_id}.json"
 
 
-def _fingerprint(spec: QuestionSpec, model: str) -> str:
+def _fingerprint(
+    spec: QuestionSpec,
+    model: str,
+    *,
+    strict_semantic_verification: bool = False,
+    verifier_model: str = "",
+) -> str:
     return stable_digest(
         {
             "spec": spec.to_dict(),
             "model": model,
             "prompt_version": QUESTION_REALIZER_PROMPT_VERSION,
+            "strict_semantic_verification": strict_semantic_verification,
+            "quality_prompt_version": (
+                QA_QUALITY_PROMPT_VERSION if strict_semantic_verification else "disabled"
+            ),
+            "verifier_model": verifier_model if strict_semantic_verification else "",
         },
         length=24,
     )
+
+
+@dataclass(frozen=True)
+class _RealizeOutcome:
+    spec: QuestionSpec
+    realization: QuestionRealization | None = None
+    error: str | None = None
+    repair_attempted: bool = False
+    disposition: str = "PASS"
+    verification: QASemanticVerification | None = None
+    candidate_snapshot: dict[str, object] | None = None
 
 
 def _parse_realization(raw: str, spec: QuestionSpec, model: str) -> QuestionRealization:
@@ -109,6 +134,8 @@ def run_qa_realizer(
     max_workers: int = 1,
     resume: bool = True,
     allow_auto_candidates: bool = False,
+    strict_semantic_verification: bool = False,
+    semantic_verifier_client: VLMClient | None = None,
 ) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     records = read_jsonl(evidence_dir / dataset_filename)
@@ -131,7 +158,9 @@ def run_qa_realizer(
         for item in read_jsonl(evidence_dir / "commercial_relations.jsonl")
     }
 
+    verifier_client = semantic_verifier_client or client
     realizations: dict[str, QuestionRealization] = {}
+    semantic_verifications: dict[str, dict[str, object]] = {}
     resumed_count = 0
     pending: list[QuestionSpec] = []
     for spec in specs:
@@ -139,9 +168,22 @@ def run_qa_realizer(
         if resume and part.exists():
             try:
                 payload = json.loads(part.read_text(encoding="utf-8"))
-                if clean_text(payload.get("fingerprint")) == _fingerprint(spec, client.model):
+                fingerprint = _fingerprint(
+                    spec,
+                    client.model,
+                    strict_semantic_verification=strict_semantic_verification,
+                    verifier_model=verifier_client.model,
+                )
+                cached_verification = payload.get("semantic_verification")
+                cache_is_acceptable = not strict_semantic_verification or (
+                    isinstance(cached_verification, dict)
+                    and clean_text(cached_verification.get("verdict")).upper() == "PASS"
+                )
+                if clean_text(payload.get("fingerprint")) == fingerprint and cache_is_acceptable:
                     realization = QuestionRealization(**payload["realization"])
                     realizations[spec.spec_id] = realization
+                    if isinstance(cached_verification, dict):
+                        semantic_verifications[spec.spec_id] = cached_verification
                     resumed_count += 1
                     continue
             except (json.JSONDecodeError, KeyError, TypeError, OSError):
@@ -149,10 +191,13 @@ def run_qa_realizer(
         pending.append(spec)
 
     failures: list[dict[str, object]] = []
+    rejected_candidates: list[dict[str, object]] = []
+    human_review_queue: list[dict[str, object]] = []
+    pipeline_diagnostics: list[dict[str, object]] = []
 
     def realize(
         spec: QuestionSpec,
-    ) -> tuple[QuestionSpec, QuestionRealization | None, str | None, bool]:
+    ) -> _RealizeOutcome:
         evidence_context = _context_by_ids(
             spec.evidence_refs,
             evidence_lookup,
@@ -183,9 +228,15 @@ def run_qa_realizer(
         )
         call = client.call_text_only(system, user, response_format="json_object")
         if not call.success:
-            return spec, None, call.error or "api_call_failed", False
+            return _RealizeOutcome(
+                spec,
+                error=call.error or "api_call_failed",
+                disposition="PIPELINE_DIAGNOSTIC",
+            )
+        realization: QuestionRealization | None = None
+        repair_attempted = False
         try:
-            return spec, _parse_realization(call.raw_response, spec, call.model), None, False
+            realization = _parse_realization(call.raw_response, spec, call.model)
         except (ModelOutputError, ValueError) as exc:
             initial_error = str(exc)
             try:
@@ -214,17 +265,83 @@ def run_qa_realizer(
                 repair_user,
                 response_format="json_object",
             )
+            repair_attempted = True
             if not repair_call.success:
-                return spec, None, repair_call.error or initial_error, True
-            try:
-                return (
+                return _RealizeOutcome(
                     spec,
-                    _parse_realization(repair_call.raw_response, spec, repair_call.model),
-                    None,
-                    True,
+                    error=repair_call.error or initial_error,
+                    repair_attempted=True,
+                    disposition="PIPELINE_DIAGNOSTIC",
+                )
+            try:
+                realization = _parse_realization(
+                    repair_call.raw_response,
+                    spec,
+                    repair_call.model,
                 )
             except (ModelOutputError, ValueError) as repair_exc:
-                return spec, None, str(repair_exc), True
+                return _RealizeOutcome(
+                    spec,
+                    error=str(repair_exc),
+                    repair_attempted=True,
+                    disposition="REJECT",
+                    candidate_snapshot={
+                        "question_spec": spec.to_dict(),
+                        "rejected_question": rejected_question,
+                    },
+                )
+
+        if realization is None:
+            return _RealizeOutcome(
+                spec,
+                error="realization_missing_after_surface_stage",
+                repair_attempted=repair_attempted,
+                disposition="PIPELINE_DIAGNOSTIC",
+            )
+        candidate_snapshot = {
+            "question_spec": spec.to_dict(),
+            "question": realization.question,
+            "evidence_units": evidence_context,
+            "commerce_cues": cue_context,
+            "commercial_relations": relation_context,
+        }
+        if not strict_semantic_verification:
+            return _RealizeOutcome(
+                spec,
+                realization=realization,
+                repair_attempted=repair_attempted,
+                candidate_snapshot=candidate_snapshot,
+            )
+        try:
+            verification = verify_qa_candidate(
+                verifier_client,
+                spec,
+                realization.question,
+                evidence_context,
+                cue_context,
+                relation_context,
+            )
+        except (ValueError, ModelOutputError) as exc:
+            return _RealizeOutcome(
+                spec,
+                error=str(exc),
+                repair_attempted=repair_attempted,
+                disposition="PIPELINE_DIAGNOSTIC",
+                candidate_snapshot=candidate_snapshot,
+            )
+        disposition = {
+            QASemanticVerdict.PASS: "PASS",
+            QASemanticVerdict.REJECT: "REJECT",
+            QASemanticVerdict.HUMAN_REVIEW: "HUMAN_REVIEW",
+        }[verification.verdict]
+        return _RealizeOutcome(
+            spec,
+            realization=realization if disposition == "PASS" else None,
+            repair_attempted=repair_attempted,
+            disposition=disposition,
+            verification=verification,
+            candidate_snapshot=candidate_snapshot,
+        )
 
     workers = max(1, int(max_workers))
     if workers == 1:
@@ -238,38 +355,114 @@ def run_qa_realizer(
 
     repaired_count = 0
     repair_attempted_count = 0
-    for spec, realization, error, repair_attempted in completed:
-        if repair_attempted:
+    for outcome in completed:
+        spec = outcome.spec
+        if outcome.repair_attempted:
             repair_attempted_count += 1
-        if realization is None:
+        verification_record = (
+            outcome.verification.to_dict() if outcome.verification is not None else None
+        )
+        if verification_record is not None:
+            semantic_verifications[spec.spec_id] = verification_record
+        quality_record = {
+            "spec_id": spec.spec_id,
+            "video_id": spec.video_id,
+            "annotation_id": spec.annotation_id,
+            "task_type": spec.task_type.value,
+            "reason": (
+                outcome.verification.reason
+                if outcome.verification is not None
+                else outcome.error or "unknown"
+            ),
+            "candidate_snapshot": outcome.candidate_snapshot or {"question_spec": spec.to_dict()},
+            "semantic_verification": verification_record,
+        }
+        if outcome.disposition == "REJECT":
+            rejected_candidates.append(
+                {
+                    **quality_record,
+                    "reason_code": (
+                        "QA_SEMANTIC_REJECT"
+                        if outcome.verification is not None
+                        else "QA_LOCAL_VALIDATION_REJECT"
+                    ),
+                }
+            )
+        elif outcome.disposition == "HUMAN_REVIEW":
+            human_review_queue.append(
+                {**quality_record, "reason_code": "QA_SEMANTIC_AMBIGUITY"}
+            )
+        elif outcome.disposition == "PIPELINE_DIAGNOSTIC":
+            diagnostic = {
+                **quality_record,
+                "reason_code": "QA_PIPELINE_FAILURE",
+                "stage": (
+                    "semantic_verification"
+                    if strict_semantic_verification
+                    and isinstance(outcome.candidate_snapshot, dict)
+                    and "question" in outcome.candidate_snapshot
+                    else "surface_realization"
+                ),
+            }
+            pipeline_diagnostics.append(diagnostic)
             failures.append(
                 {
                     "spec_id": spec.spec_id,
                     "video_id": spec.video_id,
                     "annotation_id": spec.annotation_id,
-                    "error": error or "unknown",
+                    "error": outcome.error or "unknown",
                 }
             )
+        if outcome.realization is None:
             continue
-        if repair_attempted:
+        if outcome.repair_attempted:
             repaired_count += 1
-        realizations[spec.spec_id] = realization
+        realizations[spec.spec_id] = outcome.realization
         part = _part_path(output_dir, spec.spec_id)
         part.parent.mkdir(parents=True, exist_ok=True)
         write_json(
             part,
             {
-                "fingerprint": _fingerprint(spec, client.model),
-                "realization": realization.to_dict(),
+                "fingerprint": _fingerprint(
+                    spec,
+                    client.model,
+                    strict_semantic_verification=strict_semantic_verification,
+                    verifier_model=verifier_client.model,
+                ),
+                "realization": outcome.realization.to_dict(),
+                "semantic_verification": verification_record,
             },
         )
 
     ordered = [realizations[spec.spec_id].to_dict() for spec in specs if spec.spec_id in realizations]
     write_jsonl(output_dir / "qa_realizations.jsonl", ordered)
     write_jsonl(output_dir / "qa_realizer_failures.jsonl", sorted(failures, key=lambda item: item["spec_id"]))
+    write_jsonl(
+        output_dir / "qa_semantic_verifications.jsonl",
+        [semantic_verifications[key] for key in sorted(semantic_verifications)],
+    )
+    write_jsonl(
+        output_dir / "qa_rejected_candidates.jsonl",
+        sorted(rejected_candidates, key=lambda item: item["spec_id"]),
+    )
+    write_jsonl(
+        output_dir / "qa_human_review_queue.jsonl",
+        sorted(human_review_queue, key=lambda item: item["spec_id"]),
+    )
+    write_jsonl(
+        output_dir / "qa_pipeline_diagnostics.jsonl",
+        sorted(pipeline_diagnostics, key=lambda item: item["spec_id"]),
+    )
     summary = {
         "prompt_version": QUESTION_REALIZER_PROMPT_VERSION,
         "model": client.model,
+        "strict_semantic_verification": strict_semantic_verification,
+        "quality_prompt_version": (
+            QA_QUALITY_PROMPT_VERSION if strict_semantic_verification else "disabled"
+        ),
+        "semantic_verifier_model": (
+            verifier_client.model if strict_semantic_verification else "disabled"
+        ),
         "dataset_file": str(evidence_dir / dataset_filename),
         "allow_auto_candidates": allow_auto_candidates,
         "counts": {
@@ -279,9 +472,31 @@ def run_qa_realizer(
             "resumed": resumed_count,
             "repair_attempted": repair_attempted_count,
             "repaired": repaired_count,
+            "semantic_rejected": sum(
+                1
+                for item in rejected_candidates
+                if item.get("reason_code") == "QA_SEMANTIC_REJECT"
+            ),
+            "local_rejected": sum(
+                1
+                for item in rejected_candidates
+                if item.get("reason_code") == "QA_LOCAL_VALIDATION_REJECT"
+            ),
+            "human_review": len(human_review_queue),
+            "pipeline_diagnostics": len(pipeline_diagnostics),
         },
         "fingerprint": stable_digest(
-            {"specs": [spec.to_dict() for spec in specs], "model": client.model},
+            {
+                "specs": [spec.to_dict() for spec in specs],
+                "model": client.model,
+                "strict_semantic_verification": strict_semantic_verification,
+                "quality_prompt_version": (
+                    QA_QUALITY_PROMPT_VERSION if strict_semantic_verification else "disabled"
+                ),
+                "semantic_verifier_model": (
+                    verifier_client.model if strict_semantic_verification else "disabled"
+                ),
+            },
             length=24,
         ),
     }
