@@ -27,13 +27,32 @@ HUMAN_REVIEW -> 仅限无法由帧和证据唯一判定的语义歧义
 | Question realizer | `question-realizer-prompt-v2` |
 | Judge | `judge-prompt-v5` |
 
-Smoke 和正式目录必须分开：
+Smoke 和正式目录必须分开。当前官方 API 运行使用以下不含密钥的命名：
 
 ```text
-outputs/evidence/v10_smoke5_gpt4o_yunwu/
-outputs/vqa/v10_smoke5_gpt4o_yunwu/
-outputs/evidence/v10_pilot64_gpt4o_yunwu/
-outputs/vqa/v10_pilot64_gpt4o_yunwu/
+outputs/evidence/v10_smoke5_qwen_deepseek_official/
+outputs/vqa/v10_smoke5_qwen_deepseek_official/
+outputs/evidence/v10_pilot64_qwen_deepseek_official/
+outputs/vqa/v10_pilot64_qwen_deepseek_official/
+```
+
+本地 `.env` 只保存 provider 配置，不进入 Git。视觉 Evidence 和 VQA 答题使用 Qwen，文本生成、语义门禁、审计翻译和 Judge 使用 DeepSeek：
+
+```dotenv
+QWEN_API_KEY=<local-secret>
+QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+QWEN_VISION_MODEL=qwen3-vl-plus
+DEEPSEEK_API_KEY=<local-secret>
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-pro
+```
+
+运行命令前加载 `.env`：
+
+```bash
+set -a
+source .env
+set +a
 ```
 
 ## 3. 先运行 5 视频严格 smoke
@@ -44,9 +63,9 @@ outputs/vqa/v10_pilot64_gpt4o_yunwu/
 python salesbench.py build-evidence-dataset \
   --config configs/benchmark_v1.json \
   --cohort-config configs/evidence_smoke_v10_5videos.json \
-  --output-dir outputs/evidence/v10_smoke5_gpt4o_yunwu \
-  --vision-model gpt-4o \
-  --text-model gpt-4o \
+  --output-dir outputs/evidence/v10_smoke5_qwen_deepseek_official \
+  --vision-model qwen3-vl-plus \
+  --text-model deepseek-v4-pro \
   --max-workers 2
 ```
 
@@ -70,18 +89,18 @@ python salesbench.py build-evidence-dataset \
 
 ```bash
 python salesbench.py realize-qa \
-  --evidence-dir outputs/evidence/v10_smoke5_gpt4o_yunwu \
+  --evidence-dir outputs/evidence/v10_smoke5_qwen_deepseek_official \
   --dataset-file video_evidence_dataset.jsonl \
-  --output-dir outputs/vqa/v10_smoke5_gpt4o_yunwu \
-  --text-model gpt-4o \
+  --output-dir outputs/vqa/v10_smoke5_qwen_deepseek_official \
+  --text-model deepseek-v4-pro \
   --strict-semantic-verification \
   --allow-auto-candidates
 
 python salesbench.py compile-vqa \
-  --evidence-dir outputs/evidence/v10_smoke5_gpt4o_yunwu \
+  --evidence-dir outputs/evidence/v10_smoke5_qwen_deepseek_official \
   --dataset-file video_evidence_dataset.jsonl \
-  --realizations outputs/vqa/v10_smoke5_gpt4o_yunwu/qa_realizations.jsonl \
-  --output-dir outputs/vqa/v10_smoke5_gpt4o_yunwu \
+  --realizations outputs/vqa/v10_smoke5_qwen_deepseek_official/qa_realizations.jsonl \
+  --output-dir outputs/vqa/v10_smoke5_qwen_deepseek_official \
   --allow-auto-candidates \
   --allow-missing-tasks
 ```
@@ -99,19 +118,42 @@ QA 输出目录的质量文件含义如下：
 - `qa_pipeline_diagnostics.jsonl`：API、解析或执行故障，不交给内容审核员；
 - `qa_accepted_sample.jsonl`：按任务稳定抽取约 10% 的 PASS QA，用来估计自动通过精度，不要求全量人工逐题确认。
 
-## 5. 构建翻页式审计 HTML
+## 5. 使用 Qwen 答题并由 DeepSeek Judge
+
+Qwen runner 只接收视频帧、ASR/字幕和英文问题；DeepSeek Judge 接收题目、Gold、模型答案及已公开的证据上下文：
+
+```bash
+python salesbench.py run-vqa-benchmark \
+  --config configs/benchmark_v1.json \
+  --vqa outputs/vqa/v10_smoke5_qwen_deepseek_official/vqa_gold_private.jsonl \
+  --output-dir outputs/evaluation/v10_smoke5_qwen_deepseek_official/predictions_qwen3_vl_plus \
+  --model qwen3-vl-plus \
+  --max-workers 2
+
+python salesbench.py evaluate-vqa-benchmark \
+  --config configs/benchmark_v1.json \
+  --gold outputs/vqa/v10_smoke5_qwen_deepseek_official/vqa_gold_private.jsonl \
+  --predictions outputs/evaluation/v10_smoke5_qwen_deepseek_official/predictions_qwen3_vl_plus/predictions.jsonl \
+  --output-dir outputs/evaluation/v10_smoke5_qwen_deepseek_official/judge_deepseek_v4_pro \
+  --judge-model deepseek-v4-pro \
+  --max-workers 2
+```
+
+缺失模型答案仍由本地规则计 0；Judge API 或解析失败必须作为失败显式保留，不能伪造评分。
+
+## 6. 构建翻页式审计 HTML
 
 中文仅作为审计 sidecar；Evidence、Prompt、QA、Gold、预测和 Judge canonical 内容仍为英文。
 
 ```bash
 python salesbench.py build-audit-translations \
-  --manifest configs/pilot64_gpt4o_v10_delivery.json \
-  --output outputs/audit/translations/v10_smoke/audit_translations.jsonl \
-  --model gpt-4o
+  --manifest configs/pilot64_qwen_deepseek_v10_delivery.json \
+  --output outputs/audit/translations/v10_smoke_qwen_deepseek/audit_translations.jsonl \
+  --model deepseek-v4-pro
 
 python -m tools.audit_workbench.build \
-  --manifest configs/pilot64_gpt4o_v10_delivery.json \
-  --translations outputs/audit/translations/v10_smoke/audit_translations.jsonl \
+  --manifest configs/pilot64_qwen_deepseek_v10_delivery.json \
+  --translations outputs/audit/translations/v10_smoke_qwen_deepseek/audit_translations.jsonl \
   --output outputs/audit/SalesBench_Quality_Audit_v10_smoke.html \
   --fragment outputs/audit/SalesBench_Quality_Audit_v10_smoke_fragment.html \
   --group smoke \
@@ -128,7 +170,7 @@ python -m tools.audit_workbench.build \
 6. QA：再分为人工语义审核、自动通过抽样、自动拒绝、流水线诊断和自动通过全集只读五个翻页队列；
 7. Judge：逐题翻页查看问题、Gold、模型输出、评分理由和实际使用的 Evidence。
 
-## 6. Smoke 验收后再启动 64 视频
+## 7. Smoke 验收后再启动 64 视频
 
 必须同时满足：
 
@@ -140,4 +182,4 @@ python -m tools.audit_workbench.build \
 - QA 无答案泄漏、泛化空问、明显公式模板和缺证据问题；
 - 公开、模型和 Judge payload 不含互动、粉丝、标题或私有分析字段。
 
-满足后，将 cohort 改为 `configs/evidence_pilot_v10_64videos.json`、输出改到 `v10_pilot64_gpt4o_yunwu`，执行相同命令。64 视频仍是 candidate pilot；完成质量校准与人工接受之前不能称为正式 Gold 或公开 benchmark。
+满足后，将 cohort 改为 `configs/evidence_pilot_v10_64videos.json`、输出改到 `v10_pilot64_qwen_deepseek_official`，执行相同命令。64 视频仍是 candidate pilot；完成质量校准与人工接受之前不能称为正式 Gold 或公开 benchmark。

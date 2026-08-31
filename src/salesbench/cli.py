@@ -18,6 +18,18 @@ def _env_or_arg(args: argparse.Namespace, attr: str, env_var: str) -> str | None
     return getattr(args, attr, None) or os.environ.get(env_var)
 
 
+def _first_env(*names: str) -> str | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def _arg_or_env(args: argparse.Namespace, attr: str, *env_vars: str) -> str | None:
+    return getattr(args, attr, None) or _first_env(*env_vars)
+
+
 def _path(value: str, repo_root: Path) -> Path:
     candidate = Path(value)
     return candidate if candidate.is_absolute() else repo_root / candidate
@@ -75,8 +87,19 @@ def build_evidence_dataset_command(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     ensure_output_dirs(config)
     default_key = _env_or_arg(args, "api_key", "OPENAI_API_KEY")
-    vision_key = args.vision_api_key or os.environ.get("VISION_API_KEY") or default_key
-    text_key = args.text_api_key or os.environ.get("TEXT_API_KEY") or default_key
+    vision_key = _arg_or_env(
+        args,
+        "vision_api_key",
+        "VISION_API_KEY",
+        "QWEN_API_KEY",
+        "DASHSCOPE_API_KEY",
+    ) or default_key
+    text_key = _arg_or_env(
+        args,
+        "text_api_key",
+        "TEXT_API_KEY",
+        "DEEPSEEK_API_KEY",
+    ) or default_key
     if not vision_key or not text_key:
         raise ValueError("Evidence generation requires vision and text provider API keys")
     summary = build_gold_bank_dataset(
@@ -89,11 +112,32 @@ def build_evidence_dataset_command(args: argparse.Namespace) -> int:
         max_workers=args.max_workers,
         resume=args.resume,
         vision_api_key=vision_key,
-        vision_model=args.vision_model or os.environ.get("VISION_MODEL") or args.model,
-        vision_base_url=args.vision_base_url or os.environ.get("VISION_BASE_URL"),
+        vision_model=_arg_or_env(
+            args,
+            "vision_model",
+            "VISION_MODEL",
+            "QWEN_VISION_MODEL",
+        ) or args.model,
+        vision_base_url=_arg_or_env(
+            args,
+            "vision_base_url",
+            "VISION_BASE_URL",
+            "QWEN_BASE_URL",
+            "DASHSCOPE_BASE_URL",
+        ),
         text_api_key=text_key,
-        text_model=args.text_model or os.environ.get("TEXT_MODEL") or args.model,
-        text_base_url=args.text_base_url or os.environ.get("TEXT_BASE_URL") or _env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
+        text_model=_arg_or_env(
+            args,
+            "text_model",
+            "TEXT_MODEL",
+            "DEEPSEEK_MODEL",
+        ) or args.model,
+        text_base_url=_arg_or_env(
+            args,
+            "text_base_url",
+            "TEXT_BASE_URL",
+            "DEEPSEEK_BASE_URL",
+        ) or _env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
@@ -117,13 +161,32 @@ def realize_qa_command(args: argparse.Namespace) -> int:
     from .vlm.api_client import VLMClient
     from .vqa.realizer import run_qa_realizer
 
-    api_key = args.text_api_key or os.environ.get("TEXT_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    api_key = _arg_or_env(
+        args,
+        "text_api_key",
+        "TEXT_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "OPENAI_API_KEY",
+    )
     if not api_key:
-        raise ValueError("QA realization requires --text-api-key, TEXT_API_KEY, or OPENAI_API_KEY")
+        raise ValueError(
+            "QA realization requires --text-api-key, TEXT_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY"
+        )
     client = VLMClient(
         api_key=api_key,
-        model=args.text_model,
-        base_url=args.text_base_url or os.environ.get("TEXT_BASE_URL") or os.environ.get("OPENAI_BASE_URL"),
+        model=_arg_or_env(
+            args,
+            "text_model",
+            "TEXT_MODEL",
+            "DEEPSEEK_MODEL",
+        ) or "gpt-4o",
+        base_url=_arg_or_env(
+            args,
+            "text_base_url",
+            "TEXT_BASE_URL",
+            "DEEPSEEK_BASE_URL",
+            "OPENAI_BASE_URL",
+        ),
         max_tokens=1024,
     )
     summary = run_qa_realizer(
@@ -144,14 +207,33 @@ def build_audit_translations_command(args: argparse.Namespace) -> int:
     from .audit_translation import collect_audit_translation_jobs, run_audit_translations
     from .vlm.api_client import VLMClient
 
-    api_key = args.api_key or os.environ.get("OPENAI_API_KEY")
+    api_key = _arg_or_env(
+        args,
+        "api_key",
+        "TEXT_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "OPENAI_API_KEY",
+    )
     if not api_key:
-        raise ValueError("Audit translation requires --api-key or OPENAI_API_KEY")
+        raise ValueError(
+            "Audit translation requires --api-key, TEXT_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY"
+        )
     manifest = Path(args.manifest)
     client = VLMClient(
         api_key=api_key,
-        model=args.model,
-        base_url=args.base_url or os.environ.get("OPENAI_BASE_URL"),
+        model=_arg_or_env(
+            args,
+            "model",
+            "TEXT_MODEL",
+            "DEEPSEEK_MODEL",
+        ) or "gpt-4o",
+        base_url=_arg_or_env(
+            args,
+            "base_url",
+            "TEXT_BASE_URL",
+            "DEEPSEEK_BASE_URL",
+            "OPENAI_BASE_URL",
+        ),
         max_tokens=4096,
     )
     jobs = collect_audit_translation_jobs(
@@ -192,16 +274,39 @@ def run_vqa_benchmark_command(args: argparse.Namespace) -> int:
     from .vqa_baseline.runner import run_salesbench_qa_baseline
 
     config = load_config(args.config)
-    api_key = _env_or_arg(args, "api_key", "OPENAI_API_KEY")
+    api_key = _arg_or_env(
+        args,
+        "api_key",
+        "VISION_API_KEY",
+        "QWEN_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "OPENAI_API_KEY",
+    )
     if not api_key:
-        raise ValueError("OpenAI-compatible runner requires --api-key or OPENAI_API_KEY")
+        raise ValueError(
+            "OpenAI-compatible runner requires --api-key, VISION_API_KEY, QWEN_API_KEY, "
+            "DASHSCOPE_API_KEY, or OPENAI_API_KEY"
+        )
+    model = _arg_or_env(
+        args,
+        "model",
+        "VISION_MODEL",
+        "QWEN_VISION_MODEL",
+    ) or "gpt-4o"
     summary = run_salesbench_qa_baseline(
         config=config,
         vqa_path=_path(args.vqa, config.repo_root),
         output_dir=_path(args.output_dir, config.repo_root),
         api_key=api_key,
-        model=args.model,
-        base_url=_env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
+        model=model,
+        base_url=_arg_or_env(
+            args,
+            "base_url",
+            "VISION_BASE_URL",
+            "QWEN_BASE_URL",
+            "DASHSCOPE_BASE_URL",
+            "OPENAI_BASE_URL",
+        ),
         max_samples=args.max_samples,
         max_workers=args.max_workers,
     )
@@ -213,16 +318,35 @@ def evaluate_vqa_benchmark_command(args: argparse.Namespace) -> int:
     from .vqa_evaluate.runner import evaluate_salesbench_qa_files
 
     config = load_config(args.config)
-    api_key = _env_or_arg(args, "api_key", "OPENAI_API_KEY")
+    api_key = _arg_or_env(
+        args,
+        "api_key",
+        "TEXT_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "OPENAI_API_KEY",
+    )
     if not api_key:
-        raise ValueError("LLM-as-Judge requires --api-key or OPENAI_API_KEY")
+        raise ValueError(
+            "LLM-as-Judge requires --api-key, TEXT_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY"
+        )
     report = evaluate_salesbench_qa_files(
         gold_path=_path(args.gold, config.repo_root),
         answers_path=_path(args.predictions, config.repo_root),
         output_dir=_path(args.output_dir, config.repo_root),
         api_key=api_key,
-        judge_model=args.judge_model,
-        base_url=_env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
+        judge_model=_arg_or_env(
+            args,
+            "judge_model",
+            "TEXT_MODEL",
+            "DEEPSEEK_MODEL",
+        ) or "gpt-4o",
+        base_url=_arg_or_env(
+            args,
+            "base_url",
+            "TEXT_BASE_URL",
+            "DEEPSEEK_BASE_URL",
+            "OPENAI_BASE_URL",
+        ),
         max_workers=args.max_workers,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -312,7 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
     realize.add_argument("--output-dir", required=True)
     realize.add_argument("--text-api-key", default=None)
     realize.add_argument("--text-base-url", default=None)
-    realize.add_argument("--text-model", default="gpt-4o")
+    realize.add_argument("--text-model", default=None)
     realize.add_argument("--max-workers", type=int, default=2)
     realize.add_argument("--no-resume", action="store_false", dest="resume")
     realize.add_argument(
@@ -332,7 +456,7 @@ def build_parser() -> argparse.ArgumentParser:
     translations.add_argument("--output", required=True)
     translations.add_argument("--api-key", default=None)
     translations.add_argument("--base-url", default=None)
-    translations.add_argument("--model", default="gpt-4o")
+    translations.add_argument("--model", default=None)
     translations.add_argument("--batch-size", type=int, default=20)
     translations.add_argument("--skip-prompts", action="store_true")
     translations.set_defaults(func=build_audit_translations_command)
@@ -358,7 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--output-dir", default="outputs/vqa/v2/run")
     run_parser.add_argument("--api-key", default=None)
     run_parser.add_argument("--base-url", default=None)
-    run_parser.add_argument("--model", default="gpt-4o")
+    run_parser.add_argument("--model", default=None)
     run_parser.add_argument("--max-samples", type=int, default=None)
     run_parser.add_argument("--max-workers", type=int, default=2)
     run_parser.set_defaults(func=run_vqa_benchmark_command)
@@ -370,7 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--output-dir", default="outputs/vqa/v2/evaluation")
     evaluate.add_argument("--api-key", default=None)
     evaluate.add_argument("--base-url", default=None)
-    evaluate.add_argument("--judge-model", default="gpt-4o")
+    evaluate.add_argument("--judge-model", default=None)
     evaluate.add_argument("--max-workers", type=int, default=4)
     evaluate.set_defaults(func=evaluate_vqa_benchmark_command)
 

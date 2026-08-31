@@ -1,0 +1,47 @@
+{
+  "version": "pilot64-qwen-deepseek-v10-candidate",
+  "release_status": "candidate_requires_human_review",
+  "generation_models": {
+    "vision": "qwen3-vl-plus",
+    "text": "deepseek-v4-pro"
+  },
+  "tested_model": "qwen3-vl-plus",
+  "judge_model": "deepseek-v4-pro",
+  "frame_cache_root": "outputs/cache/frames",
+  "versions": {
+    "schema": "evidence-dataset-schema-v4",
+    "prompt": "evidence-prompt-v10",
+    "pipeline": "evidence-first-pipeline-v10",
+    "quality_prompt": "quality-gate-prompt-v1",
+    "compiler": "evidence-qa-compiler-v7",
+    "question_realizer": "question-realizer-prompt-v2",
+    "judge": "judge-prompt-v5",
+    "audit_translation": "audit-translation-prompt-v1"
+  },
+  "formal": {
+    "root": "outputs/formal/pilot64_qwen_deepseek_v10_candidate",
+    "artifacts": {
+      "evidence": {"source": "outputs/evidence/v10_pilot64_qwen_deepseek_official"},
+      "qa": {
+        "source": "outputs/vqa/v10_pilot64_qwen_deepseek_official",
+        "exclude": ["run_*", "evaluation_*"]
+      },
+      "model_run": {"source": "outputs/evaluation/v10_pilot64_qwen_deepseek_official/predictions_qwen3_vl_plus"},
+      "evaluation": {"source": "outputs/evaluation/v10_pilot64_qwen_deepseek_official/judge_deepseek_v4_pro"},
+      "audit_translations": {"source": "outputs/audit/translations/v10_pilot64_qwen_deepseek/audit_translations.jsonl"}
+    }
+  },
+  "smoke": {
+    "root": "outputs/smoke/qwen_deepseek_v10_candidate",
+    "artifacts": {
+      "evidence": {"source": "outputs/evidence/v10_smoke5_qwen_deepseek_official"},
+      "qa": {
+        "source": "outputs/vqa/v10_smoke5_qwen_deepseek_official",
+        "exclude": ["run_*", "evaluation_*"]
+      },
+      "model_run": {"source": "outputs/evaluation/v10_smoke5_qwen_deepseek_official/predictions_qwen3_vl_plus"},
+      "evaluation": {"source": "outputs/evaluation/v10_smoke5_qwen_deepseek_official/judge_deepseek_v4_pro"},
+      "audit_translations": {"source": "outputs/audit/translations/v10_smoke_qwen_deepseek/audit_translations.jsonl"}
+    }
+  }
+}
