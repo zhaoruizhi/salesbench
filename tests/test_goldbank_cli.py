@@ -227,6 +227,46 @@ class GoldBankCLITest(unittest.TestCase):
         self.assertEqual(client.call_args.kwargs["base_url"], "https://deepseek.example/v1")
         self.assertEqual(client.call_args.kwargs["model"], "deepseek-text")
 
+    @patch.dict(
+        "os.environ",
+        {
+            "DEEPSEEK_API_KEY": "deepseek-key",
+            "DEEPSEEK_BASE_URL": "https://deepseek.example/v1",
+            "DEEPSEEK_MODEL": "deepseek-text",
+            "QWEN_API_KEY": "qwen-key",
+            "QWEN_BASE_URL": "https://qwen.example/v1",
+            "QWEN_VISION_MODEL": "qwen3-vl-plus",
+        },
+        clear=True,
+    )
+    @patch("salesbench.audit_translation.run_audit_translations")
+    @patch("salesbench.audit_translation.collect_audit_translation_jobs")
+    @patch("salesbench.vlm.api_client.VLMClient")
+    def test_audit_translation_routes_explicit_qwen_model_to_qwen_provider(
+        self,
+        client,
+        collect_jobs,
+        run_translations,
+    ):
+        collect_jobs.return_value = []
+        run_translations.return_value = {"ok": True}
+        args = build_parser().parse_args(
+            [
+                "build-audit-translations",
+                "--manifest",
+                "configs/pilot64_qwen_deepseek_v10_delivery.json",
+                "--output",
+                "translations.jsonl",
+                "--model",
+                "qwen3-vl-plus",
+            ]
+        )
+
+        self.assertEqual(build_audit_translations_command(args), 0)
+        self.assertEqual(client.call_args.kwargs["api_key"], "qwen-key")
+        self.assertEqual(client.call_args.kwargs["base_url"], "https://qwen.example/v1")
+        self.assertEqual(client.call_args.kwargs["model"], "qwen3-vl-plus")
+
     @patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=False)
     @patch("salesbench.goldbank.runner.build_gold_bank_dataset")
     @patch("salesbench.cli.ensure_output_dirs")

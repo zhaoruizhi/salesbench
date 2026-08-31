@@ -208,33 +208,54 @@ def build_audit_translations_command(args: argparse.Namespace) -> int:
     from .audit_translation import collect_audit_translation_jobs, run_audit_translations
     from .vlm.api_client import VLMClient
 
-    api_key = _arg_or_env(
+    model = _arg_or_env(
         args,
-        "api_key",
-        "TEXT_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "OPENAI_API_KEY",
-    )
-    if not api_key:
-        raise ValueError(
-            "Audit translation requires --api-key, TEXT_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY"
-        )
-    manifest = Path(args.manifest)
-    client = VLMClient(
-        api_key=api_key,
-        model=_arg_or_env(
+        "model",
+        "TEXT_MODEL",
+        "DEEPSEEK_MODEL",
+    ) or "gpt-4o"
+    use_qwen_provider = "qwen" in model.casefold()
+    if use_qwen_provider:
+        api_key = _arg_or_env(
             args,
-            "model",
-            "TEXT_MODEL",
-            "DEEPSEEK_MODEL",
-        ) or "gpt-4o",
-        base_url=_arg_or_env(
+            "api_key",
+            "QWEN_API_KEY",
+            "DASHSCOPE_API_KEY",
+            "VISION_API_KEY",
+            "OPENAI_API_KEY",
+        )
+        base_url = _arg_or_env(
+            args,
+            "base_url",
+            "QWEN_BASE_URL",
+            "DASHSCOPE_BASE_URL",
+            "VISION_BASE_URL",
+            "OPENAI_BASE_URL",
+        )
+    else:
+        api_key = _arg_or_env(
+            args,
+            "api_key",
+            "TEXT_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "OPENAI_API_KEY",
+        )
+        base_url = _arg_or_env(
             args,
             "base_url",
             "TEXT_BASE_URL",
             "DEEPSEEK_BASE_URL",
             "OPENAI_BASE_URL",
-        ),
+        )
+    if not api_key:
+        raise ValueError(
+            "Audit translation requires credentials for the provider selected by --model"
+        )
+    manifest = Path(args.manifest)
+    client = VLMClient(
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
         max_tokens=4096,
         disable_thinking=True,
     )
