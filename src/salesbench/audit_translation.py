@@ -14,6 +14,7 @@ from .audit_translation_prompts import (
     build_audit_translation_prompt,
 )
 from .goldbank.parsing import ModelOutputError, parse_json_object
+from .goldbank.validators import PRIVATE_KEYS
 from .goldbank.prompts import (
     BP_COMPILER_CONTRACT,
     build_adjudicator_prompt,
@@ -110,15 +111,19 @@ def build_translation_job(
     normalized_field = clean_text(source_field)
     if not normalized_type or not normalized_id or not normalized_field:
         raise ValueError("Audit translation requires object type, id, and source field")
+    source_sha256 = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
     return TranslationJob(
-        translation_id=f"audit_translation::{normalized_type}::{normalized_id}::{normalized_field}",
+        translation_id=(
+            f"audit_translation::{normalized_type}::{normalized_id}::{normalized_field}::"
+            f"{source_sha256[:12]}"
+        ),
         object_type=normalized_type,
         object_id=normalized_id,
         source_field=normalized_field,
         source_text=normalized_text,
         source_language="en",
         target_language="zh-CN",
-        source_sha256=hashlib.sha256(normalized_text.encode("utf-8")).hexdigest(),
+        source_sha256=source_sha256,
         audit_only=True,
     )
 
@@ -207,6 +212,60 @@ def _add_jobs(
                 )
 
 
+def _is_private_key(key: object) -> bool:
+    normalized = clean_text(key).lower()
+    return normalized in PRIVATE_KEYS or normalized.startswith("followers")
+
+
+def _public_audit_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            clean_text(key): _public_audit_value(item)
+            for key, item in value.items()
+            if not _is_private_key(key)
+        }
+    if isinstance(value, list):
+        return [_public_audit_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_public_audit_value(item) for item in value]
+    return value
+
+
+def _audit_text(value: object) -> str:
+    public_value = _public_audit_value(value)
+    if public_value in (None, "", [], {}):
+        return ""
+    if isinstance(public_value, (dict, list)):
+        return json.dumps(public_value, ensure_ascii=False, sort_keys=True)
+    return clean_text(public_value)
+
+
+def _add_audit_fields(
+    jobs: list[TranslationJob],
+    rows: list[dict[str, object]],
+    object_type: str,
+    id_fields: tuple[str, ...],
+    fields: tuple[str, ...],
+) -> None:
+    for ordinal, row in enumerate(rows):
+        object_id = next(
+            (clean_text(row.get(field)) for field in id_fields if clean_text(row.get(field))),
+            f"row-{ordinal:06d}",
+        )
+        for field in fields:
+            text = _audit_text(row.get(field))
+            if not text:
+                continue
+            jobs.append(
+                build_translation_job(
+                    object_type=object_type,
+                    object_id=object_id,
+                    source_field=field,
+                    source_text=text,
+                )
+            )
+
+
 def collect_audit_translation_jobs(
     manifest_path: Path,
     *,
@@ -227,12 +286,94 @@ def collect_audit_translation_jobs(
             _add_jobs(jobs, _existing_rows(root / "evidence_units.jsonl"), "evidence_unit", ("evidence_id",), ("content_en",))
             _add_jobs(jobs, _existing_rows(root / "commerce_cues.jsonl"), "commerce_cue", ("cue_id",), ("content_en",))
             _add_jobs(jobs, _existing_rows(root / "commercial_relations.jsonl"), "commercial_relation", ("relation_id",), ("rationale_en",))
+            annotations = [
+                annotation
+                for record in _existing_rows(root / "video_evidence_dataset.jsonl")
+                for annotation in record.get("grounded_annotations", []) or []
+                if isinstance(annotation, dict)
+            ]
+            _add_audit_fields(
+                jobs,
+                annotations,
+                "annotation",
+                ("annotation_id", "gold_id"),
+                ("question_intent", "target", "gold_value", "forbidden_inferences"),
+            )
+            _add_audit_fields(
+                jobs,
+                _existing_rows(root / "gold_proposals.jsonl"),
+                "gold_proposal",
+                ("proposal_id",),
+                ("question_intent", "target", "proposed_gold", "reasoning_edges"),
+            )
+            _add_audit_fields(
+                jobs,
+                _existing_rows(root / "gold_reviews.jsonl"),
+                "gold_review",
+                ("review_id", "proposal_id"),
+                ("reason", "rationale", "issues", "suggested_revision"),
+            )
+            for filename, object_type in (
+                ("human_review_queue.jsonl", "evidence_review"),
+                ("rejected_candidates.jsonl", "evidence_rejection"),
+                ("pipeline_diagnostics.jsonl", "pipeline_diagnostic"),
+            ):
+                _add_audit_fields(
+                    jobs,
+                    _existing_rows(root / filename),
+                    object_type,
+                    ("review_item_id", "decision_id", "proposal_id", "video_id"),
+                    (
+                        "reason",
+                        "issues",
+                        "target",
+                        "candidate_gold",
+                        "candidate_snapshot",
+                    ),
+                )
+            _add_audit_fields(
+                jobs,
+                _existing_rows(root / "quality_decisions.jsonl"),
+                "quality_decision",
+                ("decision_id",),
+                ("reason", "candidate_snapshot", "verifier_result"),
+            )
         qa_source = artifacts.get("qa", {}).get("source") if isinstance(artifacts.get("qa"), dict) else None
         if qa_source:
             root = _path(qa_source, repo_root)
             _add_jobs(jobs, _existing_rows(root / "qa_specs.jsonl"), "question_spec", ("spec_id",), ("question_intent", "gold_answer"))
+            _add_audit_fields(
+                jobs,
+                _existing_rows(root / "qa_specs.jsonl"),
+                "question_spec",
+                ("spec_id",),
+                ("target", "forbidden_inferences"),
+            )
             _add_jobs(jobs, _existing_rows(root / "qa_realizations.jsonl"), "question_realization", ("spec_id",), ("question",))
             _add_jobs(jobs, _existing_rows(root / "vqa_gold_private.jsonl"), "qa", ("vqa_id",), ("question", "gold_answer"))
+            for filename, object_type in (
+                ("qa_rejected_candidates.jsonl", "qa_rejection"),
+                ("qa_human_review_queue.jsonl", "qa_human_review"),
+                ("qa_pipeline_diagnostics.jsonl", "qa_diagnostic"),
+                ("qa_accepted_sample.jsonl", "qa_accepted_sample"),
+            ):
+                _add_audit_fields(
+                    jobs,
+                    _existing_rows(root / filename),
+                    object_type,
+                    ("spec_id", "vqa_id"),
+                    ("reason", "issues", "candidate_snapshot", "semantic_verification"),
+                )
+        model_run_source = artifacts.get("model_run", {}).get("source") if isinstance(artifacts.get("model_run"), dict) else None
+        if model_run_source:
+            root = _path(model_run_source, repo_root)
+            _add_jobs(
+                jobs,
+                _existing_rows(root / "predictions.jsonl"),
+                "model_prediction",
+                ("vqa_id",),
+                ("answer", "prediction"),
+            )
         evaluation_source = artifacts.get("evaluation", {}).get("source") if isinstance(artifacts.get("evaluation"), dict) else None
         if evaluation_source:
             root = _path(evaluation_source, repo_root)
