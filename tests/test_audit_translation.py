@@ -151,6 +151,36 @@ def test_machine_code_reason_gets_deterministic_chinese_audit_label(tmp_path: Pa
     assert translations[0].translation_method == "deterministic-machine-code-v1"
 
 
+def test_structured_machine_diagnostic_gets_deterministic_chinese_label(tmp_path: Path):
+    source = json.dumps(
+        [
+            {
+                "code": "MISSING_COMMERCIAL_RELATION",
+                "item_id": "7359538830657064192_ss_proposer_ss_000_c551ee7351f0",
+                "message": "RELATION_PATH_REQUIRED",
+                "severity": "ERROR",
+            }
+        ],
+        sort_keys=True,
+    )
+    job = build_translation_job(
+        object_type="evidence_rejection",
+        object_id="r1",
+        source_field="issues",
+        source_text=source,
+    )
+    client = FakeTranslationClient()
+    output = tmp_path / "translations.jsonl"
+
+    summary = run_audit_translations([job], output, client, batch_size=1)
+    translation = load_audit_translations(output)[0]
+
+    assert summary["counts"]["translated"] == 1
+    assert client.calls == 0
+    assert translation.translated_text == f"审计诊断：{source}"
+    assert translation.translation_method == "deterministic-machine-diagnostic-v1"
+
+
 def test_runner_safely_appends_missing_controlled_tokens_to_chinese_translation(tmp_path: Path):
     job = build_translation_job(
         object_type="evidence_unit",

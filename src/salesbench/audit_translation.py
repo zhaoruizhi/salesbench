@@ -39,6 +39,7 @@ from .vqa_evaluate.prompts import JUDGE_SYSTEM_PROMPT
 _NUMBER_RE = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
 _CONTROLLED_TOKEN_RE = re.compile(r"\b[A-Z][A-Z0-9_]{2,}\b")
 _MACHINE_CODE_RE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
+_MACHINE_VALUE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]*")
 _CACHEABLE_PROMPT_VERSIONS = {
     "audit-translation-prompt-v1",
     AUDIT_TRANSLATION_PROMPT_VERSION,
@@ -157,6 +158,29 @@ def _append_missing_controlled_tokens(source_text: str, translated_text: str) ->
     if not missing:
         return translated
     return f"{translated}（保留标记：{'、'.join(missing)}）"
+
+
+def _is_structured_machine_diagnostic(source_text: str) -> bool:
+    try:
+        payload = json.loads(source_text)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(payload, (dict, list)):
+        return False
+    values: list[str] = []
+
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            for item in value.values():
+                collect(item)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+        elif isinstance(value, str):
+            values.append(value)
+
+    collect(payload)
+    return bool(values) and all(_MACHINE_VALUE_RE.fullmatch(value) for value in values)
 
 
 def _prompt_jobs() -> list[TranslationJob]:
@@ -463,6 +487,21 @@ def run_audit_translations(
                 source_sha256=job.source_sha256,
                 translated_text=f"审计代码：{job.source_text}",
                 translation_method="deterministic-machine-code-v1",
+                prompt_version=AUDIT_TRANSLATION_PROMPT_VERSION,
+                audit_only=True,
+            )
+            translated += 1
+        elif _is_structured_machine_diagnostic(job.source_text):
+            current[key] = AuditTranslation(
+                translation_id=job.translation_id,
+                object_type=job.object_type,
+                object_id=job.object_id,
+                source_field=job.source_field,
+                source_language=job.source_language,
+                target_language=job.target_language,
+                source_sha256=job.source_sha256,
+                translated_text=f"审计诊断：{job.source_text}",
+                translation_method="deterministic-machine-diagnostic-v1",
                 prompt_version=AUDIT_TRANSLATION_PROMPT_VERSION,
                 audit_only=True,
             )
