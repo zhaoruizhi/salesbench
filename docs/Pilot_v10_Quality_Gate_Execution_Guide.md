@@ -21,9 +21,9 @@ HUMAN_REVIEW -> 仅限无法由帧和证据唯一判定的语义歧义
 | --- | --- |
 | Evidence schema | `evidence-dataset-schema-v4` |
 | Evidence/Commerce prompt | `evidence-prompt-v10.2` |
-| Pipeline | `evidence-first-pipeline-v10.2` |
+| Pipeline | `evidence-first-pipeline-v10.3` |
 | Semantic quality prompt | `quality-gate-prompt-v2` |
-| QA compiler | `evidence-qa-compiler-v7` |
+| QA compiler | `evidence-qa-compiler-v8` |
 | Question realizer | `question-realizer-prompt-v2` |
 | Judge | `judge-prompt-v5` |
 

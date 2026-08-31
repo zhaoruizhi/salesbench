@@ -537,6 +537,47 @@ class GoldBankPipelineTest(unittest.TestCase):
         )
         self.assertIn("what the speaker states", proposals[0].question_intent.lower())
 
+    def test_bp_does_not_repeat_existing_speaker_attribution(self):
+        evidence = EvidenceUnit(
+            evidence_id="v1_asr_000_suggestion",
+            video_id="v1",
+            modality=EvidenceModality.ASR,
+            start_s=0.0,
+            end_s=1.0,
+            frame_indices=(),
+            text_span="可以配牛奶",
+            subject="speaker",
+            predicate="suggests",
+            value="pairing the bread with milk",
+            attributes={},
+            source_domains=("C2_audio_speech",),
+            extractor="test",
+            confidence=0.95,
+            timestamp_status="available",
+            content_en="The speaker suggests pairing the bread with milk.",
+            source_text_native="可以配牛奶",
+        )
+        scenario = CommerceCue(
+            cue_id="cue_scenario",
+            video_id="v1",
+            cue_type=CueType.USAGE_SCENARIO,
+            content_en="The speaker suggests pairing the bread with milk.",
+            source_text_native="可以配牛奶",
+            evidence_ids=(evidence.evidence_id,),
+            attributes={},
+            directness="DIRECT",
+            theory_tags=("usage_scenario",),
+            extractor="test",
+            confidence=0.95,
+        )
+
+        proposals = build_bp_proposals_from_graph("v1", [evidence], [scenario], [])
+
+        self.assertEqual(
+            proposals[0].proposed_gold["answer"],
+            "The speaker suggests pairing the bread with milk.",
+        )
+
     def test_v7_adjudicator_decision_reconstructs_annotation_locally(self):
         responses = successful_v7_responses()
         vlm = FakeGoldClient(responses[:1])

@@ -10,7 +10,7 @@ import re
 from ..goldbank.schema import GoldItem, stable_digest
 from ..goldbank.validators import PRIVATE_KEYS
 from ..io_utils import read_json, read_jsonl, write_json, write_jsonl
-from ..utils import clean_text, contains_cjk
+from ..utils import clean_text, contains_cjk, normalize_speaker_attribution
 from .goldbank_loader import load_compilable_gold
 from .item_validator import answer_type_for_task, validate_qa_candidate
 from .prompts import QA_QUALITY_PROMPT_VERSION
@@ -19,7 +19,7 @@ from .realizer import validate_realized_question
 from .specs import make_question_spec_id
 
 
-COMPILER_VERSION = "evidence-qa-compiler-v7"
+COMPILER_VERSION = "evidence-qa-compiler-v8"
 
 
 @dataclass(frozen=True)
@@ -144,6 +144,7 @@ def compile_qa_records(
                         }
                     )
                     continue
+            answer = normalize_speaker_attribution(answer)
             if _question_leaks_answer(question, answer):
                 validation.append({"gold_id": item.gold_id, "status": "rejected", "reason": "question_leaks_answer"})
                 continue
@@ -207,9 +208,9 @@ def _first_answer(item: GoldItem) -> str:
     for key in ("answer", "value", "action", "relation", "usage_context", "label"):
         value = item.gold_value.get(key)
         if value not in (None, ""):
-            return clean_text(value)
+            return normalize_speaker_attribution(value)
     if item.gold_value:
-        return clean_text(item.gold_value[sorted(item.gold_value)[0]])
+        return normalize_speaker_attribution(item.gold_value[sorted(item.gold_value)[0]])
     return ""
 
 

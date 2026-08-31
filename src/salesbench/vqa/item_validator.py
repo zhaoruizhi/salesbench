@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ..goldbank.commerce_schema import RelationType
 from ..goldbank.schema import GoldTaskType
 from ..utils import clean_text, contains_cjk
 
@@ -20,12 +21,35 @@ _GENERIC_QUESTIONS = {
     "what is happening",
     "what is the main point",
 }
+_BENCHMARK_META_MARKERS = (
+    "evidenceunit",
+    "evidence unit",
+    "commercecue",
+    "commerce cue",
+    "commercialrelation",
+    "commercial relation",
+    "evidence_id",
+    "evidence_refs",
+    "cue_id",
+    "relation_id",
+    "spec_id",
+    "task_type",
+    "task_subtype",
+)
+_RELATION_ENUM_TOKENS = tuple(relation.value.lower() for relation in RelationType)
 
 
 def _task(value: Any) -> GoldTaskType:
     if isinstance(value, GoldTaskType):
         return value
     return GoldTaskType(clean_text(value).upper())
+
+
+def _contains_benchmark_meta(value: object) -> bool:
+    lowered = clean_text(value).lower()
+    return any(marker in lowered for marker in _BENCHMARK_META_MARKERS) or any(
+        re.search(rf"\b{re.escape(token)}\b", lowered) for token in _RELATION_ENUM_TOKENS
+    )
 
 
 def answer_type_for_task(task_type: GoldTaskType | str, answer: str) -> str:
@@ -72,12 +96,15 @@ def validate_question_spec(
         issues.append("MISSING_COMMERCE_GRAPH_REF")
     if not getattr(spec, "target", None):
         issues.append("MISSING_TARGET")
-    if not clean_text(getattr(spec, "gold_answer", "")):
+    gold_answer = clean_text(getattr(spec, "gold_answer", ""))
+    if not gold_answer:
         issues.append("MISSING_GOLD_ANSWER")
+    if _contains_benchmark_meta(gold_answer):
+        issues.append("BENCHMARK_META_LEAKAGE")
     if not clean_text(getattr(spec, "question_intent", "")):
         issues.append("MISSING_QUESTION_INTENT")
     expected_answer_type = answer_type_for_task(
-        task, clean_text(getattr(spec, "gold_answer", ""))
+        task, gold_answer
     )
     if clean_text(getattr(spec, "answer_type", "")) != expected_answer_type:
         issues.append("ANSWER_TYPE_MISMATCH")
@@ -108,6 +135,8 @@ def validate_qa_candidate(
         issues.append("ANSWER_LEAKAGE")
     if contains_cjk(answer):
         issues.append("NON_ENGLISH_GOLD_ANSWER")
+    if _contains_benchmark_meta(normalized) or _contains_benchmark_meta(answer):
+        issues.append("BENCHMARK_META_LEAKAGE")
 
     task = _task(getattr(spec_or_item, "task_type", ""))
     answer_type = answer_type_for_task(task, answer)

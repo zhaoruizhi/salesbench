@@ -8,7 +8,7 @@ from typing import Any
 
 from ..multiagent.context import public_observation_context
 from ..multiagent.schema import VideoContextBundle
-from ..utils import clean_text
+from ..utils import clean_text, ensure_speaker_attribution
 from ..vlm.api_client import APICallResult, VLMClient
 from .commerce_ontology import DEMONSTRATION_CUES
 from .commerce_schema import CommerceCue, CommercialRelation, CueType
@@ -197,7 +197,7 @@ def build_bp_proposals_from_graph(
         ):
             continue
         asr_only = all(unit.modality.value == "asr" for unit in cue_evidence)
-        answer = f"The speaker states: {cue.content_en}" if asr_only else cue.content_en
+        answer = ensure_speaker_attribution(cue.content_en) if asr_only else cue.content_en
         question_intent = (
             f"Ask what the speaker states about {subtype.lower().replace('_', ' ')}."
             if asr_only

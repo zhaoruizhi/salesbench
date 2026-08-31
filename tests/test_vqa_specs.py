@@ -58,6 +58,23 @@ def test_formal_question_specs_exclude_legacy_verified_candidates():
     assert build_question_specs([_record()]) == []
 
 
+def test_question_specs_collapse_legacy_duplicate_speaker_attribution():
+    record = _record()
+    annotation = record["grounded_annotations"][0]
+    annotation["task_type"] = "BP"
+    annotation["task_subtype"] = "USAGE_SCENARIO"
+    annotation["capability"] = "USAGE_SCENARIO"
+    annotation["reasoning_operator"] = "IDENTIFY_USAGE_SCENARIO"
+    annotation["commercial_relation_ids"] = []
+    annotation["gold_value"] = {
+        "answer": "The speaker states: The speaker suggests pairing the bread with milk."
+    }
+
+    specs = build_question_specs([record], allow_auto_candidates=True)
+
+    assert specs[0].gold_answer == "The speaker suggests pairing the bread with milk."
+
+
 def test_question_realization_round_trips_as_english_surface_form():
     realization = QuestionRealization(
         spec_id="qs1",

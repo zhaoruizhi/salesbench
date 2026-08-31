@@ -20,7 +20,7 @@ from .prompts import (
     build_question_repair_prompt,
     build_question_realizer_prompt,
 )
-from .item_validator import validate_qa_candidate
+from .item_validator import validate_qa_candidate, validate_question_spec
 from .semantic_verifier import QASemanticVerdict, QASemanticVerification, verify_qa_candidate
 from .specs import QuestionRealization, QuestionSpec, build_question_specs
 
@@ -143,11 +143,21 @@ def run_qa_realizer(
         raise ValueError("accepted_sample_fraction must be between 0 and 1")
     output_dir.mkdir(parents=True, exist_ok=True)
     records = read_jsonl(evidence_dir / dataset_filename)
-    specs = build_question_specs(
+    all_specs = build_question_specs(
         records,
         allow_auto_candidates=allow_auto_candidates,
+        include_invalid=True,
     )
-    write_jsonl(output_dir / "qa_specs.jsonl", [spec.to_dict() for spec in specs])
+    spec_validation = {
+        spec.spec_id: validate_question_spec(
+            spec,
+            allow_auto_candidates=allow_auto_candidates,
+        )
+        for spec in all_specs
+    }
+    specs = [spec for spec in all_specs if not spec_validation[spec.spec_id]]
+    invalid_specs = [spec for spec in all_specs if spec_validation[spec.spec_id]]
+    write_jsonl(output_dir / "qa_specs.jsonl", [spec.to_dict() for spec in all_specs])
 
     evidence_lookup = {
         clean_text(item.get("evidence_id")): item
@@ -200,6 +210,21 @@ def run_qa_realizer(
             "commercial_relations": relation_context,
         }
 
+    preflight_rejections = [
+        {
+            "spec_id": spec.spec_id,
+            "video_id": spec.video_id,
+            "annotation_id": spec.annotation_id,
+            "task_type": spec.task_type.value,
+            "reason": ",".join(spec_validation[spec.spec_id]),
+            "reason_code": "QA_SPEC_LOCAL_VALIDATION_REJECT",
+            "issues": spec_validation[spec.spec_id],
+            "candidate_snapshot": candidate_snapshot(spec, ""),
+            "semantic_verification": None,
+        }
+        for spec in invalid_specs
+    ]
+
     verifier_client = semantic_verifier_client or client
     realizations: dict[str, QuestionRealization] = {}
     semantic_verifications: dict[str, dict[str, object]] = {}
@@ -233,7 +258,7 @@ def run_qa_realizer(
         pending.append(spec)
 
     failures: list[dict[str, object]] = []
-    rejected_candidates: list[dict[str, object]] = []
+    rejected_candidates: list[dict[str, object]] = list(preflight_rejections)
     human_review_queue: list[dict[str, object]] = []
     pipeline_diagnostics: list[dict[str, object]] = []
 
@@ -515,7 +540,7 @@ def run_qa_realizer(
         "dataset_file": str(evidence_dir / dataset_filename),
         "allow_auto_candidates": allow_auto_candidates,
         "counts": {
-            "specs": len(specs),
+            "specs": len(all_specs),
             "realized": len(ordered),
             "failed": len(failures),
             "resumed": resumed_count,
@@ -529,7 +554,8 @@ def run_qa_realizer(
             "local_rejected": sum(
                 1
                 for item in rejected_candidates
-                if item.get("reason_code") == "QA_LOCAL_VALIDATION_REJECT"
+                if item.get("reason_code")
+                in {"QA_LOCAL_VALIDATION_REJECT", "QA_SPEC_LOCAL_VALIDATION_REJECT"}
             ),
             "human_review": len(human_review_queue),
             "pipeline_diagnostics": len(pipeline_diagnostics),
@@ -537,7 +563,7 @@ def run_qa_realizer(
         },
         "fingerprint": stable_digest(
             {
-                "specs": [spec.to_dict() for spec in specs],
+                "specs": [spec.to_dict() for spec in all_specs],
                 "model": client.model,
                 "strict_semantic_verification": strict_semantic_verification,
                 "quality_prompt_version": (

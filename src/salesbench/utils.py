@@ -7,6 +7,13 @@ import re
 
 MISSING_TOKENS = {"", "-", "—", "暂无", "N/A", "NA", "None", "null", "nan"}
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_SPEAKER_ATTRIBUTION_RE = re.compile(
+    r"^The\s+(?:speaker|presenter|host|seller)\s+"
+    r"(?:states?|claims?|says?|suggests?|describes?|explains?|promotes?|presents?|"
+    r"notes?|mentions?|recommends?)\b",
+    re.IGNORECASE,
+)
+_LEGACY_SPEAKER_PREFIX_RE = re.compile(r"^The speaker states:\s*", re.IGNORECASE)
 
 
 def clean_text(value: object) -> str:
@@ -22,6 +29,27 @@ def contains_cjk(value: object) -> bool:
     if isinstance(value, (list, tuple, set)):
         return any(contains_cjk(item) for item in value)
     return isinstance(value, str) and bool(_CJK_RE.search(value))
+
+
+def normalize_speaker_attribution(value: object) -> str:
+    """Remove only a redundant legacy wrapper around already attributed speech."""
+    text = clean_text(value)
+    while True:
+        match = _LEGACY_SPEAKER_PREFIX_RE.match(text)
+        if match is None:
+            return text
+        remainder = text[match.end() :].lstrip()
+        if not _SPEAKER_ATTRIBUTION_RE.match(remainder):
+            return text
+        text = remainder
+
+
+def ensure_speaker_attribution(value: object) -> str:
+    """Keep explicit attribution once, otherwise mark ASR-only content as spoken."""
+    text = normalize_speaker_attribution(value)
+    if not text or _SPEAKER_ATTRIBUTION_RE.match(text):
+        return text
+    return f"The speaker states: {text}"
 
 
 def is_missing(value: object) -> bool:

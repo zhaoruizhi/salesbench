@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..goldbank.schema import GoldTaskType, stable_digest
-from ..utils import clean_text
+from ..utils import clean_text, normalize_speaker_attribution
 from .item_validator import answer_type_for_task, validate_question_spec
 
 
@@ -134,9 +134,9 @@ def _answer(gold_value: dict[str, object]) -> str:
     ):
         value = gold_value.get(key)
         if value not in (None, ""):
-            return clean_text(value)
+            return normalize_speaker_attribution(value)
     if gold_value:
-        return clean_text(gold_value[sorted(gold_value)[0]])
+        return normalize_speaker_attribution(gold_value[sorted(gold_value)[0]])
     return ""
 
 
@@ -144,6 +144,7 @@ def build_question_specs(
     video_records: list[dict[str, object]],
     *,
     allow_auto_candidates: bool = False,
+    include_invalid: bool = False,
 ) -> list[QuestionSpec]:
     specs: list[QuestionSpec] = []
     for record in video_records:
@@ -184,9 +185,10 @@ def build_question_specs(
                     answer_type=answer_type_for_task(task_type, gold_answer),
                     lifecycle_status=clean_text(raw.get("review_status")).lower(),
                 )
-            if not validate_question_spec(
+            issues = validate_question_spec(
                 spec,
                 allow_auto_candidates=allow_auto_candidates,
-            ):
+            )
+            if include_invalid or not issues:
                 specs.append(spec)
     return sorted(specs, key=lambda item: (item.video_id, item.task_type.value, item.spec_id))

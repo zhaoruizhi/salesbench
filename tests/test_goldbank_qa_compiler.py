@@ -139,6 +139,22 @@ class GoldBankQACompilerTest(unittest.TestCase):
 
         self.assertEqual(qa[0]["gold_answer"], "opened")
 
+    def test_compiler_collapses_legacy_duplicate_speaker_attribution(self):
+        record = gold_record()
+        record["grounded_annotations"][0]["gold_value"] = {
+            "answer": "The speaker states: The speaker suggests pairing the bread with milk."
+        }
+
+        qa, _ = compile_qa_records(
+            load_compilable_gold_from_records([record]),
+            CompilePolicy(),
+        )
+
+        self.assertEqual(
+            qa[0]["gold_answer"],
+            "The speaker suggests pairing the bread with milk.",
+        )
+
     def test_bp_fact_question_includes_subject_and_predicate(self):
         record = gold_record()
         bp = record["grounded_annotations"][0]
@@ -248,7 +264,7 @@ class GoldBankQACompilerTest(unittest.TestCase):
             private = json.loads((out_dir / "vqa_gold_private.jsonl").read_text(encoding="utf-8").splitlines()[0])
             public = json.loads((out_dir / "vqa_public.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
-        self.assertEqual(summary["compiler_version"], "evidence-qa-compiler-v7")
+        self.assertEqual(summary["compiler_version"], "evidence-qa-compiler-v8")
         self.assertEqual(diversity["exact_duplicate_count"], 0)
         self.assertIn("normalized_stem_clusters", diversity)
         self.assertEqual(private["graph_context"]["commerce_cues"][0]["cue_id"], "c1")

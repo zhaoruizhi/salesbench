@@ -199,6 +199,35 @@ def test_realizer_writes_specific_english_question_and_resumes(tmp_path: Path):
     assert QUESTION_REALIZER_PROMPT_VERSION == "question-realizer-prompt-v2"
 
 
+def test_realizer_rejects_internal_ontology_gold_before_model_call(tmp_path: Path):
+    evidence_dir = tmp_path / "evidence"
+    output_dir = tmp_path / "qa"
+    _write_evidence_dir(evidence_dir)
+    dataset = read_jsonl(evidence_dir / "video_evidence_dataset.jsonl")
+    dataset[0]["grounded_annotations"][0]["gold_value"] = {
+        "answer": (
+            "The description refers to the product, as supported by the commercial relation "
+            "DESCRIPTION_REFERS_TO_PRODUCT."
+        )
+    }
+    write_jsonl(evidence_dir / "video_evidence_dataset.jsonl", dataset)
+    client = FakeClient()
+
+    summary = run_qa_realizer(
+        evidence_dir,
+        output_dir,
+        client,
+        allow_auto_candidates=True,
+    )
+    rejected = read_jsonl(output_dir / "qa_rejected_candidates.jsonl")
+
+    assert client.calls == []
+    assert summary["counts"]["specs"] == 1
+    assert summary["counts"]["local_rejected"] == 1
+    assert rejected[0]["reason_code"] == "QA_SPEC_LOCAL_VALIDATION_REJECT"
+    assert "BENCHMARK_META_LEAKAGE" in rejected[0]["issues"]
+
+
 def test_realizer_repairs_answer_leakage_once_with_local_feedback(tmp_path: Path):
     evidence_dir = tmp_path / "evidence"
     output_dir = tmp_path / "qa"

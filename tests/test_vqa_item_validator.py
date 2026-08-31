@@ -71,3 +71,19 @@ def test_generic_or_answer_leaking_surface_is_rejected_before_compilation():
 
     assert "GENERIC_QUESTION" in generic
     assert "ANSWER_LEAKAGE" in leaking
+
+
+def test_internal_benchmark_ontology_is_rejected_from_gold_and_question_surfaces():
+    leaked_gold = spec(
+        gold_answer=(
+            "The visual description refers to the product, as supported by the commercial "
+            "relation DESCRIPTION_REFERS_TO_PRODUCT."
+        )
+    )
+
+    assert "BENCHMARK_META_LEAKAGE" in validate_question_spec(leaked_gold)
+    assert "BENCHMARK_META_LEAKAGE" in validate_qa_candidate(
+        spec(),
+        "What does CommercialRelation r1 establish about the product?",
+        "The spoken description refers to the featured product.",
+    )
