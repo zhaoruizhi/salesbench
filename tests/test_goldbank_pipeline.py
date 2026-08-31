@@ -254,6 +254,46 @@ def successful_v7_responses() -> list[dict[str, object]]:
 
 
 class GoldBankPipelineTest(unittest.TestCase):
+    def test_relation_parse_failure_preserves_independent_bp_candidates(self):
+        responses = successful_responses()
+        bp_id = "v1_local_bp_000"
+        llm_responses = [
+            responses[1],
+            '{"commercial_relations":[',
+            {"proposals": [], "abstentions": []},
+            {"proposals": [], "abstentions": []},
+            {"proposals": [], "abstentions": []},
+            {
+                "reviews": [
+                    {
+                        "review_id": "r_bp",
+                        "proposal_id": bp_id,
+                        "video_id": "v1",
+                        "reviewer": "gold_challenger",
+                        "verdict": "PASS",
+                        "checks": {"evidence_exists": True},
+                        "issues": [],
+                        "suggested_revision": None,
+                    }
+                ]
+            },
+            {"accepted_groups": [], "human_review_queue": []},
+        ]
+
+        result = GoldBankPipeline(
+            FakeGoldClient(responses[:1]),
+            FakeGoldClient(llm_responses),
+        ).run_video(bundle())
+
+        self.assertTrue(result.video_gold_record)
+        annotations = result.video_gold_record["grounded_annotations"]
+        self.assertEqual([item["task_type"] for item in annotations], ["BP"])
+        relation_trace = next(
+            trace for trace in result.agent_traces if trace["stage"] == "commercial_relation_building"
+        )
+        self.assertFalse(relation_trace["success"])
+        self.assertEqual(result.commercial_relations, [])
+
     def test_strict_semantic_ambiguity_is_the_only_relation_case_sent_to_humans(self):
         responses = successful_responses_with_two_evidence()
         relation_id = responses[3]["proposals"][0]["commercial_relation_ids"][0]

@@ -155,6 +155,28 @@ class GoldBankValidatorTest(unittest.TestCase):
 
         self.assertIn("CLAIM_AS_PRODUCT_ATTRIBUTE", {issue.code for issue in issues})
 
+    def test_unattributed_benefit_from_spoken_claim_is_rejected(self):
+        unit = replace(
+            evidence("asr_benefit"),
+            modality=EvidenceModality.ASR,
+            start_s=0.0,
+            end_s=5.0,
+            frame_indices=(),
+            text_span="彩色标记帮助右脑记忆",
+            source_text_native="彩色标记帮助右脑记忆",
+            content_en="The speaker claims colorful markings assist right-brain memory.",
+            assertion_type=EvidenceAssertionType.SPOKEN_CLAIM,
+            temporal_scope=EvidenceTemporalScope.LONG_TERM_CLAIM,
+        )
+        cue = replace(
+            cue_record(CueType.BENEFIT, (unit.evidence_id,), "c_benefit"),
+            content_en="Colorful markings assist right-brain memory.",
+        )
+
+        issues = validate_commerce_cue(cue, {unit.evidence_id: unit})
+
+        self.assertIn("UNATTRIBUTED_PROMOTIONAL_CLAIM", {issue.code for issue in issues})
+
     def test_short_visual_cannot_independently_support_long_term_claim(self):
         claim = replace(
             evidence("asr1"),

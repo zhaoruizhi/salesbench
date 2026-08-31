@@ -105,6 +105,18 @@ _CLAIM_FACT_CUE_TYPES = {
     CueType.PRODUCT_DESCRIPTION,
 }
 
+_CLAIM_ATTRIBUTION_MARKERS = (
+    "speaker",
+    "presenter",
+    "video presents",
+    "video frames",
+    "video claims",
+    "on-screen text",
+    "according to",
+    "is described as",
+    "is promoted as",
+)
+
 _NUMERIC_CUE_TYPES = {
     CueType.QUANTITY,
     CueType.BUNDLE,
@@ -326,6 +338,20 @@ def validate_commerce_cue(
                 "ERROR",
                 cue.cue_id,
                 "A seller claim cannot be normalized as an observed product attribute",
+            )
+        )
+    if (
+        cue.cue_type == CueType.BENEFIT
+        and cited_units
+        and all(unit.assertion_type == EvidenceAssertionType.SPOKEN_CLAIM for unit in cited_units)
+        and not any(marker in cue.content_en.lower() for marker in _CLAIM_ATTRIBUTION_MARKERS)
+    ):
+        issues.append(
+            ValidationIssue(
+                "UNATTRIBUTED_PROMOTIONAL_CLAIM",
+                "ERROR",
+                cue.cue_id,
+                "A seller-stated benefit must remain explicitly attributed to the speaker or video",
             )
         )
     if cue.cue_type in _NUMERIC_CUE_TYPES:

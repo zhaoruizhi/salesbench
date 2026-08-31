@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 
-QUALITY_PROMPT_VERSION = "quality-gate-prompt-v1"
+QUALITY_PROMPT_VERSION = "quality-gate-prompt-v2"
 
 
 def build_relation_verifier_prompt(
@@ -25,7 +25,12 @@ def build_relation_verifier_prompt(
         "Use AMBIGUOUS only when the supplied evidence admits multiple materially different readings that "
         "cannot be resolved from the attached frames; missing or plainly insufficient support is REJECT. "
         "A short frame or clip cannot prove durability, long-term effect, consumer response, causality, trust, "
-        "purchase, conversion, or popularity. Do not use external knowledge. Write reasons in English only."
+        "purchase, conversion, or popularity. For CLAIM_SUPPORTED_BY_DEMONSTRATION, a frame that merely "
+        "shows the product, a feature, colored markings, an applicator, or one method step does not prove "
+        "the claimed benefit or effect. For example, seeing colored markings does not prove right-brain memory, "
+        "and pointing at vocabulary does not prove easier memorization. Such relations are REJECT unless the "
+        "claimed state or outcome itself is independently observable within the cited window. Do not use "
+        "external knowledge. Write reasons in English only."
     )
     user = json.dumps(
         {

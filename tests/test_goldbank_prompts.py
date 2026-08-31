@@ -27,6 +27,10 @@ from salesbench.goldbank.prompts import (  # noqa: E402
     build_visual_evidence_repair_prompt,
     build_visual_commerce_cue_prompt,
 )
+from salesbench.goldbank.quality_prompts import (  # noqa: E402
+    QUALITY_PROMPT_VERSION,
+    build_relation_verifier_prompt,
+)
 
 
 class GoldBankPromptTest(unittest.TestCase):
@@ -43,7 +47,7 @@ class GoldBankPromptTest(unittest.TestCase):
         system, user_blocks = build_evidence_extractor_prompt("v1", {"C3_text_language": {"title": "hello"}})
         text = system + " " + str(user_blocks)
 
-        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v10.1")
+        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v10.2")
         self.assertIn("EvidenceUnit", text)
         self.assertIn("Do not generate questions", system)
         self.assertIn("English", system)
@@ -78,6 +82,15 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn('exact field "modality"', visual_system)
         self.assertNotIn("asr_subtitles", str(visual_user))
         self.assertNotRegex(language_system + visual_system, r"[\u4e00-\u9fff]")
+
+    def test_relation_generation_and_verification_do_not_treat_feature_presence_as_effect_proof(self):
+        relation_system, _ = build_commercial_relation_prompt("v1", [], [])
+        verifier_system, _ = build_relation_verifier_prompt("v1", [], [], [])
+
+        self.assertIn("no more than eight", relation_system)
+        self.assertEqual(QUALITY_PROMPT_VERSION, "quality-gate-prompt-v2")
+        self.assertIn("does not prove the claimed benefit or effect", verifier_system)
+        self.assertIn("right-brain memory", verifier_system)
 
     def test_visual_evidence_repair_prompt_is_visual_only_and_preserves_local_rejections(self):
         repair_system, repair_user = build_visual_evidence_repair_prompt(

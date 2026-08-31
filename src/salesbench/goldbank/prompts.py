@@ -12,7 +12,7 @@ from .schema import GoldTaskType
 from .validators import PRIVATE_KEYS
 
 
-PROMPT_VERSION = "evidence-prompt-v10.1"
+PROMPT_VERSION = "evidence-prompt-v10.2"
 
 BP_COMPILER_CONTRACT = (
     "BP is produced by a deterministic local compiler, not by an LLM proposer. "
@@ -224,6 +224,9 @@ def build_commerce_cue_prompt(
         "claim as an observed product fact. An ASR-only performance, compatibility, durability, or "
         "effect statement must not become PRODUCT_ATTRIBUTE and must not become PROCESS_DEMONSTRATION; "
         "keep it as an appropriate claim cue unless independently localized visual evidence exists. "
+        "A BENEFIT derived only from seller speech must say that the speaker or video presents or frames "
+        "the benefit; never state it as a verified effect. Clothing, glasses, a professional-looking room, "
+        "or a generic product demonstration alone is not a CREDIBILITY_SIGNAL. "
         "Abstain when the cue cannot be localized. "
         f"{_NO_CONSUMER_OUTCOMES}"
     )
@@ -274,6 +277,8 @@ def build_commercial_relation_prompt(
         "nodes only when their cited EvidenceUnits support a controlled commercial argument relation. "
         f"Allowed relation_type values are: {_enum_values(RelationType)}. "
         "Return strict JSON with exactly two top-level arrays: commercial_relations and abstentions. "
+        "Return no more than eight highest-value non-duplicate commercial_relations; do not enumerate one "
+        "DESCRIPTION_REFERS_TO_PRODUCT relation for every descriptive cue. "
         "Each commercial_relations item must contain exactly relation_type, source_cue_ids, "
         "target_cue_ids, evidence_ids, status, rationale_en, directness, and confidence. Copy existing "
         "cue IDs and EvidenceUnit IDs exactly; never invent IDs. status must be SUPPORTED, "
@@ -285,8 +290,10 @@ def build_commercial_relation_prompt(
         "evidence_ids must include the union of EvidenceUnit IDs cited by all endpoint cues, not only "
         "the first or source endpoint. "
         "CLAIM_REPEATED_ACROSS_MODALITIES means two modalities repeat equivalent promotional wording; "
-        "it is not independent evidence. CLAIM_SUPPORTED_BY_DEMONSTRATION requires a distinct visual "
-        "demonstration of the material claim. Abstain when endpoints are ambiguous or evidence is "
+        "it is not independent evidence. CLAIM_SUPPORTED_BY_DEMONSTRATION requires the claimed property "
+        "or outcome itself to be independently visible. Merely showing the product, feature, colored "
+        "markings, applicator, or one method step does not demonstrate a claimed memory, health, durability, "
+        "ease, fit, or performance effect. Abstain when endpoints are ambiguous or evidence is "
         "insufficient. Never claim that a viewer trusted, purchased, converted, or became less uncertain. "
         "Describe only relationships among the supplied content cues."
     )
@@ -365,7 +372,10 @@ def build_proposer_prompt(
         "copy instruction wording, field descriptions, generic placeholders, or meta-text into any "
         "proposal field; every target, answer, reasoning claim, and question intent must name content "
         "specific to this video. "
-        "use titles, follower counts, interaction metrics, private metadata, or external knowledge. "
+        "Do not use titles, follower counts, interaction metrics, private metadata, or external knowledge. "
+        "When cited Evidence or CommerceCues contain a seller-stated effect, benefit, fit, or performance "
+        "claim, the proposed_gold answer must explicitly attribute it with wording such as 'the speaker "
+        "claims', 'the video presents', or 'the product is promoted as'; never rewrite it as a verified fact. "
         "Never claim content caused trust, purchase, sales, conversion, interaction, or reduced viewer "
         "uncertainty. If a graph path is incomplete or the conclusion has a reasonable alternative, "
         "place task_type, task_subtype, and an English reason in abstentions."
@@ -402,6 +412,9 @@ def build_challenger_prompt(
         "SS needs a specific commercial relation or ordered path and must not inflate generic description "
         "into sales logic or performance prediction. AE must be a bounded interpretation of needs, contexts, or decision "
         "barriers represented by the content, never a real audience profile or conversion conclusion. "
+        "Showing a feature or method step does not prove its claimed benefit: colored markings do not "
+        "establish memory improvement, pointing at words does not establish learning ease, and tilting an "
+        "unloaded product does not establish load capacity or long-term stability. Reject such overreach. "
         "Each review must follow this schema: "
         '{"review_id":"unique string","proposal_id":"exact input proposal_id",'
         '"video_id":"exact input video_id","reviewer":"gold_challenger",'

@@ -850,7 +850,9 @@ class GoldBankPipeline:
             relation_user,
             response_format="json_object",
         )
+        relation_response = relation_call.raw_response
         if not relation_call.success:
+            status = "partial"
             traces.append(
                 _trace(
                     "commercial_relation_building",
@@ -859,20 +861,10 @@ class GoldBankPipeline:
                     error=relation_call.error,
                 )
             )
-            return GoldBankResult(
-                video_id=video_id,
-                evidence_units=[unit.to_dict() for unit in evidence_units],
-                commerce_cues=[cue.to_dict() for cue in commerce_cues],
-                gold_proposals=[],
-                gold_reviews=[],
-                video_gold_record=None,
-                human_review_queue=human_review_queue,
-                agent_traces=traces,
-                status="partial",
-            )
+            relation_response = '{"commercial_relations":[],"abstentions":[]}'
         try:
             relation_raw, relation_abstentions = parse_commercial_relation_response(
-                relation_call.raw_response
+                relation_response
             )
             commercial_relations = []
             for raw_relation in relation_raw:
@@ -925,18 +917,21 @@ class GoldBankPipeline:
                 human_review_queue.append(
                     _abstention_queue_item(video_id, "commercial_relation_builder", abstention, ordinal)
                 )
-            traces.append(
-                _trace(
-                    "commercial_relation_building",
-                    "commercial_relation_builder",
-                    relation_call,
-                    {
-                        "commercial_relations": relation_raw,
-                        "abstentions": relation_abstentions,
-                    },
+            if relation_call.success:
+                traces.append(
+                    _trace(
+                        "commercial_relation_building",
+                        "commercial_relation_builder",
+                        relation_call,
+                        {
+                            "commercial_relations": relation_raw,
+                            "abstentions": relation_abstentions,
+                        },
+                    )
                 )
-            )
         except (ModelOutputError, ValueError) as exc:
+            status = "partial"
+            commercial_relations = []
             traces.append(
                 _trace(
                     "commercial_relation_building",
@@ -944,17 +939,6 @@ class GoldBankPipeline:
                     relation_call,
                     error=str(exc),
                 )
-            )
-            return GoldBankResult(
-                video_id=video_id,
-                evidence_units=[unit.to_dict() for unit in evidence_units],
-                commerce_cues=[cue.to_dict() for cue in commerce_cues],
-                gold_proposals=[],
-                gold_reviews=[],
-                video_gold_record=None,
-                human_review_queue=human_review_queue,
-                agent_traces=traces,
-                status="partial",
             )
 
         if self.strict_semantic_verification and commercial_relations:
