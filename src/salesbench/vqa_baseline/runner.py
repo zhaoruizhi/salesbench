@@ -193,6 +193,7 @@ def run_salesbench_qa_baseline(
         temperature=0.0,
         max_tokens=300,
         rate_limit_rpm=0,
+        disable_thinking=True,
     )
     summary = run_salesbench_qa_baseline_records(
         items=items,

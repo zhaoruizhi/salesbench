@@ -136,7 +136,18 @@ def _contains_model_placeholder(value: object) -> bool:
 
 
 def _normalize_modality(raw: dict[str, object]) -> EvidenceModality:
-    value = normalize_text(raw.get("modality") or EvidenceModality.METADATA.value).lower()
+    supplied_modality = normalize_text(raw.get("modality")).lower()
+    if not supplied_modality:
+        assertion_type = normalize_text(raw.get("assertion_type")).upper()
+        frame_indices = raw.get("frame_indices", []) or []
+        source_text = normalize_text(raw.get("source_text_native") or raw.get("text_span"))
+        if assertion_type == EvidenceAssertionType.OBSERVED.value and frame_indices:
+            return EvidenceModality.VISUAL
+        if assertion_type == EvidenceAssertionType.OCR_TEXT.value and frame_indices and source_text:
+            return EvidenceModality.OCR
+        if assertion_type == EvidenceAssertionType.SPOKEN_CLAIM.value and source_text and not frame_indices:
+            return EvidenceModality.ASR
+    value = supplied_modality or EvidenceModality.METADATA.value
     try:
         return EvidenceModality(value)
     except ValueError:

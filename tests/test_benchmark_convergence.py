@@ -134,9 +134,9 @@ class BenchmarkConvergenceTest(unittest.TestCase):
         self.assertEqual(len(smoke["video_ids"]), 5)
         self.assertEqual(len(formal["video_ids"]), 64)
         for config in (smoke, formal):
-            self.assertEqual(config["prompt_version"], "evidence-prompt-v10")
+            self.assertEqual(config["prompt_version"], "evidence-prompt-v10.1")
             self.assertEqual(config["schema_version"], "evidence-dataset-schema-v4")
-            self.assertEqual(config["pipeline_version"], "evidence-first-pipeline-v10")
+            self.assertEqual(config["pipeline_version"], "evidence-first-pipeline-v10.1")
             self.assertEqual(config["compiler_version"], "evidence-qa-compiler-v7")
             self.assertEqual(config["quality_prompt_version"], "quality-gate-prompt-v1")
             self.assertTrue(config["strict_semantic_verification"])

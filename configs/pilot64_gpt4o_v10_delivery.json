@@ -5,8 +5,8 @@
   "frame_cache_root": "outputs/cache/frames",
   "versions": {
     "schema": "evidence-dataset-schema-v4",
-    "prompt": "evidence-prompt-v10",
-    "pipeline": "evidence-first-pipeline-v10",
+    "prompt": "evidence-prompt-v10.1",
+    "pipeline": "evidence-first-pipeline-v10.1",
     "quality_prompt": "quality-gate-prompt-v1",
     "compiler": "evidence-qa-compiler-v7",
     "question_realizer": "question-realizer-prompt-v2",

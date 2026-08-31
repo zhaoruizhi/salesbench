@@ -43,7 +43,7 @@ class GoldBankPromptTest(unittest.TestCase):
         system, user_blocks = build_evidence_extractor_prompt("v1", {"C3_text_language": {"title": "hello"}})
         text = system + " " + str(user_blocks)
 
-        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v10")
+        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v10.1")
         self.assertIn("EvidenceUnit", text)
         self.assertIn("Do not generate questions", system)
         self.assertIn("English", system)
@@ -75,6 +75,7 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn("Visual and OCR Evidence Extractor", visual_system)
         self.assertIn("at least one visual EvidenceUnit", visual_system)
         self.assertIn("modality=visual", visual_system)
+        self.assertIn('exact field "modality"', visual_system)
         self.assertNotIn("asr_subtitles", str(visual_user))
         self.assertNotRegex(language_system + visual_system, r"[\u4e00-\u9fff]")
 

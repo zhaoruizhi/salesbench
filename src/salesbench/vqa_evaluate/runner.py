@@ -157,6 +157,7 @@ def evaluate_salesbench_qa_files(
             temperature=0.0,
             max_tokens=700,
             rate_limit_rpm=0,
+            disable_thinking=True,
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)

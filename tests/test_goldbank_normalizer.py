@@ -23,6 +23,46 @@ from salesbench.goldbank.validators import validate_evidence_unit  # noqa: E402
 
 
 class EvidenceNormalizerTest(unittest.TestCase):
+    def test_infers_missing_visual_modality_only_from_observed_frame_contract(self):
+        unit = normalize_evidence_unit(
+            "v1",
+            {
+                "frame_indices": [3],
+                "content_en": "The presenter holds a tube.",
+                "source_text_native": "",
+                "subject": "presenter",
+                "predicate": "holds",
+                "value": "tube",
+                "attributes": {},
+                "assertion_type": "OBSERVED",
+                "temporal_scope": "FRAME",
+                "confidence": 0.9,
+            },
+            0,
+        )
+
+        self.assertEqual(unit.modality, EvidenceModality.VISUAL)
+
+    def test_missing_modality_remains_metadata_when_localization_is_ambiguous(self):
+        unit = normalize_evidence_unit(
+            "v1",
+            {
+                "frame_indices": [],
+                "content_en": "A product is mentioned.",
+                "source_text_native": "",
+                "subject": "product",
+                "predicate": "is mentioned",
+                "value": "product",
+                "attributes": {},
+                "assertion_type": "OBSERVED",
+                "temporal_scope": "SHORT_CLIP",
+                "confidence": 0.9,
+            },
+            0,
+        )
+
+        self.assertEqual(unit.modality, EvidenceModality.METADATA)
+
     def test_numeric_confidence_alias_is_preserved(self):
         unit = normalize_evidence_unit(
             "v1",

@@ -20,7 +20,7 @@ from .quality_prompts import QUALITY_PROMPT_VERSION
 from .schema import stable_digest
 
 
-PIPELINE_VERSION = "evidence-first-pipeline-v10"
+PIPELINE_VERSION = "evidence-first-pipeline-v10.1"
 
 
 GOLD_BANK_OUTPUT_FILES = (
@@ -417,12 +417,14 @@ def build_gold_bank_dataset(
         model=vision_model or model,
         base_url=vision_base_url if vision_base_url is not None else base_url,
         max_tokens=4096,
+        disable_thinking=True,
     )
     llm_client = VLMClient(
         api_key=text_api_key or api_key,
         model=text_model or model,
         base_url=text_base_url if text_base_url is not None else base_url,
         max_tokens=4096,
+        disable_thinking=True,
     )
     pipeline = GoldBankPipeline(
         vlm_client=vlm_client,

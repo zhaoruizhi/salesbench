@@ -12,7 +12,7 @@ from .schema import GoldTaskType
 from .validators import PRIVATE_KEYS
 
 
-PROMPT_VERSION = "evidence-prompt-v10"
+PROMPT_VERSION = "evidence-prompt-v10.1"
 
 BP_COMPILER_CONTRACT = (
     "BP is produced by a deterministic local compiler, not by an LLM proposer. "
@@ -132,8 +132,9 @@ def build_visual_evidence_prompt(
         "visible non-text facts and modality=ocr only for independent commercially material in-frame "
         "text such as product labels, variants, prices, quantities, offer conditions, or measurements. "
         "Do not enumerate burned-in speech subtitles as OCR. Exclude creator handles, account IDs, "
-        "watermarks, platform logos, and engagement counters. Every item must contain start_s, end_s, "
-        "frame_indices, content_en, source_text_native, subject, predicate, value, attributes, "
+        "watermarks, platform logos, and engagement counters. Every item must contain the exact field "
+        "\"modality\" set to visual or ocr, plus start_s, end_s, frame_indices, content_en, "
+        "source_text_native, subject, predicate, value, attributes, "
         "\"assertion_type\", \"temporal_scope\", and \"confidence\". visual items must use "
         "assertion_type=OBSERVED; OCR items must use assertion_type=OCR_TEXT. Use temporal_scope=FRAME "
         "for one localized frame or SHORT_CLIP only when multiple supplied frames show the same event. "
@@ -165,8 +166,9 @@ def build_visual_evidence_repair_prompt(
         "rejected by deterministic local validation. Reinspect the supplied frames and return three to "
         "eight corrected atomic EvidenceUnits. Every item must use modality=\"visual\" exactly and must "
         "describe a concrete visible product, person, action, state, comparison, demonstration, package, "
-        "or usage scene. Every item must contain start_s, end_s, frame_indices, content_en, "
-        "source_text_native, subject, predicate, value, attributes, \"assertion_type\", "
+        "or usage scene. Every item must contain the exact field \"modality\" set to visual, plus "
+        "start_s, end_s, frame_indices, content_en, source_text_native, subject, predicate, value, "
+        "attributes, \"assertion_type\", "
         "\"temporal_scope\", and \"confidence\". assertion_type must be OBSERVED, temporal_scope must "
         "be FRAME or SHORT_CLIP, and the exact JSON field \"confidence\" must be a number from 0 to 1. "
         "Use one or "

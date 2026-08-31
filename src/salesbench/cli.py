@@ -188,6 +188,7 @@ def realize_qa_command(args: argparse.Namespace) -> int:
             "OPENAI_BASE_URL",
         ),
         max_tokens=1024,
+        disable_thinking=True,
     )
     summary = run_qa_realizer(
         Path(args.evidence_dir),
@@ -235,6 +236,7 @@ def build_audit_translations_command(args: argparse.Namespace) -> int:
             "OPENAI_BASE_URL",
         ),
         max_tokens=4096,
+        disable_thinking=True,
     )
     jobs = collect_audit_translation_jobs(
         manifest,

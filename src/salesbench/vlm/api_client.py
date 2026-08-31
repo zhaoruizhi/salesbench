@@ -30,6 +30,32 @@ PRICING = {
 }
 
 
+def _disabled_thinking_body(base_url: str, model: str) -> dict[str, object]:
+    normalized_url = base_url.lower()
+    normalized_model = model.lower()
+    if "api.deepseek.com" in normalized_url and normalized_model.startswith("deepseek-v4"):
+        return {"thinking": {"type": "disabled"}}
+    if (
+        normalized_model.startswith("qwen")
+        and ("dashscope" in normalized_url or "maas.aliyuncs.com" in normalized_url)
+    ):
+        return {"enable_thinking": False}
+    return {}
+
+
+def _exception_chain(exc: Exception) -> str:
+    messages: list[str] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).strip()
+        label = type(current).__name__
+        messages.append(f"{label}: {message}" if message else label)
+        current = current.__cause__ or current.__context__
+    return " <- ".join(messages)
+
+
 def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     pricing = PRICING.get(model, PRICING.get("gpt-4o"))
     cost = (input_tokens / 1_000_000) * pricing["input"]
@@ -50,6 +76,8 @@ class VLMClient:
         retry_max: int = 3,
         retry_backoff_s: float = 2.0,
         rate_limit_rpm: int = 60,
+        disable_thinking: bool = False,
+        request_timeout_s: float = 180.0,
     ):
         self.api_key = api_key
         self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
@@ -57,7 +85,11 @@ class VLMClient:
         try:
             from openai import OpenAI
 
-            client_kwargs = {"api_key": api_key}
+            client_kwargs = {
+                "api_key": api_key,
+                "timeout": request_timeout_s,
+                "max_retries": 0,
+            }
             if base_url:
                 client_kwargs["base_url"] = base_url
             self.client = OpenAI(**client_kwargs)
@@ -68,6 +100,8 @@ class VLMClient:
         self.max_tokens = max_tokens
         self.retry_max = retry_max
         self.retry_backoff_s = retry_backoff_s
+        self.disable_thinking = disable_thinking
+        self.request_timeout_s = request_timeout_s
         self._min_interval = 60.0 / rate_limit_rpm if rate_limit_rpm > 0 else 0
         self._last_call_time = 0.0
 
@@ -112,6 +146,10 @@ class VLMClient:
         }
         if response_format == "json_object":
             kwargs["response_format"] = {"type": "json_object"}
+        if self.disable_thinking:
+            thinking_body = _disabled_thinking_body(self.base_url, self.model)
+            if thinking_body:
+                kwargs["extra_body"] = thinking_body
 
         last_error = None
         for attempt in range(self.retry_max):
@@ -146,7 +184,7 @@ class VLMClient:
                     success=True,
                 )
             except Exception as exc:
-                last_error = str(exc)
+                last_error = _exception_chain(exc)
                 latency = time.time() - start_time
                 if attempt < self.retry_max - 1:
                     wait = self.retry_backoff_s * (2 ** attempt)
@@ -165,6 +203,10 @@ class VLMClient:
 
     def _post_chat_completions(self, payload: dict) -> dict:
         """Minimal OpenAI-compatible HTTP fallback when the SDK is unavailable."""
+        payload = dict(payload)
+        extra_body = payload.pop("extra_body", None)
+        if isinstance(extra_body, dict):
+            payload.update(extra_body)
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
             url=f"{self.base_url}/chat/completions",
@@ -176,7 +218,7 @@ class VLMClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with urllib.request.urlopen(request, timeout=self.request_timeout_s) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")

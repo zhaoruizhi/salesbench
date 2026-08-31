@@ -847,7 +847,7 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     assert data["qa"][0]["evidence_items"][0]["frames"][0]["frame_index"] == 1
     assert data["judge"]["rows"][0]["evidence_items"] == data["qa"][0]["evidence_items"]
     assert data["release"]["runtime_prompt_version"] == "evidence-prompt-v6"
-    assert data["release"]["current_prompt_version"] == "evidence-prompt-v10"
+    assert data["release"]["current_prompt_version"] == "evidence-prompt-v10.1"
     assert data["release"]["current_judge_prompt_version"] == "judge-prompt-v5"
     assert data["counts"]["videos"] == 2
     assert data["counts"]["commercial_records"] == 1
