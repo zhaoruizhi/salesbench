@@ -16,6 +16,7 @@ from salesbench.audit_translation import (  # noqa: E402
 )
 from salesbench.io_utils import write_json, write_jsonl  # noqa: E402
 from salesbench.vlm.api_client import APICallResult  # noqa: E402
+from salesbench.audit_translation_prompts import build_audit_translation_prompt  # noqa: E402
 
 
 class FakeTranslationClient:
@@ -63,7 +64,7 @@ def test_audit_translation_is_separate_versioned_and_hash_bound():
     assert job.audit_only is True
     assert job.translation_id.startswith("audit_translation::qa::q1::question::")
     assert "question_zh" not in payload
-    assert AUDIT_TRANSLATION_PROMPT_VERSION == "audit-translation-prompt-v1"
+    assert AUDIT_TRANSLATION_PROMPT_VERSION == "audit-translation-prompt-v2"
 
 
 def test_translation_ids_do_not_collide_when_one_queue_id_has_multiple_snapshots():
@@ -89,6 +90,40 @@ def test_translation_validation_preserves_numbers_negation_and_enum_tokens():
     assert validate_translation(source, "画面第12帧中未显示（NOT_SHOWN）9.9元优惠。") == []
     assert "NUMBER_MISMATCH" in validate_translation(source, "画面中未显示（NOT_SHOWN）19.9元优惠。")
     assert "CONTROLLED_TOKEN_MISSING" in validate_translation(source, "画面第12帧中未显示9.9元优惠。")
+
+
+def test_translation_prompt_lists_required_numbers_and_controlled_tokens():
+    job = build_translation_job(
+        object_type="evidence_unit",
+        object_id="e1",
+        source_field="content_en",
+        source_text="The USB cable shows 15W and the CTA follows in frame 12.",
+    )
+
+    _, user = build_audit_translation_prompt([job.to_dict()])
+    payload = json.loads(user)["translation_jobs"][0]
+
+    assert payload["required_numbers"] == ["15", "12"]
+    assert payload["required_controlled_tokens"] == ["CTA", "USB"]
+
+
+def test_machine_code_reason_gets_deterministic_chinese_audit_label(tmp_path: Path):
+    job = build_translation_job(
+        object_type="evidence_rejection",
+        object_id="r1",
+        source_field="reason",
+        source_text="commercial_relation_validation_failed",
+    )
+    client = FakeTranslationClient()
+    output = tmp_path / "translations.jsonl"
+
+    summary = run_audit_translations([job], output, client, batch_size=1)
+    translations = load_audit_translations(output)
+
+    assert summary["counts"]["translated"] == 1
+    assert client.calls == 0
+    assert translations[0].translated_text == "审计代码：commercial_relation_validation_failed"
+    assert translations[0].translation_method == "deterministic-machine-code-v1"
 
 
 def test_collect_and_run_translations_from_delivery_manifest(tmp_path: Path):

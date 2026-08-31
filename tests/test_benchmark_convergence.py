@@ -139,6 +139,7 @@ class BenchmarkConvergenceTest(unittest.TestCase):
             self.assertEqual(config["pipeline_version"], "evidence-first-pipeline-v10.3")
             self.assertEqual(config["compiler_version"], "evidence-qa-compiler-v8")
             self.assertEqual(config["quality_prompt_version"], "quality-gate-prompt-v2")
+            self.assertEqual(config["audit_translation_prompt_version"], "audit-translation-prompt-v2")
             self.assertTrue(config["strict_semantic_verification"])
             self.assertLessEqual(config["human_ambiguity_target_rate"], 0.05)
             self.assertEqual(config["human_ambiguity_block_rate"], 0.1)

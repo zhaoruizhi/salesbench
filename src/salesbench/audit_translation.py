@@ -38,6 +38,11 @@ from .vqa_evaluate.prompts import JUDGE_SYSTEM_PROMPT
 
 _NUMBER_RE = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
 _CONTROLLED_TOKEN_RE = re.compile(r"\b[A-Z][A-Z0-9_]{2,}\b")
+_MACHINE_CODE_RE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
+_CACHEABLE_PROMPT_VERSIONS = {
+    "audit-translation-prompt-v1",
+    AUDIT_TRANSLATION_PROMPT_VERSION,
+}
 
 
 @dataclass(frozen=True)
@@ -423,21 +428,36 @@ def run_audit_translations(
     cache = {
         (row.object_type, row.object_id, row.source_field, row.source_sha256): row
         for row in existing
-        if row.audit_only and row.prompt_version == AUDIT_TRANSLATION_PROMPT_VERSION
+        if row.audit_only and row.prompt_version in _CACHEABLE_PROMPT_VERSIONS
     }
     current: dict[tuple[str, str, str, str], AuditTranslation] = {}
     pending: list[TranslationJob] = []
     reused = 0
+    translated = 0
     for job in jobs:
         key = (job.object_type, job.object_id, job.source_field, job.source_sha256)
         if key in cache:
             current[key] = cache[key]
             reused += 1
+        elif _MACHINE_CODE_RE.fullmatch(job.source_text):
+            current[key] = AuditTranslation(
+                translation_id=job.translation_id,
+                object_type=job.object_type,
+                object_id=job.object_id,
+                source_field=job.source_field,
+                source_language=job.source_language,
+                target_language=job.target_language,
+                source_sha256=job.source_sha256,
+                translated_text=f"审计代码：{job.source_text}",
+                translation_method="deterministic-machine-code-v1",
+                prompt_version=AUDIT_TRANSLATION_PROMPT_VERSION,
+                audit_only=True,
+            )
+            translated += 1
         else:
             pending.append(job)
 
     failures: list[dict[str, object]] = []
-    translated = 0
     size = max(1, int(batch_size))
     for offset in range(0, len(pending), size):
         batch = pending[offset : offset + size]

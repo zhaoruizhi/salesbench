@@ -26,6 +26,7 @@ HUMAN_REVIEW -> 仅限无法由帧和证据唯一判定的语义歧义
 | QA compiler | `evidence-qa-compiler-v8` |
 | Question realizer | `question-realizer-prompt-v2` |
 | Judge | `judge-prompt-v5` |
+| Audit translation | `audit-translation-prompt-v2` |
 
 Smoke 和正式目录必须分开。当前官方 API 运行使用以下不含密钥的命名：
 

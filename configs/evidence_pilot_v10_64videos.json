@@ -75,7 +75,7 @@
   "question_realizer_prompt_version": "question-realizer-prompt-v2",
   "quality_prompt_version": "quality-gate-prompt-v2",
   "judge_prompt_version": "judge-prompt-v5",
-  "audit_translation_prompt_version": "audit-translation-prompt-v1",
+  "audit_translation_prompt_version": "audit-translation-prompt-v2",
   "min_confidence": 0.7,
   "strict_semantic_verification": true,
   "human_ambiguity_target_rate": 0.05,
