@@ -50,6 +50,31 @@ class FakeTranslationClient:
         )
 
 
+class DropsControlledTokenClient(FakeTranslationClient):
+    def call_text_only(self, system_prompt: str, user_text: str, response_format: str | None = None):
+        self.calls += 1
+        row = json.loads(user_text)["translation_jobs"][0]
+        return APICallResult(
+            raw_response=json.dumps(
+                {
+                    "translations": [
+                        {
+                            "translation_id": row["translation_id"],
+                            "translated_text": "画面第12帧中未显示该优惠。",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            model=self.model,
+            input_tokens=10,
+            output_tokens=10,
+            latency_s=0.01,
+            cost_usd=0.0,
+            success=True,
+        )
+
+
 def test_audit_translation_is_separate_versioned_and_hash_bound():
     job = build_translation_job(
         object_type="qa",
@@ -124,6 +149,28 @@ def test_machine_code_reason_gets_deterministic_chinese_audit_label(tmp_path: Pa
     assert client.calls == 0
     assert translations[0].translated_text == "审计代码：commercial_relation_validation_failed"
     assert translations[0].translation_method == "deterministic-machine-code-v1"
+
+
+def test_runner_safely_appends_missing_controlled_tokens_to_chinese_translation(tmp_path: Path):
+    job = build_translation_job(
+        object_type="evidence_unit",
+        object_id="e1",
+        source_field="content_en",
+        source_text="The offer is NOT_SHOWN in frame 12.",
+    )
+    output = tmp_path / "translations.jsonl"
+
+    summary = run_audit_translations(
+        [job],
+        output,
+        DropsControlledTokenClient(),
+        batch_size=1,
+    )
+    translation = load_audit_translations(output)[0]
+
+    assert summary["counts"]["failed"] == 0
+    assert "NOT_SHOWN" in translation.translated_text
+    assert translation.translated_text.endswith("（保留标记：NOT_SHOWN）")
 
 
 def test_collect_and_run_translations_from_delivery_manifest(tmp_path: Path):

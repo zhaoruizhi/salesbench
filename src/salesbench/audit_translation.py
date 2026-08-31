@@ -146,6 +146,19 @@ def validate_translation(source_text: str, translated_text: str) -> list[str]:
     return issues
 
 
+def _append_missing_controlled_tokens(source_text: str, translated_text: str) -> str:
+    translated = clean_text(translated_text)
+    if not contains_cjk(translated):
+        return translated
+    missing = sorted(
+        set(_CONTROLLED_TOKEN_RE.findall(source_text))
+        - set(_CONTROLLED_TOKEN_RE.findall(translated))
+    )
+    if not missing:
+        return translated
+    return f"{translated}（保留标记：{'、'.join(missing)}）"
+
+
 def _prompt_jobs() -> list[TranslationJob]:
     evidence_system, _ = build_evidence_extractor_prompt("video", {})
     language_evidence_system, _ = build_language_evidence_prompt("video", {})
@@ -480,7 +493,10 @@ def run_audit_translations(
             failures.extend({"translation_id": job.translation_id, "error": str(exc)} for job in batch)
             continue
         for job in batch:
-            translated_text = returned.get(job.translation_id, "")
+            translated_text = _append_missing_controlled_tokens(
+                job.source_text,
+                returned.get(job.translation_id, ""),
+            )
             issues = validate_translation(job.source_text, translated_text)
             if issues:
                 failures.append({"translation_id": job.translation_id, "error": ",".join(issues)})
