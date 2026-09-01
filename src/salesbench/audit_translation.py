@@ -211,7 +211,7 @@ def _prompt_jobs() -> list[TranslationJob]:
         "adjudicator": build_adjudicator_prompt("video", [], [], [])[0],
         "question_realizer": QUESTION_REALIZER_SYSTEM_PROMPT,
         "question_repairer": QUESTION_REPAIR_SYSTEM_PROMPT,
-        "qa_quality_verifier": QA_QUALITY_SYSTEM_PROMPT,
+        "qa_semantic_quality_gate": QA_QUALITY_SYSTEM_PROMPT,
         "model_runner": CLOSED_SOURCE_SYSTEM_PROMPT,
         "judge": JUDGE_SYSTEM_PROMPT,
     }
