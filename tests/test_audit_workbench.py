@@ -1055,6 +1055,188 @@ def test_v10_workbench_consumes_separated_quality_artifacts_directly(tmp_path: P
     assert data["counts"]["qa_pipeline_diagnostics"] == 1
 
 
+def test_workbench_localizes_review_payloads_without_counting_empty_fields_as_missing(
+    tmp_path: Path,
+) -> None:
+    from salesbench.audit_translation import build_translation_job
+
+    evidence_dir = tmp_path / "evidence"
+    qa_dir = tmp_path / "qa"
+    snapshot = {
+        "relation_id": "rel1",
+        "rationale_en": "The offer is presented before the call to action.",
+        "semantic_verifier": {
+            "verdict": "AMBIGUOUS",
+            "reason": "The timestamps do not establish temporal order.",
+        },
+    }
+    reason = "Two temporal readings remain possible."
+    snapshot_source = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
+    qa_snapshot = {
+        "question": "Which need is supported by the content?",
+        "question_spec": {
+            "spec_id": "qs-human",
+            "video_id": "v1",
+            "task_type": "AE",
+            "capability": "CONTENT_IMPLIED_NEED",
+            "gold_answer": "The content supports a bounded household need.",
+        },
+    }
+    qa_snapshot_source = json.dumps(qa_snapshot, ensure_ascii=False, sort_keys=True)
+    _write(
+        evidence_dir / "generation_meta.json",
+        json.dumps({"video_ids": ["v1"], "prompt_version": "evidence-prompt-v10.2"}),
+    )
+    _write(evidence_dir / "evidence_units.jsonl", "")
+    annotation = {
+        "annotation_id": "a1",
+        "video_id": "v1",
+        "task_type": "BP",
+        "task_subtype": "PRODUCT_IDENTITY",
+        "target": {"subject": "featured product"},
+        "gold_value": {"answer": "The host presents a storage product."},
+        "evidence_refs": [],
+    }
+    _write(
+        evidence_dir / "video_evidence_dataset.jsonl",
+        json.dumps({"video_id": "v1", "grounded_annotations": [annotation]}) + "\n",
+    )
+    _write(evidence_dir / "gold_proposals.jsonl", "")
+    _write(
+        evidence_dir / "human_review_queue.jsonl",
+        json.dumps(
+            {
+                "review_item_id": "human-1",
+                "video_id": "v1",
+                "item_type": "commercial_relation",
+                "reason": reason,
+                "candidate_snapshot": snapshot,
+            }
+        )
+        + "\n",
+    )
+    _write(evidence_dir / "rejected_candidates.jsonl", "")
+    _write(evidence_dir / "pipeline_diagnostics.jsonl", "")
+    _write(evidence_dir / "quality_decisions.jsonl", "")
+    _write(qa_dir / "vqa_gold_private.jsonl", "")
+    _write(
+        qa_dir / "qa_human_review_queue.jsonl",
+        json.dumps(
+            {
+                "spec_id": "qs-human",
+                "video_id": "v1",
+                "task_type": "AE",
+                "reason": "The inferred need remains ambiguous.",
+                "candidate_snapshot": qa_snapshot,
+            }
+        )
+        + "\n",
+    )
+    _write(qa_dir / "qa_rejected_candidates.jsonl", "")
+    _write(qa_dir / "qa_pipeline_diagnostics.jsonl", "")
+    _write(qa_dir / "qa_accepted_sample.jsonl", "")
+    jobs = [
+        (
+            build_translation_job(
+                object_type="evidence_review",
+                object_id="human-1",
+                source_field="reason",
+                source_text=reason,
+            ),
+            "仍存在两种可能的时间顺序解读。",
+        ),
+        (
+            build_translation_job(
+                object_type="evidence_review",
+                object_id="human-1",
+                source_field="candidate_snapshot",
+                source_text=snapshot_source,
+            ),
+            "候选快照：优惠先于行动号召出现；时间戳不足以确定顺序。（AMBIGUOUS）",
+        ),
+        (
+            build_translation_job(
+                object_type="qa_human_review",
+                object_id="qs-human",
+                source_field="reason",
+                source_text="The inferred need remains ambiguous.",
+            ),
+            "推断出的需求仍存在歧义。",
+        ),
+        (
+            build_translation_job(
+                object_type="qa_human_review",
+                object_id="qs-human",
+                source_field="candidate_snapshot",
+                source_text=qa_snapshot_source,
+            ),
+            "候选问题：内容支持哪一种需求？候选答案：内容支持一种有边界的家庭需求。",
+        ),
+        (
+            build_translation_job(
+                object_type="annotation",
+                object_id="a1",
+                source_field="target",
+                source_text=json.dumps(annotation["target"], sort_keys=True),
+            ),
+            "目标：画面中的商品。",
+        ),
+        (
+            build_translation_job(
+                object_type="annotation",
+                object_id="a1",
+                source_field="gold_value",
+                source_text=json.dumps(annotation["gold_value"], sort_keys=True),
+            ),
+            "答案：主播展示了一件收纳商品。",
+        ),
+    ]
+    translation_path = tmp_path / "translations.jsonl"
+    _write(
+        translation_path,
+        "\n".join(
+            json.dumps(
+                {
+                    **job.to_dict(),
+                    "translated_text": translated,
+                    "translation_method": "qwen3-vl-plus",
+                    "prompt_version": "audit-translation-prompt-v2",
+                },
+                ensure_ascii=False,
+            )
+            for job, translated in jobs
+        )
+        + "\n",
+    )
+    manifest = {
+        "tested_model": "qwen3-vl-plus",
+        "judge_model": "deepseek-v4-pro",
+        "frame_cache_root": "frames",
+        "formal": {
+            "artifacts": {
+                "evidence": {"source": "evidence"},
+                "qa": {"source": "qa"},
+            }
+        },
+    }
+    translations = load_translation_index(translation_path)
+
+    data = build_workbench_data(manifest, tmp_path, {}, translations=translations)
+    review = data["evidence"]["queue"][0]
+    html = render_workbench(data, collect_prompt_snapshot(), fragment=True)
+
+    assert review["reason_zh"] == "仍存在两种可能的时间顺序解读。"
+    assert "优惠先于行动号召" in review["candidate_snapshot_zh"]
+    assert data["qa"][0]["reason_zh"] == "推断出的需求仍存在歧义。"
+    assert "候选问题" in data["qa"][0]["candidate_snapshot_zh"]
+    assert data["evidence"]["risks"][0]["target_zh"] == "目标：画面中的商品。"
+    assert "收纳商品" in data["evidence"]["risks"][0]["gold_value_zh"]
+    assert data["translations"]["missing"] == 0
+    assert "仍存在两种可能的时间顺序解读。" in html
+    assert "推断出的需求仍存在歧义。" in html
+    assert "The timestamps do not establish temporal order." in html
+
+
 def test_workbench_renders_chinese_translation_and_english_source(tmp_path: Path) -> None:
     source = "The frame shows a 9.9-yuan offer."
     question = "What price is shown in the offer?"
@@ -1101,7 +1283,12 @@ def test_workbench_renders_chinese_translation_and_english_source(tmp_path: Path
     )[0]
     evidence_item["content_zh"] = translations.translate("evidence_unit", "e1", "content_en", source)["translated_text"]
     data = {
-        "release": {"status": "candidate", "prompt_version": "evidence-prompt-v9"},
+        "release": {
+            "status": "candidate",
+            "prompt_version": "evidence-prompt-v9",
+            "tested_model": "qwen3-vl-plus",
+            "judge_model": "deepseek-v4-pro",
+        },
         "counts": {"videos": 1, "evidence_units": 1, "annotations": 1, "review_queue": 0, "qa": 1, "judge_rows": 0},
         "delivery": {},
         "translations": {"missing": 0, "stale": 0},
@@ -1131,6 +1318,8 @@ def test_workbench_renders_chinese_translation_and_english_source(tmp_path: Path
     assert "到手9.9元" in html
     assert "PRICE_AND_DISCOUNT" in html
     assert 'loading="lazy"' in html
+    assert "SalesBench · GPT-4o pilot candidate" not in html
+    assert 'id="model-summary"' in html
 
 
 def test_translation_index_rejects_duplicate_or_non_audit_rows(tmp_path: Path) -> None:

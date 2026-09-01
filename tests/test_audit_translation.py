@@ -258,6 +258,7 @@ def test_prompt_translation_jobs_include_split_evidence_prompts(tmp_path: Path):
     assert "visual_evidence_repairer" in prompt_ids
     assert "visual_commerce_cue_extractor" in prompt_ids
     assert "question_repairer" in prompt_ids
+    assert "qa_quality_verifier" in prompt_ids
     assert "model_runner" in prompt_ids
 
 
