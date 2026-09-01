@@ -1055,6 +1055,55 @@ def test_v10_workbench_consumes_separated_quality_artifacts_directly(tmp_path: P
     assert data["counts"]["qa_pipeline_diagnostics"] == 1
 
 
+def test_qa_with_missing_evidence_reference_is_auto_rejected_in_audit(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    qa_dir = tmp_path / "qa"
+    _write(
+        evidence_dir / "generation_meta.json",
+        json.dumps({"video_ids": ["v1"], "prompt_version": "evidence-prompt-v10.2"}),
+    )
+    _write(evidence_dir / "evidence_units.jsonl", "")
+    _write(evidence_dir / "video_evidence_dataset.jsonl", "")
+    _write(evidence_dir / "gold_proposals.jsonl", "")
+    _write(
+        qa_dir / "vqa_gold_private.jsonl",
+        json.dumps(
+            {
+                "vqa_id": "q-missing",
+                "video_id": "v1",
+                "task_type": "BP",
+                "task_subtype": "USAGE_STEP",
+                "question": "What action is demonstrated?",
+                "gold_answer": "The presenter turns a page.",
+                "spec_id": "qs-missing",
+                "evidence_refs": ["missing-evidence"],
+            }
+        )
+        + "\n",
+    )
+    _write(
+        qa_dir / "qa_accepted_sample.jsonl",
+        json.dumps({"spec_id": "qs-missing", "video_id": "v1", "task_type": "BP"})
+        + "\n",
+    )
+    manifest = {
+        "frame_cache_root": "frames",
+        "formal": {
+            "artifacts": {
+                "evidence": {"source": "evidence"},
+                "qa": {"source": "qa"},
+            }
+        },
+    }
+
+    data = build_workbench_data(manifest, tmp_path, {})
+    qa = data["qa"][0]
+
+    assert qa["audit_bucket"] == "auto_rejected"
+    assert qa["risk_codes"] == ["MISSING_EVIDENCE_REF"]
+    assert data["counts"]["qa_auto_rejected"] == 1
+
+
 def test_workbench_localizes_review_payloads_without_counting_empty_fields_as_missing(
     tmp_path: Path,
 ) -> None:

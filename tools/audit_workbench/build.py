@@ -55,6 +55,7 @@ RISK_LABELS = {
     "CM_NOT_CROSS_MODAL": "CM 未形成跨模态证据",
     "INSUFFICIENT_EVIDENCE": "证据引用不足",
     "TEMPLATE_REPETITION": "模板重复度高",
+    "MISSING_EVIDENCE_REF": "引用的 Evidence 不存在",
     "LOW_JUDGE_SCORE": "Judge 低分",
     "NO_COMMERCIAL_RECORD": "未生成可编译商业记录",
 }
@@ -1122,6 +1123,12 @@ def build_workbench_data(
         risk_codes: set[str] = {
             str(code) for code in row.get("risk_codes") or [] if str(code)
         }
+        if any(
+            str(evidence_id) not in evidence_by_id
+            for evidence_id in row.get("evidence_refs") or []
+            if str(evidence_id)
+        ):
+            risk_codes.add("MISSING_EVIDENCE_REF")
         for source_id in row.get("source_annotation_ids") or []:
             risk_codes.update(annotation_risk_index.get(str(source_id), []))
         if question_counts[str(row.get("question") or "")] >= 8:
