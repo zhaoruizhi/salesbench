@@ -8,13 +8,15 @@ sys.path.insert(0, "src")
 
 from salesbench.audit_translation import (  # noqa: E402
     AUDIT_TRANSLATION_PROMPT_VERSION,
+    AuditTranslation,
     build_translation_job,
     collect_audit_translation_jobs,
     load_audit_translations,
     run_audit_translations,
     validate_translation,
 )
-from salesbench.io_utils import write_json, write_jsonl  # noqa: E402
+import salesbench.audit_translation as audit_translation  # noqa: E402
+from salesbench.io_utils import read_jsonl, write_json, write_jsonl  # noqa: E402
 from salesbench.vlm.api_client import APICallResult  # noqa: E402
 from salesbench.audit_translation_prompts import build_audit_translation_prompt  # noqa: E402
 
@@ -244,6 +246,137 @@ def test_collect_and_run_translations_from_delivery_manifest(tmp_path: Path):
     assert all(row.audit_only for row in translations)
     assert "likes" not in serialized
     assert "translated_text" in serialized
+
+
+def test_write_localized_vqa_private_keeps_only_chinese_review_fields(tmp_path: Path):
+    qa = tmp_path / "qa"
+    qa_row = {
+        "vqa_id": "q1",
+        "video_id": "v1",
+        "task_type": "BP",
+        "question": "What price is presented?",
+        "gold_answer": "The price is 9.9 yuan.",
+        "evidence_context": [
+            {
+                "evidence_id": "e1",
+                "content_en": "The price shown on screen is 9.9 yuan.",
+            }
+        ],
+        "graph_context": {
+            "commerce_cues": [
+                {
+                    "cue_id": "c1",
+                    "content_en": "The offer price is 9.9 yuan.",
+                }
+            ],
+            "commercial_relations": [
+                {
+                    "relation_id": "r1",
+                    "rationale_en": "The screen price supports the spoken offer.",
+                }
+            ],
+        },
+    }
+    write_jsonl(qa / "vqa_gold_private.jsonl", [qa_row])
+    jobs = [
+        build_translation_job(
+            object_type="qa",
+            object_id="q1",
+            source_field="question",
+            source_text=qa_row["question"],
+        ),
+        build_translation_job(
+            object_type="qa",
+            object_id="q1",
+            source_field="gold_answer",
+            source_text=qa_row["gold_answer"],
+        ),
+        build_translation_job(
+            object_type="evidence_unit",
+            object_id="e1",
+            source_field="content_en",
+            source_text=qa_row["evidence_context"][0]["content_en"],
+        ),
+        build_translation_job(
+            object_type="commerce_cue",
+            object_id="c1",
+            source_field="content_en",
+            source_text=qa_row["graph_context"]["commerce_cues"][0]["content_en"],
+        ),
+        build_translation_job(
+            object_type="commercial_relation",
+            object_id="r1",
+            source_field="rationale_en",
+            source_text=qa_row["graph_context"]["commercial_relations"][0]["rationale_en"],
+        ),
+    ]
+    translated_texts = {
+        ("qa", "q1", "question"): "展示的价格是多少？",
+        ("qa", "q1", "gold_answer"): "价格是9.9元。",
+        ("evidence_unit", "e1", "content_en"): "屏幕上显示的价格是9.9元。",
+        ("commerce_cue", "c1", "content_en"): "优惠价是9.9元。",
+        ("commercial_relation", "r1", "rationale_en"): "屏幕价格支持口播优惠。",
+    }
+    translations = [
+        AuditTranslation(
+            translation_id=job.translation_id,
+            object_type=job.object_type,
+            object_id=job.object_id,
+            source_field=job.source_field,
+            source_language=job.source_language,
+            target_language=job.target_language,
+            source_sha256=job.source_sha256,
+            translated_text=translated_texts[(job.object_type, job.object_id, job.source_field)],
+            translation_method="fixture",
+            prompt_version=AUDIT_TRANSLATION_PROMPT_VERSION,
+            audit_only=True,
+        ).to_dict()
+        for job in jobs
+    ]
+    translations_path = tmp_path / "audit_translations.jsonl"
+    write_jsonl(translations_path, translations)
+
+    assert hasattr(audit_translation, "write_localized_vqa_private")
+    summary = audit_translation.write_localized_vqa_private(qa, translations_path)
+    localized = list(read_jsonl(qa / "vqa_gold_private_zh.jsonl"))
+    serialized = json.dumps(localized[0], ensure_ascii=False)
+
+    assert summary["written"] == 1
+    assert summary["translation_statuses"] == {"current": 5}
+    assert localized[0]["question_zh"] == "展示的价格是多少？"
+    assert localized[0]["answer_zh"] == "价格是9.9元。"
+    assert localized[0]["evidence_zh"] == [
+        {
+            "evidence_id": "e1",
+            "content_zh": "屏幕上显示的价格是9.9元。",
+            "translation_status": "current",
+        }
+    ]
+    assert localized[0]["commerce_cues_zh"] == [
+        {
+            "cue_id": "c1",
+            "content_zh": "优惠价是9.9元。",
+            "translation_status": "current",
+        }
+    ]
+    assert localized[0]["commercial_relations_zh"][0]["rationale_zh"] == (
+        "屏幕价格支持口播优惠。"
+    )
+    assert localized[0]["translation_statuses"] == {
+        "answer": "current",
+        "commerce_cues": {"c1": "current"},
+        "commercial_relations": {"r1": "current"},
+        "evidence": {"e1": "current"},
+        "question": "current",
+    }
+    assert "question" not in localized[0]
+    assert "gold_answer" not in localized[0]
+    assert "evidence_context" not in localized[0]
+    assert "graph_context" not in localized[0]
+    assert "content_en" not in serialized
+    assert "rationale_en" not in serialized
+    assert qa_row["question"] not in serialized
+    assert qa_row["gold_answer"] not in serialized
 
 
 def test_prompt_translation_jobs_include_split_evidence_prompts(tmp_path: Path):

@@ -201,6 +201,7 @@ class GoldBankCLITest(unittest.TestCase):
         },
         clear=True,
     )
+    @patch("salesbench.audit_translation.write_localized_vqa_outputs_from_manifest", create=True)
     @patch("salesbench.audit_translation.run_audit_translations")
     @patch("salesbench.audit_translation.collect_audit_translation_jobs")
     @patch("salesbench.vlm.api_client.VLMClient")
@@ -209,9 +210,11 @@ class GoldBankCLITest(unittest.TestCase):
         client,
         collect_jobs,
         run_translations,
+        write_localized,
     ):
         collect_jobs.return_value = []
         run_translations.return_value = {"ok": True}
+        write_localized.return_value = []
         args = build_parser().parse_args(
             [
                 "build-audit-translations",
@@ -227,6 +230,38 @@ class GoldBankCLITest(unittest.TestCase):
         self.assertEqual(client.call_args.kwargs["base_url"], "https://deepseek.example/v1")
         self.assertEqual(client.call_args.kwargs["model"], "deepseek-text")
 
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=False)
+    @patch("salesbench.audit_translation.write_localized_vqa_outputs_from_manifest", create=True)
+    @patch("salesbench.audit_translation.run_audit_translations")
+    @patch("salesbench.audit_translation.collect_audit_translation_jobs")
+    @patch("salesbench.vlm.api_client.VLMClient")
+    def test_audit_translation_command_writes_localized_vqa_outputs(
+        self,
+        _client,
+        collect_jobs,
+        run_translations,
+        write_localized,
+    ):
+        collect_jobs.return_value = []
+        run_translations.return_value = {"ok": True}
+        write_localized.return_value = [{"output": "qa/vqa_gold_private_zh.jsonl", "written": 1}]
+        args = build_parser().parse_args(
+            [
+                "build-audit-translations",
+                "--manifest",
+                "configs/pilot64_qwen_deepseek_v10_delivery.json",
+                "--output",
+                "outputs/audit/translations.jsonl",
+            ]
+        )
+
+        self.assertEqual(build_audit_translations_command(args), 0)
+        write_localized.assert_called_once_with(
+            Path("configs/pilot64_qwen_deepseek_v10_delivery.json"),
+            Path("outputs/audit/translations.jsonl"),
+            repo_root=Path("configs/pilot64_qwen_deepseek_v10_delivery.json").resolve().parent.parent,
+        )
+
     @patch.dict(
         "os.environ",
         {
@@ -239,6 +274,7 @@ class GoldBankCLITest(unittest.TestCase):
         },
         clear=True,
     )
+    @patch("salesbench.audit_translation.write_localized_vqa_outputs_from_manifest", create=True)
     @patch("salesbench.audit_translation.run_audit_translations")
     @patch("salesbench.audit_translation.collect_audit_translation_jobs")
     @patch("salesbench.vlm.api_client.VLMClient")
@@ -247,9 +283,11 @@ class GoldBankCLITest(unittest.TestCase):
         client,
         collect_jobs,
         run_translations,
+        write_localized,
     ):
         collect_jobs.return_value = []
         run_translations.return_value = {"ok": True}
+        write_localized.return_value = []
         args = build_parser().parse_args(
             [
                 "build-audit-translations",

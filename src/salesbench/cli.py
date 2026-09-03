@@ -205,7 +205,11 @@ def realize_qa_command(args: argparse.Namespace) -> int:
 
 
 def build_audit_translations_command(args: argparse.Namespace) -> int:
-    from .audit_translation import collect_audit_translation_jobs, run_audit_translations
+    from .audit_translation import (
+        collect_audit_translation_jobs,
+        run_audit_translations,
+        write_localized_vqa_outputs_from_manifest,
+    )
     from .vlm.api_client import VLMClient
 
     model = _arg_or_env(
@@ -269,6 +273,11 @@ def build_audit_translations_command(args: argparse.Namespace) -> int:
         Path(args.output),
         client,
         batch_size=args.batch_size,
+    )
+    summary["localized_vqa_outputs"] = write_localized_vqa_outputs_from_manifest(
+        manifest,
+        Path(args.output),
+        repo_root=manifest.resolve().parent.parent,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

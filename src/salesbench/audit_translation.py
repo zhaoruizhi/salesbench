@@ -459,6 +459,266 @@ def load_audit_translations(path: Path) -> list[AuditTranslation]:
     return [_parse_translation(record) for record in read_jsonl(path)]
 
 
+class _AuditTranslationIndex:
+    def __init__(self, rows: list[AuditTranslation]) -> None:
+        self._rows: dict[tuple[str, str, str, str], AuditTranslation] = {}
+        self._field_keys: set[tuple[str, str, str]] = set()
+        for row in rows:
+            if not row.audit_only:
+                raise ValueError("localized VQA output requires audit_only translations")
+            key = (row.object_type, row.object_id, row.source_field, row.source_sha256)
+            self._rows[key] = row
+            self._field_keys.add((row.object_type, row.object_id, row.source_field))
+
+    def translate(
+        self,
+        object_type: str,
+        object_id: object,
+        source_field: str,
+        source_text: object,
+    ) -> dict[str, str]:
+        text = clean_text(source_text)
+        if not text:
+            return {
+                "translated_text": "",
+                "status": "not_applicable",
+                "source_sha256": "",
+                "translation_method": "",
+            }
+        normalized_key = (
+            clean_text(object_type).lower(),
+            clean_text(object_id),
+            clean_text(source_field),
+        )
+        source_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        row = self._rows.get((*normalized_key, source_sha256))
+        if row is not None:
+            return {
+                "translated_text": row.translated_text,
+                "status": "current",
+                "source_sha256": source_sha256,
+                "translation_method": row.translation_method,
+            }
+        return {
+            "translated_text": "",
+            "status": "stale" if normalized_key in self._field_keys else "missing",
+            "source_sha256": source_sha256,
+            "translation_method": "",
+        }
+
+
+def _localized_translation(
+    index: _AuditTranslationIndex,
+    status_counts: Counter[str],
+    *,
+    object_type: str,
+    object_id: object,
+    source_field: str,
+    source_text: object,
+) -> dict[str, str]:
+    translation = index.translate(object_type, object_id, source_field, source_text)
+    if translation["status"] != "not_applicable":
+        status_counts[translation["status"]] += 1
+    return translation
+
+
+def _copy_present_fields(
+    source: dict[str, object],
+    fields: tuple[str, ...],
+) -> dict[str, object]:
+    return {field: source[field] for field in fields if field in source}
+
+
+def _localized_vqa_record(
+    record: dict[str, object],
+    index: _AuditTranslationIndex,
+    status_counts: Counter[str],
+) -> dict[str, object]:
+    vqa_id = record.get("vqa_id")
+    question = _localized_translation(
+        index,
+        status_counts,
+        object_type="qa",
+        object_id=vqa_id,
+        source_field="question",
+        source_text=record.get("question"),
+    )
+    answer = _localized_translation(
+        index,
+        status_counts,
+        object_type="qa",
+        object_id=vqa_id,
+        source_field="gold_answer",
+        source_text=record.get("gold_answer"),
+    )
+    localized: dict[str, object] = _copy_present_fields(
+        record,
+        (
+            "vqa_id",
+            "video_id",
+            "task_type",
+            "task_subtype",
+            "capability",
+            "reasoning_operator",
+            "spec_id",
+        ),
+    )
+    localized["question_zh"] = question["translated_text"]
+    localized["answer_zh"] = answer["translated_text"]
+
+    translation_statuses: dict[str, object] = {
+        "question": question["status"],
+        "answer": answer["status"],
+        "evidence": {},
+        "commerce_cues": {},
+        "commercial_relations": {},
+    }
+    references = {
+        key: list(record.get(key) or [])
+        for key in (
+            "source_annotation_ids",
+            "evidence_refs",
+            "commerce_cue_ids",
+            "commercial_relation_ids",
+        )
+        if record.get(key)
+    }
+    if references:
+        localized["references"] = references
+
+    evidence_zh = []
+    for ordinal, item in enumerate(record.get("evidence_context") or []):
+        if not isinstance(item, dict):
+            continue
+        translated = _localized_translation(
+            index,
+            status_counts,
+            object_type="evidence_unit",
+            object_id=item.get("evidence_id"),
+            source_field="content_en",
+            source_text=item.get("content_en"),
+        )
+        evidence_id = clean_text(item.get("evidence_id")) or f"row-{ordinal:06d}"
+        localized_item = _copy_present_fields(
+            item,
+            ("evidence_id", "modality", "start_s", "end_s", "frame_indices"),
+        )
+        localized_item["content_zh"] = translated["translated_text"]
+        localized_item["translation_status"] = translated["status"]
+        evidence_zh.append(localized_item)
+        translation_statuses["evidence"][evidence_id] = translated["status"]  # type: ignore[index]
+    localized["evidence_zh"] = evidence_zh
+
+    graph_context = record.get("graph_context")
+    commerce_cues_zh = []
+    commercial_relations_zh = []
+    if isinstance(graph_context, dict):
+        for ordinal, cue in enumerate(graph_context.get("commerce_cues") or []):
+            if not isinstance(cue, dict):
+                continue
+            translated = _localized_translation(
+                index,
+                status_counts,
+                object_type="commerce_cue",
+                object_id=cue.get("cue_id"),
+                source_field="content_en",
+                source_text=cue.get("content_en"),
+            )
+            cue_id = clean_text(cue.get("cue_id")) or f"row-{ordinal:06d}"
+            localized_cue = _copy_present_fields(cue, ("cue_id", "cue_type", "directness"))
+            localized_cue["content_zh"] = translated["translated_text"]
+            localized_cue["translation_status"] = translated["status"]
+            commerce_cues_zh.append(localized_cue)
+            translation_statuses["commerce_cues"][cue_id] = translated["status"]  # type: ignore[index]
+
+        for ordinal, relation in enumerate(graph_context.get("commercial_relations") or []):
+            if not isinstance(relation, dict):
+                continue
+            translated = _localized_translation(
+                index,
+                status_counts,
+                object_type="commercial_relation",
+                object_id=relation.get("relation_id"),
+                source_field="rationale_en",
+                source_text=relation.get("rationale_en"),
+            )
+            relation_id = clean_text(relation.get("relation_id")) or f"row-{ordinal:06d}"
+            localized_relation = _copy_present_fields(
+                relation,
+                ("relation_id", "relation_type", "status"),
+            )
+            localized_relation["rationale_zh"] = translated["translated_text"]
+            localized_relation["translation_status"] = translated["status"]
+            commercial_relations_zh.append(localized_relation)
+            translation_statuses["commercial_relations"][relation_id] = translated["status"]  # type: ignore[index]
+    localized["commerce_cues_zh"] = commerce_cues_zh
+    localized["commercial_relations_zh"] = commercial_relations_zh
+    localized["translation_statuses"] = translation_statuses
+    return localized
+
+
+def write_localized_vqa_private(
+    qa_dir: Path,
+    translations_path: Path,
+    *,
+    output_filename: str = "vqa_gold_private_zh.jsonl",
+) -> dict[str, object]:
+    source_path = qa_dir / "vqa_gold_private.jsonl"
+    if not source_path.is_file():
+        return {
+            "source": str(source_path),
+            "output": str(qa_dir / output_filename),
+            "written": 0,
+            "translation_statuses": {},
+            "skipped": "missing_vqa_gold_private",
+        }
+    index = _AuditTranslationIndex(load_audit_translations(translations_path))
+    status_counts: Counter[str] = Counter()
+    localized = [
+        _localized_vqa_record(record, index, status_counts)
+        for record in read_jsonl(source_path)
+    ]
+    output_path = qa_dir / output_filename
+    write_jsonl(output_path, localized)
+    return {
+        "source": str(source_path),
+        "output": str(output_path),
+        "written": len(localized),
+        "translation_statuses": dict(sorted(status_counts.items())),
+    }
+
+
+def write_localized_vqa_outputs_from_manifest(
+    manifest_path: Path,
+    translations_path: Path,
+    *,
+    repo_root: Path,
+) -> list[dict[str, object]]:
+    manifest = read_json(manifest_path)
+    if not isinstance(manifest, dict):
+        raise ValueError("Audit delivery manifest must be an object")
+    outputs: list[dict[str, object]] = []
+    seen: set[Path] = set()
+    for section in manifest.values():
+        if not isinstance(section, dict) or not isinstance(section.get("artifacts"), dict):
+            continue
+        artifacts = section["artifacts"]
+        qa_source = (
+            artifacts.get("qa", {}).get("source")
+            if isinstance(artifacts.get("qa"), dict)
+            else None
+        )
+        if not qa_source:
+            continue
+        qa_dir = _path(qa_source, repo_root)
+        if qa_dir in seen:
+            continue
+        seen.add(qa_dir)
+        if (qa_dir / "vqa_gold_private.jsonl").is_file():
+            outputs.append(write_localized_vqa_private(qa_dir, translations_path))
+    return outputs
+
+
 def run_audit_translations(
     jobs: list[TranslationJob],
     output_path: Path,

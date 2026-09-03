@@ -89,10 +89,31 @@ python salesbench.py apply-evidence-reviews \
 
 python salesbench.py compile-vqa \
   --evidence-dir outputs/evidence/v2_pilot \
+  --realizations outputs/vqa/v2_pilot/qa_realizations.jsonl \
   --output-dir outputs/vqa/v2_pilot
 ```
 
-正式编译要求 BP、CM、SS、AE 均非空。仅调试 pilot 时可显式传入 `--allow-missing-tasks`。公开文件位于 `public/{bp,cm,ss,ae}.jsonl`；标准答案与证据上下文只保存在 `vqa_gold_private.jsonl`。
+正式编译要求 BP、CM、SS、AE 均非空。仅调试 pilot 时可显式传入 `--allow-missing-tasks`。公开文件位于 `vqa_public.jsonl` 和 `public/{bp,cm,ss,ae}.jsonl`，不包含 `gold_answer`、证据上下文或图谱上下文；标准答案与可复核证据只保存在 `vqa_gold_private.jsonl`。
+
+每轮 VQA 质量优先看：
+
+- `vqa_gold_private.jsonl`：全量最终 QA，含 `question`、`gold_answer`、`evidence_context` 和 `graph_context`。
+- `qa_semantic_verifications.jsonl`：严格 QA 语义门禁结果。
+- `qa_human_review_queue.jsonl`：仅语义歧义待人工审核。
+- `qa_accepted_sample.jsonl`：自动通过 QA 的按任务分层监控抽样，不是全集。
+- `qa_rejected_candidates.jsonl` / `qa_pipeline_diagnostics.jsonl`：明确拒绝与工程诊断。
+- 审计 HTML 的 QA 页可在队列下拉框选择 `自动通过全集（只读）` 或 `全部队列` 查看未抽中的 PASS 产物。
+
+生成中文审计翻译后，命令会自动在 manifest 里每个 QA 目录旁写出 `vqa_gold_private_zh.jsonl`，用于查阅全量最终 QA：
+
+```bash
+python salesbench.py build-audit-translations \
+  --manifest configs/pilot64_qwen_deepseek_v10_delivery.json \
+  --output outputs/audit/translations/v10_smoke_qwen_deepseek/audit_translations.jsonl \
+  --model qwen3-vl-plus
+```
+
+`vqa_gold_private_zh.jsonl` 是中文精简查阅版，只保留必要 ID、任务字段、`question_zh`、`answer_zh`、`evidence_zh`、`commerce_cues_zh`、`commercial_relations_zh` 和翻译状态；英文 canonical 内容仍只在 `vqa_gold_private.jsonl`。中文文件只供人工审计，不能作为公开 benchmark 输入或 canonical Gold。
 
 运行模型和评测：
 
