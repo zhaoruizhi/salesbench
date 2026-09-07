@@ -87,3 +87,13 @@ def test_internal_benchmark_ontology_is_rejected_from_gold_and_question_surfaces
         "What does CommercialRelation r1 establish about the product?",
         "The spoken description refers to the featured product.",
     )
+
+
+def test_background_handling_question_is_rejected_as_trivial_input_noise():
+    issues = validate_qa_candidate(
+        spec(task_type=GoldTaskType.BP),
+        "What does the presenter do with the vocabulary book?",
+        "The presenter flips through the vocabulary book.",
+    )
+
+    assert "BACKGROUND_HANDLING_QUESTION" in issues

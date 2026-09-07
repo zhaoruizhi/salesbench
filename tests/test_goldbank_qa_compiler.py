@@ -311,7 +311,7 @@ class GoldBankQACompilerTest(unittest.TestCase):
                 json.dumps(
                     {
                         "strict_semantic_verification": True,
-                        "quality_prompt_version": "qa-quality-prompt-v1",
+                        "quality_prompt_version": "qa-quality-prompt-v2",
                     }
                 ),
                 encoding="utf-8",

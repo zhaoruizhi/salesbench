@@ -148,9 +148,47 @@ class GoldBankCLITest(unittest.TestCase):
         )
 
         self.assertEqual(realize_qa_command(args), 0)
-        self.assertEqual(client.call_args.kwargs["api_key"], "deepseek-key")
-        self.assertEqual(client.call_args.kwargs["base_url"], "https://deepseek.example/v1")
-        self.assertEqual(client.call_args.kwargs["model"], "deepseek-text")
+        realizer_kwargs = client.call_args_list[0].kwargs
+        self.assertEqual(realizer_kwargs["api_key"], "deepseek-key")
+        self.assertEqual(realizer_kwargs["base_url"], "https://deepseek.example/v1")
+        self.assertEqual(realizer_kwargs["model"], "deepseek-text")
+
+    @patch.dict(
+        "os.environ",
+        {
+            "DEEPSEEK_API_KEY": "deepseek-key",
+            "DEEPSEEK_BASE_URL": "https://deepseek.example/v1",
+            "DEEPSEEK_MODEL": "deepseek-text",
+            "QWEN_API_KEY": "qwen-key",
+            "QWEN_BASE_URL": "https://qwen.example/v1",
+            "QWEN_VISION_MODEL": "qwen-verifier",
+        },
+        clear=True,
+    )
+    @patch("salesbench.vqa.realizer.run_qa_realizer")
+    @patch("salesbench.vlm.api_client.VLMClient")
+    def test_strict_realize_command_uses_independent_qwen_verifier(self, client, run_realizer):
+        run_realizer.return_value = {"ok": True}
+        realizer = object()
+        verifier = object()
+        client.side_effect = [realizer, verifier]
+        args = build_parser().parse_args(
+            [
+                "realize-qa",
+                "--evidence-dir",
+                "evidence",
+                "--output-dir",
+                "qa",
+                "--strict-semantic-verification",
+            ]
+        )
+
+        self.assertEqual(realize_qa_command(args), 0)
+        self.assertEqual(client.call_args_list[0].kwargs["model"], "deepseek-text")
+        self.assertEqual(client.call_args_list[1].kwargs["api_key"], "qwen-key")
+        self.assertEqual(client.call_args_list[1].kwargs["base_url"], "https://qwen.example/v1")
+        self.assertEqual(client.call_args_list[1].kwargs["model"], "qwen-verifier")
+        self.assertIs(run_realizer.call_args.kwargs["semantic_verifier_client"], verifier)
 
     @patch.dict(
         "os.environ",

@@ -37,6 +37,14 @@ _BENCHMARK_META_MARKERS = (
     "task_subtype",
 )
 _RELATION_ENUM_TOKENS = tuple(relation.value.lower() for relation in RelationType)
+_BACKGROUND_HANDLING_MARKERS = (
+    "flips through",
+    "turns the pages",
+    "holds up",
+    "points to the product",
+    "shows the product",
+    "rotates the product",
+)
 
 
 def _task(value: Any) -> GoldTaskType:
@@ -139,6 +147,10 @@ def validate_qa_candidate(
         issues.append("BENCHMARK_META_LEAKAGE")
 
     task = _task(getattr(spec_or_item, "task_type", ""))
+    if task == GoldTaskType.BP and any(
+        marker in f"{lowered} {answer.lower()}" for marker in _BACKGROUND_HANDLING_MARKERS
+    ):
+        issues.append("BACKGROUND_HANDLING_QUESTION")
     answer_type = answer_type_for_task(task, answer)
     if answer_type == "short_fact" and len(answer.split()) > 20:
         issues.append("BP_ANSWER_TOO_LONG")

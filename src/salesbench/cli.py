@@ -192,6 +192,36 @@ def realize_qa_command(args: argparse.Namespace) -> int:
         max_tokens=1024,
         disable_thinking=True,
     )
+    semantic_verifier_client = None
+    if args.strict_semantic_verification:
+        verifier_api_key = _arg_or_env(
+            args,
+            "verifier_api_key",
+            "QWEN_API_KEY",
+            "DASHSCOPE_API_KEY",
+            "VISION_API_KEY",
+            "OPENAI_API_KEY",
+        ) or api_key
+        semantic_verifier_client = VLMClient(
+            api_key=verifier_api_key,
+            model=_arg_or_env(
+                args,
+                "verifier_model",
+                "QWEN_VISION_MODEL",
+                "VISION_MODEL",
+            )
+            or client.model,
+            base_url=_arg_or_env(
+                args,
+                "verifier_base_url",
+                "QWEN_BASE_URL",
+                "DASHSCOPE_BASE_URL",
+                "VISION_BASE_URL",
+                "OPENAI_BASE_URL",
+            ),
+            max_tokens=1024,
+            disable_thinking=True,
+        )
     summary = run_qa_realizer(
         Path(args.evidence_dir),
         Path(args.output_dir),
@@ -201,6 +231,7 @@ def realize_qa_command(args: argparse.Namespace) -> int:
         resume=args.resume,
         allow_auto_candidates=args.allow_auto_candidates,
         strict_semantic_verification=args.strict_semantic_verification,
+        semantic_verifier_client=semantic_verifier_client,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
@@ -475,6 +506,9 @@ def build_parser() -> argparse.ArgumentParser:
     realize.add_argument("--text-api-key", default=None)
     realize.add_argument("--text-base-url", default=None)
     realize.add_argument("--text-model", default=None)
+    realize.add_argument("--verifier-api-key", default=None)
+    realize.add_argument("--verifier-base-url", default=None)
+    realize.add_argument("--verifier-model", default=None)
     realize.add_argument("--max-workers", type=int, default=2)
     realize.add_argument("--no-resume", action="store_false", dest="resume")
     realize.add_argument(

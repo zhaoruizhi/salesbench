@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
-from salesbench.io_utils import read_jsonl, write_jsonl  # noqa: E402
+from salesbench.io_utils import read_jsonl, write_json, write_jsonl  # noqa: E402
 from salesbench.vlm.api_client import APICallResult  # noqa: E402
 from salesbench.vqa.realizer import (  # noqa: E402
     QUESTION_REALIZER_PROMPT_VERSION,
@@ -80,7 +80,14 @@ class StrictQAClient(FakeClient):
             "gold_supported": self.verdict != "REJECT",
             "unique_answer": self.verdict == "PASS",
             "task_aligned": True,
-            "domain_specific": True,
+            "content_specific": True,
+            "commerce_relevant": True,
+            "natural_question": True,
+            "non_trivial": True,
+            "commercially_diagnostic": True,
+            "claim_scope_preserved": True,
+            "intended_modality_required": True,
+            "reference_closed": True,
         }
         return APICallResult(
             raw_response=json.dumps(payload),
@@ -94,6 +101,14 @@ class StrictQAClient(FakeClient):
 
 
 def _write_evidence_dir(root: Path) -> None:
+    write_json(
+        root / "generation_meta.json",
+        {
+            "run_id": "test-run",
+            "source_fingerprint": "s" * 64,
+            "evidence_fingerprint": "e" * 64,
+        },
+    )
     write_jsonl(
         root / "video_evidence_dataset.jsonl",
         [
@@ -196,7 +211,23 @@ def test_realizer_writes_specific_english_question_and_resumes(tmp_path: Path):
     assert realized[0]["question"].startswith("What does the wiping demonstration")
     assert "这个可以" not in prompt_payload
     assert "likes" not in prompt_payload
-    assert QUESTION_REALIZER_PROMPT_VERSION == "question-realizer-prompt-v2"
+    assert QUESTION_REALIZER_PROMPT_VERSION == "question-realizer-prompt-v3"
+    assert (output_dir / ".parts" / ("e" * 64) / f"{realized[0]['spec_id']}.json").exists()
+    assert summary["evidence_fingerprint"] == "e" * 64
+    assert len(summary["qa_realization_fingerprint"]) == 64
+
+
+def test_realizer_fails_closed_without_evidence_fingerprint(tmp_path: Path):
+    evidence_dir = tmp_path / "evidence"
+    _write_evidence_dir(evidence_dir)
+    (evidence_dir / "generation_meta.json").unlink()
+
+    try:
+        run_qa_realizer(evidence_dir, tmp_path / "qa", FakeClient())
+    except ValueError as exc:
+        assert "generation_meta.json" in str(exc)
+    else:
+        raise AssertionError("realizer accepted Evidence without a fingerprint")
 
 
 def test_realizer_rejects_internal_ontology_gold_before_model_call(tmp_path: Path):

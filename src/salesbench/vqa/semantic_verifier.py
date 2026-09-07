@@ -23,7 +23,14 @@ _QUALITY_FIELDS = (
     "gold_supported",
     "unique_answer",
     "task_aligned",
-    "domain_specific",
+    "content_specific",
+    "commerce_relevant",
+    "natural_question",
+    "non_trivial",
+    "commercially_diagnostic",
+    "claim_scope_preserved",
+    "intended_modality_required",
+    "reference_closed",
 )
 
 
@@ -36,7 +43,14 @@ class QASemanticVerification:
     gold_supported: bool
     unique_answer: bool
     task_aligned: bool
-    domain_specific: bool
+    content_specific: bool
+    commerce_relevant: bool
+    natural_question: bool
+    non_trivial: bool
+    commercially_diagnostic: bool
+    claim_scope_preserved: bool
+    intended_modality_required: bool
+    reference_closed: bool
 
     def to_dict(self) -> dict[str, object]:
         return {

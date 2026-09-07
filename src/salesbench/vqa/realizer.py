@@ -12,6 +12,10 @@ from pathlib import Path
 from ..goldbank.parsing import ModelOutputError, parse_json_object
 from ..goldbank.schema import stable_digest
 from ..io_utils import read_jsonl, write_json, write_jsonl
+from ..run_integrity import (
+    compute_qa_realization_fingerprint,
+    read_required_fingerprint,
+)
 from ..utils import clean_text, contains_cjk
 from ..vlm.api_client import VLMClient
 from .prompts import (
@@ -64,8 +68,8 @@ def _context_by_ids(
     return [_safe_context(lookup[item_id], fields) for item_id in ids if item_id in lookup]
 
 
-def _part_path(output_dir: Path, spec_id: str) -> Path:
-    return output_dir / ".parts" / f"{spec_id}.json"
+def _part_path(output_dir: Path, evidence_fingerprint: str, spec_id: str) -> Path:
+    return output_dir / ".parts" / evidence_fingerprint / f"{spec_id}.json"
 
 
 def _fingerprint(
@@ -74,6 +78,7 @@ def _fingerprint(
     *,
     strict_semantic_verification: bool = False,
     verifier_model: str = "",
+    evidence_fingerprint: str = "",
 ) -> str:
     return stable_digest(
         {
@@ -85,6 +90,7 @@ def _fingerprint(
                 QA_QUALITY_PROMPT_VERSION if strict_semantic_verification else "disabled"
             ),
             "verifier_model": verifier_model if strict_semantic_verification else "",
+            "evidence_fingerprint": evidence_fingerprint,
         },
         length=24,
     )
@@ -141,6 +147,10 @@ def run_qa_realizer(
 ) -> dict[str, object]:
     if not 0.0 <= accepted_sample_fraction <= 1.0:
         raise ValueError("accepted_sample_fraction must be between 0 and 1")
+    evidence_dir = Path(evidence_dir)
+    evidence_fingerprint = read_required_fingerprint(
+        evidence_dir / "generation_meta.json", "evidence_fingerprint"
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     records = read_jsonl(evidence_dir / dataset_filename)
     all_specs = build_question_specs(
@@ -226,12 +236,33 @@ def run_qa_realizer(
     ]
 
     verifier_client = semantic_verifier_client or client
+    qa_realization_fingerprint = compute_qa_realization_fingerprint(
+        evidence_fingerprint=evidence_fingerprint,
+        specs=[spec.to_dict() for spec in all_specs],
+        components={
+            "question_realizer_prompt": QUESTION_REALIZER_PROMPT_VERSION,
+            "qa_quality_prompt": (
+                QA_QUALITY_PROMPT_VERSION if strict_semantic_verification else "disabled"
+            ),
+        },
+        models={
+            "realizer": client.model,
+            "semantic_verifier": (
+                verifier_client.model if strict_semantic_verification else "disabled"
+            ),
+        },
+        policy={
+            "allow_auto_candidates": allow_auto_candidates,
+            "strict_semantic_verification": strict_semantic_verification,
+            "accepted_sample_fraction": accepted_sample_fraction,
+        },
+    )
     realizations: dict[str, QuestionRealization] = {}
     semantic_verifications: dict[str, dict[str, object]] = {}
     resumed_count = 0
     pending: list[QuestionSpec] = []
     for spec in specs:
-        part = _part_path(output_dir, spec.spec_id)
+        part = _part_path(output_dir, evidence_fingerprint, spec.spec_id)
         if resume and part.exists():
             try:
                 payload = json.loads(part.read_text(encoding="utf-8"))
@@ -240,6 +271,7 @@ def run_qa_realizer(
                     client.model,
                     strict_semantic_verification=strict_semantic_verification,
                     verifier_model=verifier_client.model,
+                    evidence_fingerprint=evidence_fingerprint,
                 )
                 cached_verification = payload.get("semantic_verification")
                 cache_is_acceptable = not strict_semantic_verification or (
@@ -458,7 +490,7 @@ def run_qa_realizer(
         if outcome.repair_attempted:
             repaired_count += 1
         realizations[spec.spec_id] = outcome.realization
-        part = _part_path(output_dir, spec.spec_id)
+        part = _part_path(output_dir, evidence_fingerprint, spec.spec_id)
         part.parent.mkdir(parents=True, exist_ok=True)
         write_json(
             part,
@@ -468,6 +500,7 @@ def run_qa_realizer(
                     client.model,
                     strict_semantic_verification=strict_semantic_verification,
                     verifier_model=verifier_client.model,
+                    evidence_fingerprint=evidence_fingerprint,
                 ),
                 "realization": outcome.realization.to_dict(),
                 "semantic_verification": verification_record,
@@ -527,6 +560,8 @@ def run_qa_realizer(
         sorted(accepted_sample, key=lambda item: (str(item["task_type"]), str(item["spec_id"]))),
     )
     summary = {
+        "evidence_fingerprint": evidence_fingerprint,
+        "qa_realization_fingerprint": qa_realization_fingerprint,
         "prompt_version": QUESTION_REALIZER_PROMPT_VERSION,
         "model": client.model,
         "strict_semantic_verification": strict_semantic_verification,
@@ -561,21 +596,7 @@ def run_qa_realizer(
             "pipeline_diagnostics": len(pipeline_diagnostics),
             "accepted_sample": len(accepted_sample),
         },
-        "fingerprint": stable_digest(
-            {
-                "specs": [spec.to_dict() for spec in all_specs],
-                "model": client.model,
-                "strict_semantic_verification": strict_semantic_verification,
-                "quality_prompt_version": (
-                    QA_QUALITY_PROMPT_VERSION if strict_semantic_verification else "disabled"
-                ),
-                "semantic_verifier_model": (
-                    verifier_client.model if strict_semantic_verification else "disabled"
-                ),
-                "accepted_sample_fraction": accepted_sample_fraction,
-            },
-            length=24,
-        ),
+        "fingerprint": qa_realization_fingerprint,
     }
     write_json(output_dir / "qa_realizer_meta.json", summary)
     return summary

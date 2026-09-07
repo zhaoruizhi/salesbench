@@ -67,7 +67,14 @@ def result(verdict: str = "PASS", **overrides):
         "gold_supported": True,
         "unique_answer": True,
         "task_aligned": True,
-        "domain_specific": True,
+        "content_specific": True,
+        "commerce_relevant": True,
+        "natural_question": True,
+        "non_trivial": True,
+        "commercially_diagnostic": True,
+        "claim_scope_preserved": True,
+        "intended_modality_required": True,
+        "reference_closed": True,
     }
     payload.update(overrides)
     return payload
@@ -88,6 +95,14 @@ def test_parser_cannot_pass_when_a_quality_dimension_fails():
     assert "gold_supported" in parsed.reason
 
 
+def test_parser_requires_every_production_quality_dimension():
+    incomplete = result()
+    del incomplete["non_trivial"]
+
+    with pytest.raises(ValueError, match="non_trivial"):
+        parse_qa_semantic_verification(json.dumps(incomplete), "qs1")
+
+
 def test_verifier_receives_only_cited_public_context():
     client = FakeClient(result())
     spec = question_spec()
@@ -106,4 +121,3 @@ def test_verifier_receives_only_cited_public_context():
     serialized = json.dumps(client.calls[0], ensure_ascii=False)
     assert "followers" not in serialized
     assert "likes" not in serialized
-
