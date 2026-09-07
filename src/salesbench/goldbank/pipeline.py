@@ -10,9 +10,10 @@ from ..multiagent.context import public_observation_context
 from ..multiagent.schema import VideoContextBundle
 from ..utils import clean_text, ensure_speaker_attribution
 from ..vlm.api_client import APICallResult, VLMClient
-from .commerce_ontology import DEMONSTRATION_CUES
+from .commerce_ontology import DEMONSTRATION_CUES, relation_requires_temporal_order
 from .commerce_schema import CommerceCue, CommercialRelation, CueType
 from .normalizer import (
+    derive_source_capabilities,
     normalize_commerce_cues,
     normalize_commercial_relations,
     normalize_evidence_unit,
@@ -355,7 +356,7 @@ def _abstention_queue_item(
         "item_type": "abstention",
         "task_type": clean_text(abstention.get("task_type")).upper(),
         "task_subtype": clean_text(abstention.get("task_subtype")).upper(),
-        "reason_code": "ABSTENTION",
+        "reason_code": clean_text(abstention.get("reason_code")).upper() or "ABSTENTION",
         "reason": reason,
         "target": {},
         "candidate_gold": {},
@@ -840,10 +841,12 @@ class GoldBankPipeline:
             )
 
         cue_dict = {cue.cue_id: cue for cue in commerce_cues}
+        source_capabilities = derive_source_capabilities(evidence_units)
         relation_system, relation_user = build_commercial_relation_prompt(
             video_id,
             [unit.to_dict() for unit in evidence_units],
             [cue.to_dict() for cue in commerce_cues],
+            source_capabilities,
         )
         relation_call = self.llm_client.call_text_only(
             relation_system,
@@ -884,6 +887,23 @@ class GoldBankPipeline:
                             raw_relation,
                             stage="commercial_relation_building",
                             item_type="commercial_relation",
+                        )
+                    )
+                    continue
+                if relation_requires_temporal_order(relation.relation_type) and not source_capabilities[
+                    "asr_temporal_order"
+                ]:
+                    human_review_queue.append(
+                        _abstention_queue_item(
+                            video_id,
+                            "commercial_relation_builder",
+                            {
+                                "reason_code": "TEMPORAL_CAPABILITY_UNAVAILABLE",
+                                "reason": "Source ASR has no timestamps, so this temporal relation is intentionally unavailable.",
+                                "task_type": "CM",
+                                "task_subtype": relation.relation_type.value,
+                            },
+                            len(relation_abstentions),
                         )
                     )
                     continue
@@ -1504,7 +1524,13 @@ class GoldBankPipeline:
             observation_scope={
                 "frame_strategy": "hook_plus_uniform",
                 "sampled_frame_count": len(frames_b64 or []),
-                "known_limitations": [],
+                "source_capabilities": source_capabilities,
+                "known_limitations": (
+                    ["ASR temporal order is unavailable; temporal tasks are disabled."]
+                    if not source_capabilities["asr_temporal_order"]
+                    and source_capabilities["spoken_claim_extraction"]
+                    else []
+                ),
             },
             commerce_cue_ids=tuple(cue.cue_id for cue in commerce_cues),
             commercial_relation_ids=tuple(

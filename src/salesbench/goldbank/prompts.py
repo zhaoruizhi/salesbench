@@ -263,6 +263,7 @@ def build_commercial_relation_prompt(
     video_id: str,
     evidence_units: list[dict[str, object]],
     commerce_cues: list[dict[str, object]],
+    source_capabilities: dict[str, bool] | None = None,
 ) -> tuple[str, str]:
     endpoint_contract = "; ".join(
         (
@@ -295,13 +296,16 @@ def build_commercial_relation_prompt(
         "markings, applicator, or one method step does not demonstrate a claimed memory, health, durability, "
         "ease, fit, or performance effect. Abstain when endpoints are ambiguous or evidence is "
         "insufficient. Never claim that a viewer trusted, purchased, converted, or became less uncertain. "
-        "Describe only relationships among the supplied content cues."
+        "Describe only relationships among the supplied content cues. "
+        "When source_capabilities.asr_temporal_order is false, do not emit CONTENT_PRECEDES_CTA, "
+        "CLAIM_TEMPORALLY_MISALIGNED, or any relation whose truth requires ASR order."
     )
     user = _json(
         {
             "video_id": video_id,
             "evidence_units": evidence_units,
             "commerce_cues": commerce_cues,
+            "source_capabilities": source_capabilities or {},
         }
     )
     return system, user

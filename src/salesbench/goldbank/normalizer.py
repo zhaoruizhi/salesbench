@@ -200,8 +200,12 @@ def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int)
     predicate = normalize_text(raw.get("predicate"))
     if not subject or not predicate or raw.get("value") in (None, ""):
         raise ValueError("Evidence unit requires subject, predicate, and value")
+    timestamp_status = normalize_text(raw.get("timestamp_status") or "unavailable").lower()
     start_s = raw.get("start_s")
     end_s = raw.get("end_s")
+    if modality == EvidenceModality.ASR and timestamp_status == "unavailable":
+        start_s = None
+        end_s = None
     if start_s is not None and end_s is not None and float(start_s) > float(end_s):
         raise ValueError("Evidence start_s cannot exceed end_s")
     source_locator = normalize_text(raw.get("evidence_id"))
@@ -239,7 +243,7 @@ def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int)
         source_domains=source_domains,
         extractor=normalize_text(raw.get("extractor") or "objective_evidence_extractor"),
         confidence=_required_evidence_confidence(raw),
-        timestamp_status=normalize_text(raw.get("timestamp_status") or "unavailable"),
+        timestamp_status=timestamp_status,
         content_en=content_en,
         source_text_native=text_span,
         assertion_type=(
@@ -253,6 +257,25 @@ def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int)
             raw.get("temporal_scope"),
         ),
     )
+
+
+def derive_source_capabilities(
+    evidence_units: list[EvidenceUnit],
+) -> dict[str, bool]:
+    """Describe supported source operations without treating absence as a defect."""
+
+    asr_units = [unit for unit in evidence_units if unit.modality == EvidenceModality.ASR]
+    has_localized_asr = bool(asr_units) and all(
+        unit.timestamp_status != "unavailable"
+        and unit.start_s is not None
+        and unit.end_s is not None
+        for unit in asr_units
+    )
+    return {
+        "spoken_claim_extraction": bool(asr_units),
+        "cross_modal_semantics": bool(asr_units),
+        "asr_temporal_order": has_localized_asr,
+    }
 
 
 def normalize_evidence_units(video_id: str, raw_units: list[dict[str, object]]) -> list[EvidenceUnit]:

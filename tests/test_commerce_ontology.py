@@ -4,7 +4,10 @@ import sys
 
 sys.path.insert(0, "src")
 
-from salesbench.goldbank.commerce_ontology import RELATION_RULES  # noqa: E402
+from salesbench.goldbank.commerce_ontology import (  # noqa: E402
+    RELATION_RULES,
+    relation_requires_temporal_order,
+)
 from salesbench.goldbank.commerce_schema import (  # noqa: E402
     CommerceCue,
     CommercialRelation,
@@ -67,6 +70,14 @@ def test_relation_catalog_excludes_consumer_outcomes():
     assert "IMPROVES_CONVERSION" not in values
     assert "CONTENT_ADDRESSES_FIT_UNCERTAINTY" in values
     assert set(RELATION_RULES) == set(RelationType)
+
+
+def test_only_sequence_relations_require_source_timing():
+    assert relation_requires_temporal_order(RelationType.CONTENT_PRECEDES_CTA)
+    assert relation_requires_temporal_order(RelationType.CLAIM_TEMPORALLY_MISALIGNED)
+    assert not relation_requires_temporal_order(
+        RelationType.CLAIM_REPEATED_ACROSS_MODALITIES
+    )
 
 
 def test_valid_offer_condition_relation_passes_deterministic_rules():

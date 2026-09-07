@@ -132,6 +132,7 @@ def test_detect_annotation_risks_catches_task_schema_claim_and_localization() ->
             "text_span": "祛斑淡印",
             "start_s": None,
             "end_s": None,
+            "timestamp_status": "unavailable",
         },
         "e_ocr": {
             "evidence_id": "e_ocr",
@@ -182,6 +183,37 @@ def test_detect_annotation_risks_catches_task_schema_claim_and_localization() ->
     assert "MISSING_TEMPORAL_LOCALIZATION" in codes
     assert "NUMERIC_PROPOSAL_ID" in codes
     assert "CM_NOT_CROSS_MODAL" in codes
+
+
+def test_unavailable_asr_timing_is_not_an_audit_risk() -> None:
+    evidence = {
+        "e_asr": {
+            "evidence_id": "e_asr",
+            "modality": "asr",
+            "text_span": "领券后九块九",
+            "start_s": None,
+            "end_s": None,
+            "timestamp_status": "unavailable",
+        }
+    }
+    annotations = [
+        {
+            "annotation_id": "bp_price",
+            "video_id": "v1",
+            "task_type": "BP",
+            "task_subtype": "PRICE_AND_DISCOUNT",
+            "target": {"subject": "offer"},
+            "gold_value": {"answer": "The speaker states a 9.9-yuan coupon price."},
+            "evidence_refs": ["e_asr"],
+            "source_proposal_ids": ["bp-price"],
+        }
+    ]
+
+    risks = detect_annotation_risks(annotations, evidence)
+
+    assert not any(
+        "MISSING_TEMPORAL_LOCALIZATION" in row["risk_codes"] for row in risks
+    )
 
 
 def test_organize_delivery_physically_separates_formal_and_smoke(tmp_path: Path) -> None:

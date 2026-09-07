@@ -163,6 +163,23 @@ RELATION_RULES: dict[RelationType, dict[str, object]] = {
 }
 
 
+TEMPORAL_ORDER_RELATIONS = frozenset(
+    {
+        RelationType.CLAIM_TEMPORALLY_MISALIGNED,
+        RelationType.CONTENT_PRECEDES_CTA,
+    }
+)
+
+
+def relation_requires_temporal_order(relation_type: RelationType | str) -> bool:
+    relation = (
+        relation_type
+        if isinstance(relation_type, RelationType)
+        else RelationType(str(relation_type).strip().upper())
+    )
+    return relation in TEMPORAL_ORDER_RELATIONS
+
+
 def relation_rule(relation_type: RelationType | str) -> dict[str, object]:
     relation = (
         relation_type

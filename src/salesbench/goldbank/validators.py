@@ -232,6 +232,9 @@ def validate_evidence_unit(unit: EvidenceUnit) -> list[ValidationIssue]:
         issues.append(ValidationIssue("MISSING_TEXT_SPAN", "ERROR", unit.evidence_id, "ASR/OCR evidence requires text_span"))
     if unit.modality in {EvidenceModality.ASR, EvidenceModality.OCR} and (
         unit.start_s is None or unit.end_s is None
+    ) and not (
+        unit.modality == EvidenceModality.ASR
+        and clean_text(unit.timestamp_status).lower() == "unavailable"
     ):
         issues.append(
             ValidationIssue(

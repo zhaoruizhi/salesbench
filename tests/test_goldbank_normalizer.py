@@ -11,6 +11,7 @@ from salesbench.goldbank.commerce_schema import (  # noqa: E402
     RelationType,
 )
 from salesbench.goldbank.normalizer import (  # noqa: E402
+    derive_source_capabilities,
     normalize_commerce_cues,
     normalize_commercial_relations,
     normalize_evidence_units,
@@ -23,6 +24,33 @@ from salesbench.goldbank.validators import validate_evidence_unit  # noqa: E402
 
 
 class EvidenceNormalizerTest(unittest.TestCase):
+    def test_unavailable_asr_zero_sentinel_becomes_null_and_disables_only_temporal_order(self):
+        unit = normalize_evidence_unit(
+            "v1",
+            {
+                "modality": "asr",
+                "start_s": 0,
+                "end_s": 0,
+                "timestamp_status": "unavailable",
+                "source_text_native": "主播说领券后九块九",
+                "subject": "speaker",
+                "predicate": "states",
+                "value": "the coupon price is 9.9 yuan",
+                "confidence": 0.9,
+            },
+            0,
+        )
+
+        self.assertIsNone(unit.start_s)
+        self.assertIsNone(unit.end_s)
+        self.assertEqual(
+            derive_source_capabilities([unit]),
+            {
+                "spoken_claim_extraction": True,
+                "cross_modal_semantics": True,
+                "asr_temporal_order": False,
+            },
+        )
     def test_infers_missing_visual_modality_only_from_observed_frame_contract(self):
         unit = normalize_evidence_unit(
             "v1",

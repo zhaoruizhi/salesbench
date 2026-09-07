@@ -786,7 +786,11 @@ def detect_annotation_risks(
         if any(coordinate_span.match(str(unit.get("text_span") or "")) for unit in units):
             codes.add("INVALID_TEXT_SPAN")
         if any(
-            str(unit.get("modality")) in {"asr", "ocr"}
+            (
+                str(unit.get("modality")) == "ocr"
+                or str(unit.get("timestamp_status") or "").lower() != "unavailable"
+            )
+            and str(unit.get("modality")) in {"asr", "ocr"}
             and unit.get("start_s") is None
             and unit.get("end_s") is None
             for unit in units

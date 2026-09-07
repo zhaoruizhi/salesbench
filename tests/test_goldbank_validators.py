@@ -120,7 +120,7 @@ def relation_record(
 
 
 class GoldBankValidatorTest(unittest.TestCase):
-    def test_asr_without_temporal_localization_is_rejected(self):
+    def test_asr_without_source_timestamps_is_valid_for_non_temporal_claims(self):
         unit = replace(
             evidence("asr_missing_time"),
             modality=EvidenceModality.ASR,
@@ -131,11 +131,12 @@ class GoldBankValidatorTest(unittest.TestCase):
             source_text_native="主播说这是全天不鼓包",
             assertion_type=EvidenceAssertionType.SPOKEN_CLAIM,
             temporal_scope=EvidenceTemporalScope.LONG_TERM_CLAIM,
+            timestamp_status="unavailable",
         )
 
         issues = validate_evidence_unit(unit)
 
-        self.assertIn("MISSING_TEMPORAL_LOCALIZATION", {issue.code for issue in issues})
+        self.assertNotIn("MISSING_TEMPORAL_LOCALIZATION", {issue.code for issue in issues})
 
     def test_asr_only_product_attribute_cue_is_rejected_as_claim_fact_mix(self):
         unit = replace(
