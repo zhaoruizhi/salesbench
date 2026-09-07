@@ -353,6 +353,8 @@ def test_review_views_render_one_case_pagers_and_four_evidence_queues() -> None:
             "missing_task_videos": [],
         },
         "qa": [{"vqa_id": "q1", "task_type": "BP", "question": "Question?", "gold_answer": "Answer."}],
+        "final_qa": [{"vqa_id": "q1", "task_type": "BP", "question": "Question?", "gold_answer": "Answer."}],
+        "integrity": {"status": "VERIFIED", "blocking": False, "issues": []},
         "judge": {
             "summary": {},
             "metrics": {},
@@ -363,7 +365,7 @@ def test_review_views_render_one_case_pagers_and_four_evidence_queues() -> None:
     html = render_workbench(data, collect_prompt_snapshot(), fragment=True)
 
     assert 'class="case-pager"' in html
-    assert html.count("${pager(") == 3
+    assert html.count("${pager(") == 4
     assert 'aria-label="上一条"' in html
     assert 'aria-label="下一条"' in html
     assert 'aria-label="跳转到案例序号"' in html
@@ -377,6 +379,147 @@ def test_review_views_render_one_case_pagers_and_four_evidence_queues() -> None:
     assert "自动通过抽样" in html
     assert "原始诊断队列" in html
     assert "slice(0,200)" not in html
+
+
+def test_final_qa_browser_is_chinese_first_paginated_and_read_only() -> None:
+    data = {
+        "release": {
+            "status": "pilot_candidate_requires_human_review",
+            "prompt_version": "evidence-prompt-v10.3",
+            "run_id": "run-1",
+        },
+        "counts": {"videos": 1, "qa": 1, "final_qa": 1, "judge_rows": 0},
+        "delivery": {},
+        "translations": {},
+        "integrity": {"status": "VERIFIED", "blocking": False, "issues": []},
+        "evidence": {
+            "queue": [],
+            "risks": [],
+            "abstentions": [],
+            "accepted_sample": [],
+            "missing_task_videos": [],
+            "commerce_cues": [],
+            "commercial_relations": [],
+        },
+        "qa": [],
+        "final_qa": [
+            {
+                "vqa_id": "q-final",
+                "video_id": "v1",
+                "task_type": "SS",
+                "task_subtype": "CLAIM_DEMONSTRATION_STATUS",
+                "capability": "CLAIM_DEMONSTRATION_STATUS",
+                "question": "How does the demonstration support the seller's claim?",
+                "question_zh": "演示如何支持卖家的主张？",
+                "gold_answer": "It shows the claimed state change.",
+                "gold_answer_zh": "演示呈现了所声称的状态变化。",
+                "evidence_items": [
+                    {
+                        "evidence_id": "e1",
+                        "content_en": "The product changes state during use.",
+                        "content_zh": "产品在使用过程中发生状态变化。",
+                        "frames": [{"thumbnail_path": "assets/f.jpg", "frame_index": 1}],
+                    }
+                ],
+                "commerce_cues": [],
+                "commercial_relations": [],
+                "selection_score": 88.0,
+            }
+        ],
+        "judge": {"summary": {}, "metrics": {}, "rows": []},
+    }
+
+    html = render_workbench(data, collect_prompt_snapshot(), fragment=True)
+
+    assert 'data-tab="finalqa"' in html
+    assert "最终 QA 浏览" in html
+    assert "演示如何支持卖家的主张？" in html
+    assert "English canonical question and Gold" in html
+    assert "pager('fq')" in html
+    assert "pageState={ev:0,qa:0,fq:0,jd:0}" in html
+    assert "loading=\"lazy\"" in html
+    final_renderer = html.split("function renderFinalQA()", 1)[1].split("function renderJudge()", 1)[0]
+    assert "decisionButtons" not in final_renderer
+
+
+def test_current_artifact_integrity_mismatch_blocks_final_qa_browser(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    qa_dir = tmp_path / "qa"
+    evidence = {
+        "evidence_id": "e1",
+        "video_id": "v1",
+        "modality": "visual",
+        "frame_indices": [0],
+        "content_en": "The host demonstrates the product.",
+    }
+    annotation = {
+        "annotation_id": "a1",
+        "video_id": "v1",
+        "task_type": "SS",
+        "task_subtype": "CLAIM_DEMONSTRATION_STATUS",
+        "target": {"claim": "easy to use"},
+        "gold_value": {"answer": "The host demonstrates the use step."},
+        "evidence_refs": ["e1"],
+    }
+    qa = {
+        "vqa_id": "q1",
+        "video_id": "v1",
+        "task_type": "SS",
+        "question": "How is the claim demonstrated?",
+        "gold_answer": "The host demonstrates the use step.",
+        "source_annotation_ids": ["a1"],
+        "evidence_refs": ["e1"],
+        "commerce_cue_ids": [],
+        "commercial_relation_ids": [],
+    }
+    _write(evidence_dir / "evidence_units.jsonl", json.dumps(evidence) + "\n")
+    _write(evidence_dir / "commerce_cues.jsonl", "")
+    _write(evidence_dir / "commercial_relations.jsonl", "")
+    _write(
+        evidence_dir / "video_evidence_dataset.jsonl",
+        json.dumps(
+            {
+                "schema_version": "evidence-dataset-schema-v4",
+                "video_id": "v1",
+                "grounded_annotations": [annotation],
+            }
+        )
+        + "\n",
+    )
+    _write(
+        evidence_dir / "generation_meta.json",
+        json.dumps({"video_ids": ["v1"], "run_id": "run-1", "evidence_fingerprint": "e" * 64}),
+    )
+    _write(qa_dir / "vqa_gold_private.jsonl", json.dumps(qa) + "\n")
+    _write(
+        qa_dir / "generation_meta.json",
+        json.dumps(
+            {
+                "compiler_version": "evidence-qa-compiler-v9",
+                "evidence_fingerprint": "x" * 64,
+                "qa_realization_fingerprint": "q" * 64,
+                "compile_fingerprint": "c" * 64,
+            }
+        ),
+    )
+    manifest = {
+        "frame_cache_root": "frames",
+        "formal": {
+            "artifacts": {
+                "evidence": {"source": "evidence"},
+                "qa": {"source": "qa"},
+            }
+        },
+    }
+
+    data = build_workbench_data(manifest, tmp_path, {})
+
+    assert data["integrity"]["status"] == "BLOCKED"
+    assert data["integrity"]["blocking"] is True
+    assert "EVIDENCE_FINGERPRINT_MISMATCH" in data["integrity"]["issues"]
+    assert data["final_qa"] == []
+    html = render_workbench(data, collect_prompt_snapshot(), fragment=True)
+    assert "最终 QA 已阻断" in html
 
 
 def test_v10_read_only_buckets_do_not_render_review_decision_controls() -> None:
@@ -518,7 +661,7 @@ def test_prompt_snapshot_includes_question_surface_repairer() -> None:
     assert "model_runner" in prompts
     assert "final answer in English" in prompts["model_runner"]["system"]
     assert "qa_semantic_quality_gate" in prompts
-    assert "Plain insufficiency is REJECT" in prompts["qa_semantic_quality_gate"]["system"]
+    assert "plain insufficiency is REJECT" in prompts["qa_semantic_quality_gate"]["system"]
 
 
 def test_prompt_snapshot_includes_split_language_and_visual_evidence_stages() -> None:
@@ -879,7 +1022,7 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
     assert data["qa"][0]["evidence_items"][0]["frames"][0]["frame_index"] == 1
     assert data["judge"]["rows"][0]["evidence_items"] == data["qa"][0]["evidence_items"]
     assert data["release"]["runtime_prompt_version"] == "evidence-prompt-v6"
-    assert data["release"]["current_prompt_version"] == "evidence-prompt-v10.2"
+    assert data["release"]["current_prompt_version"] == "evidence-prompt-v10.3"
     assert data["release"]["current_judge_prompt_version"] == "judge-prompt-v5"
     assert data["counts"]["videos"] == 2
     assert data["counts"]["commercial_records"] == 1
