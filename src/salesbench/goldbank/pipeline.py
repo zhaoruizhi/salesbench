@@ -11,7 +11,7 @@ from ..multiagent.schema import VideoContextBundle
 from ..utils import clean_text, ensure_speaker_attribution
 from ..vlm.api_client import APICallResult, VLMClient
 from .commerce_ontology import DEMONSTRATION_CUES, relation_requires_temporal_order
-from .commerce_schema import CommerceCue, CommercialRelation, CueType
+from .commerce_schema import ActionRole, CommerceCue, CommercialRelation, CueType
 from .normalizer import (
     derive_source_capabilities,
     normalize_commerce_cues,
@@ -187,6 +187,8 @@ def build_bp_proposals_from_graph(
     proposals: list[GoldProposal] = []
     evidence_by_id = {unit.evidence_id: unit for unit in evidence_units}
     for idx, cue in enumerate(commerce_cues):
+        if cue.action_role == ActionRole.BACKGROUND_HANDLING:
+            continue
         subtype = _BP_CUE_CAPABILITIES.get(cue.cue_type)
         if subtype is None:
             continue
@@ -232,6 +234,7 @@ def build_bp_proposals_from_graph(
                 forbidden_inferences=(
                     "Do not infer sales, interaction, conversion, or unshown product properties.",
                 ),
+                assertion_scope=cue.assertion_scope,
             )
         )
     return proposals
@@ -268,6 +271,7 @@ def _bp_items_from_proposals(proposals: list[GoldProposal]) -> list[GoldItem]:
                 commercial_relation_ids=proposal.commercial_relation_ids,
                 question_intent=proposal.question_intent,
                 forbidden_inferences=proposal.forbidden_inferences,
+                assertion_scope=proposal.assertion_scope,
             )
         )
     return items

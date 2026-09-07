@@ -49,6 +49,22 @@ class EvidenceTemporalScope(str, Enum):
     UNSPECIFIED = "UNSPECIFIED"
 
 
+class AssertionScope(str, Enum):
+    OBSERVED_FACT = "OBSERVED_FACT"
+    SPOKEN_CLAIM = "SPOKEN_CLAIM"
+    CONDITIONAL = "CONDITIONAL"
+    INSTRUCTION = "INSTRUCTION"
+    HYPOTHETICAL = "HYPOTHETICAL"
+    PROMOTIONAL_PROMISE = "PROMOTIONAL_PROMISE"
+
+
+class ActionRole(str, Enum):
+    BACKGROUND_HANDLING = "BACKGROUND_HANDLING"
+    PRODUCT_INSPECTION = "PRODUCT_INSPECTION"
+    FUNCTIONAL_OPERATION = "FUNCTIONAL_OPERATION"
+    OUTCOME_DEMONSTRATION = "OUTCOME_DEMONSTRATION"
+
+
 _LONG_TERM_CLAIM_MARKERS = (
     "after a day",
     "all day",
@@ -76,6 +92,84 @@ def infer_assertion_type(modality: EvidenceModality) -> EvidenceAssertionType:
     if modality == EvidenceModality.OCR:
         return EvidenceAssertionType.OCR_TEXT
     return EvidenceAssertionType.OBSERVED
+
+
+def infer_assertion_scope(
+    modality: EvidenceModality, content: object = ""
+) -> AssertionScope:
+    text = clean_text(content).lower()
+    if any(marker in text for marker in (" if ", " when ", " after claiming", "requires ", "provided that")):
+        return AssertionScope.CONDITIONAL
+    if any(marker in text for marker in ("should ", "must ", "need to ", "instructs", "instruction")):
+        return AssertionScope.INSTRUCTION
+    if any(marker in text for marker in ("might ", "could ", "would ", "hypothetical")):
+        return AssertionScope.HYPOTHETICAL
+    if any(marker in text for marker in ("guarantees", "guaranteed", "will make", "promises")):
+        return AssertionScope.PROMOTIONAL_PROMISE
+    if modality == EvidenceModality.ASR:
+        return AssertionScope.SPOKEN_CLAIM
+    return AssertionScope.OBSERVED_FACT
+
+
+def infer_action_role(content: object = "") -> ActionRole | None:
+    text = clean_text(content).lower()
+    if any(
+        marker in text
+        for marker in (
+            "state change",
+            "before and after",
+            "before-after",
+            "becomes clean",
+            "becomes empty",
+            "result is shown",
+            "outcome",
+        )
+    ):
+        return ActionRole.OUTCOME_DEMONSTRATION
+    if any(
+        marker in text
+        for marker in (
+            "applies ",
+            "connects ",
+            "assembles ",
+            "scans ",
+            "measures ",
+            "installs ",
+            "loads ",
+            "uses the ",
+            "demonstrates how",
+        )
+    ):
+        return ActionRole.FUNCTIONAL_OPERATION
+    if any(
+        marker in text
+        for marker in (
+            "opens the package",
+            "opens a package",
+            "exposes ",
+            "cross-section",
+            "close-up",
+            "printed content",
+            "connector",
+        )
+    ):
+        return ActionRole.PRODUCT_INSPECTION
+    if any(
+        marker in text
+        for marker in (
+            "holds ",
+            "holding ",
+            "points to",
+            "pointing to",
+            "shows ",
+            "lifts ",
+            "rotates ",
+            "flips through",
+            "turns the pages",
+        )
+    ):
+        return ActionRole.BACKGROUND_HANDLING
+    return None
 
 
 def infer_temporal_scope(modality: EvidenceModality, content: object = "") -> EvidenceTemporalScope:
@@ -226,6 +320,8 @@ class EvidenceUnit:
     source_text_native: str = ""
     assertion_type: EvidenceAssertionType = EvidenceAssertionType.OBSERVED
     temporal_scope: EvidenceTemporalScope = EvidenceTemporalScope.FRAME
+    assertion_scope: AssertionScope = AssertionScope.OBSERVED_FACT
+    action_role: ActionRole | None = None
 
     def __post_init__(self) -> None:
         _confidence(self.confidence)
@@ -258,6 +354,8 @@ class EvidenceUnit:
             "timestamp_status": self.timestamp_status,
             "assertion_type": self.assertion_type.value,
             "temporal_scope": self.temporal_scope.value,
+            "assertion_scope": self.assertion_scope.value,
+            "action_role": self.action_role.value if self.action_role is not None else None,
         }
 
 
@@ -279,6 +377,7 @@ class GoldProposal:
     commercial_relation_ids: tuple[str, ...] = field(default_factory=tuple)
     question_intent: str = ""
     forbidden_inferences: tuple[str, ...] = field(default_factory=tuple)
+    assertion_scope: AssertionScope = AssertionScope.OBSERVED_FACT
 
     def __post_init__(self) -> None:
         _confidence(self.proposal_confidence)
@@ -301,6 +400,7 @@ class GoldProposal:
             "commercial_relation_ids": list(self.commercial_relation_ids),
             "question_intent": self.question_intent,
             "forbidden_inferences": list(self.forbidden_inferences),
+            "assertion_scope": self.assertion_scope.value,
         }
 
 
@@ -349,6 +449,7 @@ class GoldItem:
     commercial_relation_ids: tuple[str, ...] = field(default_factory=tuple)
     question_intent: str = ""
     forbidden_inferences: tuple[str, ...] = field(default_factory=tuple)
+    assertion_scope: AssertionScope = AssertionScope.OBSERVED_FACT
 
     def __post_init__(self) -> None:
         _confidence(self.confidence)
@@ -386,6 +487,7 @@ class GoldItem:
             "commercial_relation_ids": list(self.commercial_relation_ids),
             "question_intent": self.question_intent,
             "forbidden_inferences": list(self.forbidden_inferences),
+            "assertion_scope": self.assertion_scope.value,
         }
 
 
@@ -448,6 +550,16 @@ def parse_evidence_unit(record: dict[str, object]) -> EvidenceUnit:
             clean_text(record.get("content_en")) or record.get("value"),
             record.get("temporal_scope"),
         ),
+        assertion_scope=(
+            AssertionScope(clean_text(record.get("assertion_scope")).upper())
+            if clean_text(record.get("assertion_scope"))
+            else infer_assertion_scope(modality, record.get("content_en") or record.get("value"))
+        ),
+        action_role=(
+            ActionRole(clean_text(record.get("action_role")).upper())
+            if clean_text(record.get("action_role"))
+            else infer_action_role(record.get("content_en") or record.get("value"))
+        ),
     )
 
 
@@ -472,6 +584,9 @@ def parse_gold_proposal(record: dict[str, object]) -> GoldProposal:
         question_intent=clean_text(record.get("question_intent")),
         forbidden_inferences=tuple(
             clean_text(value) for value in _tuple(record.get("forbidden_inferences"))
+        ),
+        assertion_scope=AssertionScope(
+            clean_text(record.get("assertion_scope") or "OBSERVED_FACT").upper()
         ),
     )
 
@@ -521,6 +636,9 @@ def parse_gold_item(record: dict[str, object]) -> GoldItem:
         question_intent=clean_text(record.get("question_intent")),
         forbidden_inferences=tuple(
             clean_text(value) for value in _tuple(record.get("forbidden_inferences"))
+        ),
+        assertion_scope=AssertionScope(
+            clean_text(record.get("assertion_scope") or "OBSERVED_FACT").upper()
         ),
     )
 

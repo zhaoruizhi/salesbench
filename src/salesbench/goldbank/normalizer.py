@@ -20,6 +20,8 @@ from .commerce_schema import (
 )
 from .ontology import allowed_subtypes, default_reasoning_operator
 from .schema import (
+    ActionRole,
+    AssertionScope,
     EvidenceAssertionType,
     EvidenceModality,
     EvidenceUnit,
@@ -28,6 +30,8 @@ from .schema import (
     GoldTaskType,
     make_evidence_id,
     infer_assertion_type,
+    infer_action_role,
+    infer_assertion_scope,
     resolve_temporal_scope,
     parse_gold_proposal,
     stable_digest,
@@ -228,6 +232,8 @@ def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int)
         }.get(modality, ())
     content_en = normalize_text(raw.get("content_en"))
     assertion_raw = normalize_text(raw.get("assertion_type")).upper()
+    assertion_scope_raw = normalize_text(raw.get("assertion_scope")).upper()
+    action_role_raw = normalize_text(raw.get("action_role")).upper()
     return EvidenceUnit(
         evidence_id=evidence_id,
         video_id=video_id,
@@ -255,6 +261,16 @@ def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int)
             modality,
             content_en or raw.get("value"),
             raw.get("temporal_scope"),
+        ),
+        assertion_scope=(
+            AssertionScope(assertion_scope_raw)
+            if assertion_scope_raw
+            else infer_assertion_scope(modality, content_en or raw.get("value"))
+        ),
+        action_role=(
+            ActionRole(action_role_raw)
+            if action_role_raw
+            else infer_action_role(content_en or raw.get("value"))
         ),
     )
 
@@ -336,6 +352,22 @@ def normalize_commerce_cues(
                 "directness": normalize_text(payload.get("directness") or "DIRECT").upper(),
                 "extractor": normalize_text(payload.get("extractor") or "commerce_cue_extractor"),
                 "confidence": _normalize_confidence(payload.get("confidence", 0.0)),
+                "assertion_scope": normalize_text(payload.get("assertion_scope"))
+                or next(
+                    (
+                        evidence[evidence_id].assertion_scope.value
+                        for evidence_id in evidence_ids
+                        if evidence[evidence_id].assertion_scope
+                        != AssertionScope.OBSERVED_FACT
+                    ),
+                    AssertionScope.OBSERVED_FACT.value,
+                ),
+                "action_role": normalize_text(payload.get("action_role"))
+                or (
+                    infer_action_role(content_en).value
+                    if infer_action_role(content_en) is not None
+                    else None
+                ),
             }
         )
         cues.append(parse_commerce_cue(payload))
@@ -402,6 +434,15 @@ def normalize_commercial_relations(
                 "directness": normalize_text(payload.get("directness") or "INFERRED").upper(),
                 "extractor": normalize_text(payload.get("extractor") or "commercial_relation_builder"),
                 "confidence": _normalize_confidence(payload.get("confidence", 0.0)),
+                "assertion_scope": normalize_text(payload.get("assertion_scope"))
+                or next(
+                    (
+                        cue.assertion_scope.value
+                        for cue in endpoint_cues
+                        if cue.assertion_scope != AssertionScope.OBSERVED_FACT
+                    ),
+                    AssertionScope.OBSERVED_FACT.value,
+                ),
             }
         )
         relations.append(parse_commercial_relation(payload))

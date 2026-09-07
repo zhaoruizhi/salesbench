@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from ..utils import clean_text
-from .schema import stable_digest
+from .schema import ActionRole, AssertionScope, stable_digest
 
 
 class CueType(str, Enum):
@@ -141,6 +141,8 @@ class CommerceCue:
     theory_tags: tuple[str, ...]
     extractor: str
     confidence: float
+    assertion_scope: AssertionScope = AssertionScope.OBSERVED_FACT
+    action_role: ActionRole | None = None
 
     def __post_init__(self) -> None:
         _confidence(self.confidence)
@@ -158,6 +160,8 @@ class CommerceCue:
             "theory_tags": list(self.theory_tags),
             "extractor": self.extractor,
             "confidence": self.confidence,
+            "assertion_scope": self.assertion_scope.value,
+            "action_role": self.action_role.value if self.action_role is not None else None,
         }
 
 
@@ -175,6 +179,7 @@ class CommercialRelation:
     directness: str
     extractor: str
     confidence: float
+    assertion_scope: AssertionScope = AssertionScope.OBSERVED_FACT
 
     def __post_init__(self) -> None:
         _confidence(self.confidence)
@@ -193,6 +198,7 @@ class CommercialRelation:
             "directness": self.directness,
             "extractor": self.extractor,
             "confidence": self.confidence,
+            "assertion_scope": self.assertion_scope.value,
         }
 
 
@@ -214,6 +220,14 @@ def parse_commerce_cue(record: dict[str, object]) -> CommerceCue:
         theory_tags=tuple(clean_text(item) for item in _tuple(record.get("theory_tags"))),
         extractor=clean_text(record.get("extractor")),
         confidence=_confidence(record.get("confidence", 0.0)),
+        assertion_scope=AssertionScope(
+            clean_text(record.get("assertion_scope") or "OBSERVED_FACT").upper()
+        ),
+        action_role=(
+            ActionRole(clean_text(record.get("action_role")).upper())
+            if clean_text(record.get("action_role"))
+            else None
+        ),
     )
 
 
@@ -238,4 +252,7 @@ def parse_commercial_relation(record: dict[str, object]) -> CommercialRelation:
         directness=clean_text(record.get("directness")).upper(),
         extractor=clean_text(record.get("extractor")),
         confidence=_confidence(record.get("confidence", 0.0)),
+        assertion_scope=AssertionScope(
+            clean_text(record.get("assertion_scope") or "OBSERVED_FACT").upper()
+        ),
     )

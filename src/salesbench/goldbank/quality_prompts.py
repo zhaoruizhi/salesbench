@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 
-QUALITY_PROMPT_VERSION = "quality-gate-prompt-v2"
+QUALITY_PROMPT_VERSION = "quality-gate-prompt-v3"
 
 
 def build_relation_verifier_prompt(
@@ -60,7 +60,10 @@ def build_proposal_repair_prompt(
         "commerce_cue_ids, and commercial_relation_ids; never invent or rename an ID. Keep the same task "
         "capability unless the review explicitly identifies a subtype mismatch. The repaired target, gold, "
         "question intent, and reasoning must be fully supported by the cited graph. Do not claim consumer "
-        "outcomes or facts beyond the observation window. If no valid repair exists, return repaired_proposal "
+        "outcomes or facts beyond the observation window. Preserve assertion_scope, reject generic background "
+        "handling as a commercial demonstration, keep product identity concrete, and keep the answer centered "
+        "on one capability. BP answers must not exceed 20 words, CM/AE 45 words, and SS 50 words. "
+        "If no valid repair exists, return repaired_proposal "
         "as null. Use English only. This is the only repair attempt."
     )
     user = json.dumps(

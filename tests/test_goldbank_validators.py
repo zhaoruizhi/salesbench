@@ -7,6 +7,7 @@ from dataclasses import replace
 sys.path.insert(0, "src")
 
 from salesbench.goldbank.commerce_schema import (  # noqa: E402
+    ActionRole,
     CommerceCue,
     CommercialRelation,
     CueType,
@@ -14,6 +15,7 @@ from salesbench.goldbank.commerce_schema import (  # noqa: E402
     RelationType,
 )
 from salesbench.goldbank.schema import (  # noqa: E402
+    AssertionScope,
     EvidenceAssertionType,
     EvidenceModality,
     EvidenceTemporalScope,
@@ -120,6 +122,65 @@ def relation_record(
 
 
 class GoldBankValidatorTest(unittest.TestCase):
+    def test_action_only_product_identity_is_rejected_before_qa_generation(self):
+        unit = evidence()
+        cue = replace(
+            cue_record(CueType.PRODUCT_IDENTITY, (unit.evidence_id,), "c_identity"),
+            content_en="The presenter holds and points to the product.",
+            action_role=ActionRole.BACKGROUND_HANDLING,
+        )
+
+        issues = validate_commerce_cue(cue, {unit.evidence_id: unit})
+
+        self.assertIn("ACTION_ONLY_PRODUCT_IDENTITY", {issue.code for issue in issues})
+
+    def test_background_page_flipping_is_not_a_product_demonstration(self):
+        unit = replace(
+            evidence(),
+            content_en="The presenter flips through a vocabulary book.",
+            action_role=ActionRole.BACKGROUND_HANDLING,
+        )
+        cue = replace(
+            cue_record(CueType.PROCESS_DEMONSTRATION, (unit.evidence_id,), "c_demo"),
+            content_en="The presenter flips through a vocabulary book.",
+            action_role=ActionRole.BACKGROUND_HANDLING,
+        )
+
+        issues = validate_commerce_cue(cue, {unit.evidence_id: unit})
+
+        self.assertIn("BACKGROUND_ACTION_AS_DEMONSTRATION", {issue.code for issue in issues})
+
+    def test_gold_rejects_internal_ids_and_task_specific_verbosity(self):
+        id_leak = gold_item(value={"answer": "Use evidence_id v1_visual_000_abc."})
+        verbose = gold_item(
+            value={"answer": " ".join(["detail"] * 21)},
+        )
+
+        leak_issues = validate_gold_item(id_leak, {evidence().evidence_id: evidence()})
+        verbose_issues = validate_gold_item(verbose, {evidence().evidence_id: evidence()})
+
+        self.assertIn("INTERNAL_ID_LEAKAGE", {issue.code for issue in leak_issues})
+        self.assertIn("GOLD_ANSWER_TOO_LONG", {issue.code for issue in verbose_issues})
+
+    def test_conditional_source_cannot_be_promoted_to_unqualified_gold_fact(self):
+        source = replace(
+            evidence("asr_condition"),
+            modality=EvidenceModality.ASR,
+            frame_indices=(),
+            text_span="领券后九块九",
+            source_text_native="领券后九块九",
+            assertion_type=EvidenceAssertionType.SPOKEN_CLAIM,
+            assertion_scope=AssertionScope.CONDITIONAL,
+            temporal_scope=EvidenceTemporalScope.SHORT_CLIP,
+        )
+        item = gold_item(
+            value={"answer": "The price is 9.9 yuan."},
+            evidence_ids=(source.evidence_id,),
+        )
+
+        issues = validate_gold_item(item, {source.evidence_id: source})
+
+        self.assertIn("CLAIM_SCOPE_PROMOTION", {issue.code for issue in issues})
     def test_asr_without_source_timestamps_is_valid_for_non_temporal_claims(self):
         unit = replace(
             evidence("asr_missing_time"),

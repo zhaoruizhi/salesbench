@@ -8,7 +8,7 @@ from typing import Any
 
 from ..utils import clean_text, contains_cjk
 from .commerce_ontology import DEMONSTRATION_CUES, relation_rule
-from .commerce_schema import CommerceCue, CommercialRelation, CueType, RelationType
+from .commerce_schema import ActionRole, CommerceCue, CommercialRelation, CueType, RelationType
 from .normalizer import semantic_key, semantic_target_key
 from .ontology import (
     CM_RELATIONS,
@@ -18,6 +18,7 @@ from .ontology import (
     default_reasoning_operator,
 )
 from .schema import (
+    AssertionScope,
     EvidenceAssertionType,
     EvidenceModality,
     EvidenceTemporalScope,
@@ -133,6 +134,36 @@ _RELATION_STATUS_CONTRACT = {
 }
 
 _NUMBER_RE = re.compile(r"(?<![A-Za-z])\d+(?:[.,]\d+)?")
+_INTERNAL_ID_RE = re.compile(
+    r"\b(?:evidence(?:unit)?|commercecue|commercialrelation|annotation|spec|gold|cue|relation)[_-]?id\b"
+    r"|\b[\w-]+_(?:visual|asr|ocr)_\d{3}_[a-f0-9]{6,}\b",
+    re.IGNORECASE,
+)
+_ACTION_ONLY_IDENTITY_RE = re.compile(
+    r"\b(?:presenter|host|person|demonstrator|speaker)\b.*"
+    r"\b(?:holds?|holding|points?|pointing|shows?|lifts?|rotates?|flips?)\b.*"
+    r"\b(?:product|item|object|it)\b",
+    re.IGNORECASE,
+)
+_CONDITIONAL_LANGUAGE = (
+    " if ",
+    " when ",
+    " after ",
+    "requires",
+    "conditional",
+    "provided that",
+    "by claiming",
+    "with a coupon",
+)
+
+
+def _gold_answer_text(value: dict[str, object]) -> str:
+    for key in ("answer", "value", "description", "explanation", "mechanism"):
+        candidate = value.get(key)
+        if isinstance(candidate, str) and clean_text(candidate):
+            return clean_text(candidate)
+    strings = [clean_text(item) for item in value.values() if isinstance(item, str)]
+    return " ".join(item for item in strings if item)
 
 
 @dataclass(frozen=True)
@@ -332,6 +363,41 @@ def validate_commerce_cue(
                 )
             )
     cited_units = [evidence[evidence_id] for evidence_id in cue.evidence_ids if evidence_id in evidence]
+    if cue.cue_type == CueType.PRODUCT_IDENTITY and (
+        cue.action_role == ActionRole.BACKGROUND_HANDLING
+        or _ACTION_ONLY_IDENTITY_RE.search(cue.content_en)
+    ):
+        issues.append(
+            ValidationIssue(
+                "ACTION_ONLY_PRODUCT_IDENTITY",
+                "ERROR",
+                cue.cue_id,
+                "Product identity must name a category, brand, model, variant, or explicit label; generic handling is not identity.",
+            )
+        )
+    if cue.cue_type in DEMONSTRATION_CUES and cue.action_role == ActionRole.BACKGROUND_HANDLING:
+        issues.append(
+            ValidationIssue(
+                "BACKGROUND_ACTION_AS_DEMONSTRATION",
+                "ERROR",
+                cue.cue_id,
+                "Holding, pointing, generic showing, and page flipping are not functional or outcome demonstrations.",
+            )
+        )
+    cited_non_facts = {
+        unit.assertion_scope
+        for unit in cited_units
+        if unit.assertion_scope != AssertionScope.OBSERVED_FACT
+    }
+    if cited_non_facts and cue.assertion_scope == AssertionScope.OBSERVED_FACT:
+        issues.append(
+            ValidationIssue(
+                "CLAIM_SCOPE_PROMOTION",
+                "ERROR",
+                cue.cue_id,
+                "A derived cue cannot promote a claim, condition, instruction, hypothetical, or promise into an observed fact.",
+            )
+        )
     if cue.cue_type in _CLAIM_FACT_CUE_TYPES and cited_units and all(
         unit.assertion_type == EvidenceAssertionType.SPOKEN_CLAIM for unit in cited_units
     ):
@@ -667,6 +733,49 @@ def validate_gold_item(
         commercial_relations,
     )
     item_id = item.gold_id
+    answer_text = _gold_answer_text(item.gold_value)
+    if _INTERNAL_ID_RE.search(_text_blob((item.target, item.gold_value))):
+        issues.append(
+            ValidationIssue(
+                "INTERNAL_ID_LEAKAGE",
+                "ERROR",
+                item_id,
+                "Natural-language target and Gold fields must not expose internal graph identifiers.",
+            )
+        )
+    answer_limits = {
+        GoldTaskType.BP: 20,
+        GoldTaskType.CM: 45,
+        GoldTaskType.SS: 50,
+        GoldTaskType.AE: 45,
+    }
+    if len(re.findall(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)?", answer_text)) > answer_limits[
+        item.task_type
+    ]:
+        issues.append(
+            ValidationIssue(
+                "GOLD_ANSWER_TOO_LONG",
+                "ERROR",
+                item_id,
+                f"{item.task_type.value} Gold exceeds {answer_limits[item.task_type]} English words.",
+            )
+        )
+    cited_scopes = {
+        evidence[evidence_id].assertion_scope
+        for evidence_id in item.evidence_ids
+        if evidence_id in evidence
+    }
+    if AssertionScope.CONDITIONAL in cited_scopes and not any(
+        marker in f" {answer_text.lower()} " for marker in _CONDITIONAL_LANGUAGE
+    ):
+        issues.append(
+            ValidationIssue(
+                "CLAIM_SCOPE_PROMOTION",
+                "ERROR",
+                item_id,
+                "A conditional source cannot become an unqualified Gold fact.",
+            )
+        )
     min_evidence = TASK_MIN_EVIDENCE.get(item.task_type, 1)
     if len(set(item.evidence_ids)) < min_evidence:
         severity = "ERROR" if item.gold_tier in {GoldTier.GOLD_A, GoldTier.GOLD_B} else "WARNING"

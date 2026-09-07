@@ -9,6 +9,7 @@ sys.path.insert(0, "src")
 
 from salesbench.goldbank.pipeline import GoldBankPipeline, build_bp_proposals_from_graph  # noqa: E402
 from salesbench.goldbank.commerce_schema import (  # noqa: E402
+    ActionRole,
     CommerceCue,
     CueType,
     RelationType,
@@ -49,6 +50,43 @@ class FakeGoldClient:
     def call_text_only(self, system_prompt: str, user_text: str, response_format: str | None = None) -> APICallResult:
         self.calls.append({"method": "call_text_only", "system_prompt": system_prompt, "user_text": user_text})
         return self._result()
+
+
+def test_background_handling_cue_never_becomes_bp_proposal():
+    unit = EvidenceUnit(
+        evidence_id="v1_visual_000_abc",
+        video_id="v1",
+        modality=EvidenceModality.VISUAL,
+        start_s=0.0,
+        end_s=1.0,
+        frame_indices=(0,),
+        text_span="",
+        subject="presenter",
+        predicate="flips through",
+        value="vocabulary book",
+        attributes={},
+        source_domains=("C6_raw_video",),
+        extractor="test",
+        confidence=0.95,
+        timestamp_status="available",
+        action_role=ActionRole.BACKGROUND_HANDLING,
+    )
+    cue = CommerceCue(
+        cue_id="c1",
+        video_id="v1",
+        cue_type=CueType.PROCESS_DEMONSTRATION,
+        content_en="The presenter flips through a vocabulary book.",
+        source_text_native="",
+        evidence_ids=(unit.evidence_id,),
+        attributes={},
+        directness="DIRECT",
+        theory_tags=(),
+        extractor="test",
+        confidence=0.95,
+        action_role=ActionRole.BACKGROUND_HANDLING,
+    )
+
+    assert build_bp_proposals_from_graph("v1", [unit], [cue], []) == []
 
 
 def bundle():

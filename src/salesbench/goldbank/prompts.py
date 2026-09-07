@@ -12,7 +12,7 @@ from .schema import GoldTaskType
 from .validators import PRIVATE_KEYS
 
 
-PROMPT_VERSION = "evidence-prompt-v10.2"
+PROMPT_VERSION = "evidence-prompt-v10.3"
 
 BP_COMPILER_CONTRACT = (
     "BP is produced by a deterministic local compiler, not by an LLM proposer. "
@@ -62,7 +62,11 @@ def build_evidence_extractor_prompt(video_id: str, content_context: dict[str, ob
         "OCR source_text_native must contain only the visible source text, never coordinates, bounding boxes, "
         "or values such as [0,50]. If ASR start_s/end_s are supplied, copy them exactly; otherwise use "
         "null and never infer timing from semantics or frame position. Every unit must contain subject, "
-        "predicate, value, assertion_type, temporal_scope, and confidence. All normalized semantic "
+        "predicate, value, assertion_type, assertion_scope, action_role, temporal_scope, and confidence. "
+        "assertion_scope must be OBSERVED_FACT, SPOKEN_CLAIM, CONDITIONAL, INSTRUCTION, HYPOTHETICAL, "
+        "or PROMOTIONAL_PROMISE. action_role must be null or BACKGROUND_HANDLING, PRODUCT_INSPECTION, "
+        "FUNCTIONAL_OPERATION, or OUTCOME_DEMONSTRATION. Generic holding, pointing, showing, rotating, "
+        "or page flipping is BACKGROUND_HANDLING, not product use or an outcome demonstration. All normalized semantic "
         "fields, including subject, predicate, value, "
         "content_en, and descriptive attributes, must be in English. CJK characters are forbidden in "
         "subject, predicate, value, content_en, and attributes; they are allowed only in source_text_native. "
@@ -83,6 +87,7 @@ def build_evidence_extractor_prompt(video_id: str, content_context: dict[str, ob
         '"frame_indices":[0],"content_en":"The product package is red.","source_text_native":"",'
         '"subject":"product package",'
         '"predicate":"has color","value":"red","attributes":{},"assertion_type":"OBSERVED",'
+        '"assertion_scope":"OBSERVED_FACT","action_role":null,'
         '"temporal_scope":"FRAME","confidence":0.9}]}'
     )
     user_text = _json({"video_id": video_id, "content_context": content_context})
@@ -98,7 +103,9 @@ def build_language_evidence_prompt(
         "transcript into three to ten high-information atomic EvidenceUnits. Every item must use "
         "modality=asr and contain start_s, end_s, frame_indices as an empty array, content_en, "
         "source_text_native, subject, predicate, value, attributes, \"assertion_type\", "
-        "\"temporal_scope\", and \"confidence\". assertion_type must be SPOKEN_CLAIM. "
+        "\"assertion_scope\", \"action_role\", \"temporal_scope\", and \"confidence\". "
+        "assertion_type must be SPOKEN_CLAIM. action_role must be null unless the speech explicitly "
+        "describes an action. Preserve conditions, instructions, hypotheticals, and promises in assertion_scope. "
         "temporal_scope must be SHORT_CLIP for a claim bounded to the supplied transcript interval or "
         "LONG_TERM_CLAIM when the words explicitly claim an effect lasting beyond that interval. "
         "The exact JSON field \"confidence\" must be a number from 0 to 1. "
@@ -135,14 +142,16 @@ def build_visual_evidence_prompt(
         "watermarks, platform logos, and engagement counters. Every item must contain the exact field "
         "\"modality\" set to visual or ocr, plus start_s, end_s, frame_indices, content_en, "
         "source_text_native, subject, predicate, value, attributes, "
-        "\"assertion_type\", \"temporal_scope\", and \"confidence\". visual items must use "
+        "\"assertion_type\", \"assertion_scope\", \"action_role\", \"temporal_scope\", and \"confidence\". visual items must use "
         "assertion_type=OBSERVED; OCR items must use assertion_type=OCR_TEXT. Use temporal_scope=FRAME "
         "for one localized frame or SHORT_CLIP only when multiple supplied frames show the same event. "
         "The exact JSON field \"confidence\" must be a number from 0 to 1. visual items require one or "
         "more exact supplied frame indices and an empty "
         "source_text_native. ocr items require exact supplied frame indices and verbatim source_text_native. "
         "All normalized semantic fields must use English; CJK characters are allowed only in OCR "
-        "source_text_native. Describe observable content only, preserve claim-versus-proof boundaries, "
+        "source_text_native. Use assertion_scope=OBSERVED_FACT. Generic holding, pointing, showing, rotating, "
+        "and page flipping must use action_role=BACKGROUND_HANDLING; do not call them product operation or "
+        "outcome demonstration. Describe observable content only, preserve claim-versus-proof boundaries, "
         "and do not infer product effects, audience response, sales, or external facts. Return strict "
         "JSON with exactly one top-level key, evidence_units, and do not generate questions."
     )
@@ -168,7 +177,7 @@ def build_visual_evidence_repair_prompt(
         "describe a concrete visible product, person, action, state, comparison, demonstration, package, "
         "or usage scene. Every item must contain the exact field \"modality\" set to visual, plus "
         "start_s, end_s, frame_indices, content_en, source_text_native, subject, predicate, value, "
-        "attributes, \"assertion_type\", "
+        "attributes, \"assertion_type\", \"assertion_scope\", \"action_role\", "
         "\"temporal_scope\", and \"confidence\". assertion_type must be OBSERVED, temporal_scope must "
         "be FRAME or SHORT_CLIP, and the exact JSON field \"confidence\" must be a number from 0 to 1. "
         "Use one or "
@@ -176,7 +185,8 @@ def build_visual_evidence_repair_prompt(
         "predicate, value, and every descriptive attribute in English only. Translate a visible product "
         "category into English instead of copying CJK characters into normalized fields. Do not output OCR, "
         "ASR, subtitles, creator handles, account IDs, watermarks, platform logos, or engagement counters. "
-        "Do not infer product effects, audience response, sales, or external facts. Rejected candidates are "
+        "Set assertion_scope=OBSERVED_FACT. Generic holding, pointing, showing, rotating, or page flipping "
+        "must use action_role=BACKGROUND_HANDLING. Do not infer product effects, audience response, sales, or external facts. Rejected candidates are "
         "diagnostic hints, not trusted facts: retain a candidate only if the supplied frames independently "
         "show it. Return strict JSON with exactly one top-level key, evidence_units, and do not generate "
         "questions."
@@ -213,7 +223,7 @@ def build_commerce_cue_prompt(
         f"Allowed cue_type values are: {_enum_values(CueType)}. "
         "Return strict JSON with exactly two top-level arrays: commerce_cues and abstentions. "
         "Each commerce_cues item must contain exactly cue_type, content_en, source_text_native, "
-        "evidence_ids, attributes, directness, theory_tags, and confidence. content_en must be a "
+        "evidence_ids, attributes, directness, theory_tags, confidence, assertion_scope, and action_role. content_en must be a "
         "specific English sentence. source_text_native may copy only verbatim ASR or OCR text from "
         "the cited EvidenceUnits and otherwise must be an empty string. evidence_ids must contain "
         "one or more existing EvidenceUnit IDs copied exactly. directness must be DIRECT, INFERRED, "
@@ -221,7 +231,10 @@ def build_commerce_cue_prompt(
         "video_id, extractor, translations, questions, or answers; local code adds canonical IDs. "
         "Keep a spoken product-effect statement as FUNCTION_CLAIM, EFFECT_CLAIM, PRICE_CLAIM, "
         "FIT_CLAIM, or EXPERIENCE_REVIEW until separate evidence demonstrates it. Do not relabel a "
-        "claim as an observed product fact. An ASR-only performance, compatibility, durability, or "
+        "claim as an observed product fact. PRODUCT_IDENTITY must name a category, brand, model, variant, "
+        "or explicit product label; generic holding, pointing to, or showing an item is not identity. "
+        "Generic handling must use action_role=BACKGROUND_HANDLING and must not become a demonstration. "
+        "An ASR-only performance, compatibility, durability, or "
         "effect statement must not become PRODUCT_ATTRIBUTE and must not become PROCESS_DEMONSTRATION; "
         "keep it as an appropriate claim cue unless independently localized visual evidence exists. "
         "A BENEFIT derived only from seller speech must say that the speaker or video presents or frames "
@@ -243,13 +256,15 @@ def build_visual_commerce_cue_prompt(
         "EvidenceUnits into grounded visual commercial presentation cues that were missed by the "
         "combined cue pass. Return strict JSON with exactly two top-level arrays: commerce_cues and "
         "abstentions. Each cue must contain exactly cue_type, content_en, source_text_native, "
-        "evidence_ids, attributes, directness, theory_tags, and confidence. Use only existing EvidenceUnit "
+        "evidence_ids, attributes, directness, theory_tags, confidence, assertion_scope, and action_role. Use only existing EvidenceUnit "
         "IDs, and every cue must cite at least one visual EvidenceUnit unless the cue describes independent "
         "OCR product or offer text. Prioritize PRODUCT_IDENTITY, PRODUCT_ATTRIBUTE, PRODUCT_VARIANT, "
         "PROCESS_DEMONSTRATION, OUTCOME_DISPLAY, BEFORE_AFTER, VICARIOUS_TRIAL, USAGE_SCENARIO, "
         "COMPARISON_ANCHOR, and CREDIBILITY_SIGNAL. PROCESS_DEMONSTRATION, OUTCOME_DISPLAY, "
         "BEFORE_AFTER, and VICARIOUS_TRIAL must cite visual EvidenceUnits showing the action or state; "
-        "a spoken description of a test is not a visual demonstration. content_en and attributes must use "
+        "a spoken description of a test is not a visual demonstration. Generic holding, pointing, showing, "
+        "rotating, and page flipping must use action_role=BACKGROUND_HANDLING and must not become a "
+        "PROCESS_DEMONSTRATION. content_en and attributes must use "
         "English. source_text_native must be empty for visual cues and may copy only verbatim source text "
         "for OCR cues. directness must be DIRECT, INFERRED, or NEEDS_REVIEW and confidence must be a "
         "JSON number from 0 to 1. Do not infer effects, audience response, trust, purchase, conversion, "
@@ -363,7 +378,7 @@ def build_proposer_prompt(
         f'task_subtype, and include the literal pair "task_type":"{task_type}". Each proposal must '
         'contain "task_subtype", "capability", "reasoning_operator", "target", "proposed_gold", '
         '"evidence_ids", "commerce_cue_ids", "commercial_relation_ids", "reasoning_edges", '
-        '"question_intent", "forbidden_inferences", and "proposal_confidence". '
+        '"question_intent", "forbidden_inferences", "assertion_scope", and "proposal_confidence". '
         f"Use this exact capability-to-operator mapping: {operator_contract}. "
         "target and proposed_gold must be non-empty objects, and proposed_gold must contain "
         "answer. Do not output proposal_id; local code creates it. Every proposal must cite at least "
@@ -381,7 +396,9 @@ def build_proposer_prompt(
         "claim, the proposed_gold answer must explicitly attribute it with wording such as 'the speaker "
         "claims', 'the video presents', or 'the product is promoted as'; never rewrite it as a verified fact. "
         "Never claim content caused trust, purchase, sales, conversion, interaction, or reduced viewer "
-        "uncertainty. If a graph path is incomplete or the conclusion has a reasonable alternative, "
+        "uncertainty. Preserve conditional, instruction, hypothetical, and promotional-promise scope. "
+        "Keep each proposed answer focused on one commercial capability and within the task word limit. "
+        "If a graph path is incomplete or the conclusion has a reasonable alternative, "
         "place task_type, task_subtype, and an English reason in abstentions."
     )
     user = _json(

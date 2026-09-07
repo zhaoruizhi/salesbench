@@ -47,7 +47,9 @@ class GoldBankPromptTest(unittest.TestCase):
         system, user_blocks = build_evidence_extractor_prompt("v1", {"C3_text_language": {"title": "hello"}})
         text = system + " " + str(user_blocks)
 
-        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v10.2")
+        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v10.3")
+        self.assertIn("assertion_scope", text)
+        self.assertIn("BACKGROUND_HANDLING", text)
         self.assertIn("EvidenceUnit", text)
         self.assertIn("Do not generate questions", system)
         self.assertIn("English", system)
@@ -88,7 +90,7 @@ class GoldBankPromptTest(unittest.TestCase):
         verifier_system, _ = build_relation_verifier_prompt("v1", [], [], [])
 
         self.assertIn("no more than eight", relation_system)
-        self.assertEqual(QUALITY_PROMPT_VERSION, "quality-gate-prompt-v2")
+        self.assertEqual(QUALITY_PROMPT_VERSION, "quality-gate-prompt-v3")
         self.assertIn("does not prove the claimed benefit or effect", verifier_system)
         self.assertIn("right-brain memory", verifier_system)
 
