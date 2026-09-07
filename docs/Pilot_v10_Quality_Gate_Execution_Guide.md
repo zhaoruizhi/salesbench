@@ -6,12 +6,16 @@
 `assertion_scope/action_role` 输出为自由文本，因而在生产门禁被大量自动拒绝。该目录永久保留，
 但不作为 QA 输入。`-002` 使用封闭枚举 prompt 和本地安全回退重新生成全部 Evidence。
 
+`v10c2-smoke5-qwen-deepseek-20260907-002` 验证了封闭枚举修复，但仍暴露出 ASR
+事实范围升级、语言阶段无自动修复，以及同模态“重复”关系误入人工队列的问题。`-003` 增加
+ASR 一次性修复、模态语义覆盖和跨模态关系硬门禁，是当前候选运行。
+
 本轮固定身份：
 
 ```text
-run_id: v10c2-smoke5-qwen-deepseek-20260907-002
+run_id: v10c2-smoke5-qwen-deepseek-20260907-003
 benchmark_release: salesbench-v10-candidate.2
-run_root: outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/
+run_root: outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/
 ```
 
 ## 1. 本轮质量路由
@@ -33,8 +37,8 @@ DIAGNOSTIC   -> API、解析或程序故障，写入 pipeline_diagnostics.jsonl
 | 环节 | 固定版本 |
 | --- | --- |
 | Evidence schema | `evidence-dataset-schema-v4` |
-| Evidence/Commerce prompt | `evidence-prompt-v10.4` |
-| Evidence pipeline | `evidence-first-pipeline-v10.5` |
+| Evidence/Commerce prompt | `evidence-prompt-v10.5` |
+| Evidence pipeline | `evidence-first-pipeline-v10.6` |
 | Evidence quality prompt | `quality-gate-prompt-v3` |
 | Question realizer | `question-realizer-prompt-v3` |
 | QA quality prompt | `qa-quality-prompt-v2` |
@@ -75,7 +79,7 @@ QA 生成模型和质量复核模型是两个独立 client：DeepSeek 生成，Q
 本轮所有产物位于同一 run root：
 
 ```text
-outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/
+outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/
   run_manifest.json
   evidence/
   qa/
@@ -103,8 +107,8 @@ outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/
 python salesbench.py build-evidence-dataset \
   --config configs/benchmark_v1.json \
   --cohort-config configs/evidence_smoke_v10_candidate2_5videos.json \
-  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/evidence \
-  --run-id v10c2-smoke5-qwen-deepseek-20260907-002 \
+  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/evidence \
+  --run-id v10c2-smoke5-qwen-deepseek-20260907-003 \
   --benchmark-release salesbench-v10-candidate.2 \
   --max-workers 2
 ```
@@ -135,9 +139,9 @@ python salesbench.py build-evidence-dataset \
 
 ```bash
 python salesbench.py realize-qa \
-  --evidence-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/evidence \
+  --evidence-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/evidence \
   --dataset-file video_evidence_dataset.jsonl \
-  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/qa/realizations \
+  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/qa/realizations \
   --allow-auto-candidates \
   --strict-semantic-verification \
   --max-workers 2
@@ -151,10 +155,10 @@ DeepSeek 只实现自然英文问题；Gold 来自 EvidenceDataset，不允许�
 
 ```bash
 python salesbench.py compile-vqa \
-  --evidence-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/evidence \
+  --evidence-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/evidence \
   --dataset-file video_evidence_dataset.jsonl \
-  --realizations outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/qa/realizations/qa_realizations.jsonl \
-  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/qa/compiled \
+  --realizations outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/qa/realizations/qa_realizations.jsonl \
+  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/qa/compiled \
   --allow-auto-candidates \
   --allow-missing-tasks
 ```
@@ -176,14 +180,14 @@ Compiler v9 先失败关闭地检查指纹和引用，再按 Evidence 置信度�
 ```bash
 python salesbench.py build-audit-translations \
   --manifest configs/v10_candidate2_smoke_delivery.json \
-  --output outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/translations/audit_translations.jsonl \
+  --output outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/translations/audit_translations.jsonl \
   --batch-size 20
 
 python -m tools.audit_workbench.build \
   --manifest configs/v10_candidate2_smoke_delivery.json \
-  --translations outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/translations/audit_translations.jsonl \
-  --output outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/audit/SalesBench_v10c2_Smoke_Audit.html \
-  --fragment outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-002/audit/SalesBench_v10c2_Smoke_Audit_fragment.html \
+  --translations outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/translations/audit_translations.jsonl \
+  --output outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/audit/SalesBench_v10c2_Smoke_Audit.html \
+  --fragment outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-003/audit/SalesBench_v10c2_Smoke_Audit_fragment.html \
   --group smoke \
   --skip-organize
 ```

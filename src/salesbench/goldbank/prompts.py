@@ -12,7 +12,7 @@ from .schema import GoldTaskType
 from .validators import PRIVATE_KEYS
 
 
-PROMPT_VERSION = "evidence-prompt-v10.4"
+PROMPT_VERSION = "evidence-prompt-v10.5"
 
 _ASSERTION_SCOPE_CONTRACT = (
     "assertion_scope is a closed enum: OBSERVED_FACT, SPOKEN_CLAIM, CONDITIONAL, "
@@ -115,8 +115,8 @@ def build_language_evidence_prompt(
         "source_text_native, subject, predicate, value, attributes, \"assertion_type\", "
         "\"assertion_scope\", \"action_role\", \"temporal_scope\", and \"confidence\". "
         f"{_ASSERTION_SCOPE_CONTRACT}{_ACTION_ROLE_CONTRACT}"
-        "assertion_type must be SPOKEN_CLAIM. action_role must be null unless the speech explicitly "
-        "describes an action. Preserve conditions, instructions, hypotheticals, and promises in assertion_scope. "
+        "assertion_type must be SPOKEN_CLAIM and action_role must be null because speech can describe an "
+        "action but cannot visually demonstrate one. Preserve conditions, instructions, hypotheticals, and promises in assertion_scope. "
         "temporal_scope must be SHORT_CLIP for a claim bounded to the supplied transcript interval or "
         "LONG_TERM_CLAIM when the words explicitly claim an effect lasting beyond that interval. "
         "The exact JSON field \"confidence\" must be a number from 0 to 1. "
@@ -133,6 +133,41 @@ def build_language_evidence_prompt(
         {
             "video_id": video_id,
             "asr_subtitles": content_context.get("asr_subtitles") or {},
+        }
+    )
+    return system, user
+
+
+def build_language_evidence_repair_prompt(
+    video_id: str,
+    content_context: dict[str, object],
+    rejected_candidates: list[dict[str, object]],
+    local_rejection_reasons: list[dict[str, object]],
+) -> tuple[str, str]:
+    system = (
+        "You are the SalesBench ASR Evidence Repairer. The previous ASR extraction produced no "
+        "locally valid EvidenceUnits. Re-read only the supplied ASR or subtitle transcript and return "
+        "three to ten corrected atomic EvidenceUnits, or fewer only when the transcript is genuinely "
+        "short. Every item must use modality=asr and contain start_s, end_s, frame_indices as an empty "
+        "array, content_en, source_text_native, subject, predicate, value, attributes, assertion_type, "
+        "assertion_scope, action_role, temporal_scope, and confidence. "
+        f"{_ASSERTION_SCOPE_CONTRACT}{_ACTION_ROLE_CONTRACT}"
+        "Use assertion_type=SPOKEN_CLAIM and action_role=null. source_text_native must copy one verbatim "
+        "span from the supplied transcript. content_en, subject, predicate, value, and attributes must "
+        "be English only and must contain no CJK characters, even when naming or explaining a Chinese "
+        "product term; preserve the original term only in source_text_native. If timestamps are absent, "
+        "use start_s=null and end_s=null. confidence must be a JSON number from 0 to 1. Preserve whether "
+        "the speech is a claim, condition, instruction, hypothetical, or promotional promise. Rejected "
+        "candidates and local rejection reasons are diagnostic hints, not facts. Do not generate "
+        "questions. Return strict JSON with exactly one top-level key, evidence_units."
+    )
+    user = _json(
+        {
+            "video_id": video_id,
+            "asr_subtitles": content_context.get("asr_subtitles") or {},
+            "rejected_candidates": rejected_candidates,
+            "local_rejection_reasons": local_rejection_reasons,
+            "previous_failure": "No ASR EvidenceUnit passed deterministic local validation.",
         }
     )
     return system, user
@@ -241,7 +276,9 @@ def build_commerce_cue_prompt(
         "You are the SalesBench Commerce Cue Extractor for presenter-led e-commerce short videos. "
         "Convert validated atomic EvidenceUnits into grounded commercial presentation cues without "
         "adding consumer outcomes, external knowledge, creator metadata, or interaction data. "
-        f"Allowed cue_type values are: {_enum_values(CueType)}. "
+        f"cue_type is a closed enum whose only allowed values are: {_enum_values(CueType)}. "
+        "cue_type must never contain an action-role value such as BACKGROUND_HANDLING or "
+        "PRODUCT_INSPECTION; abstain from background-only evidence instead of emitting a cue for it. "
         "Return strict JSON with exactly two top-level arrays: commerce_cues and abstentions. "
         "Each commerce_cues item must contain exactly cue_type, content_en, source_text_native, "
         "evidence_ids, attributes, directness, theory_tags, confidence, assertion_scope, and action_role. "
@@ -277,7 +314,10 @@ def build_visual_commerce_cue_prompt(
     system = (
         "You are the SalesBench Visual Commerce Cue Extractor. Convert the supplied visual and OCR "
         "EvidenceUnits into grounded visual commercial presentation cues that were missed by the "
-        "combined cue pass. Return strict JSON with exactly two top-level arrays: commerce_cues and "
+        f"combined cue pass. cue_type is a closed enum whose only allowed values are: {_enum_values(CueType)}. "
+        "cue_type must never contain an action-role value such as BACKGROUND_HANDLING or "
+        "PRODUCT_INSPECTION; abstain from background-only evidence instead of emitting a cue for it. "
+        "Return strict JSON with exactly two top-level arrays: commerce_cues and "
         "abstentions. Each cue must contain exactly cue_type, content_en, source_text_native, "
         "evidence_ids, attributes, directness, theory_tags, confidence, assertion_scope, and action_role. "
         f"{_ASSERTION_SCOPE_CONTRACT}{_ACTION_ROLE_CONTRACT}"

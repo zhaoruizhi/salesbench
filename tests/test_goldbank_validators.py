@@ -306,6 +306,39 @@ class GoldBankValidatorTest(unittest.TestCase):
         )
 
         self.assertIn("UNSUPPORTED_CLAIM_SCOPE", {issue.code for issue in issues})
+
+    def test_repeated_across_modalities_relation_requires_two_modalities(self):
+        first = replace(
+            evidence("asr1"),
+            modality=EvidenceModality.ASR,
+            frame_indices=(),
+            text_span="第一条口播",
+            source_text_native="第一条口播",
+            assertion_type=EvidenceAssertionType.SPOKEN_CLAIM,
+            assertion_scope=AssertionScope.SPOKEN_CLAIM,
+        )
+        second = replace(
+            first,
+            evidence_id="asr2",
+            text_span="第二条口播",
+            source_text_native="第二条口播",
+        )
+        first_cue = cue_record(CueType.FUNCTION_CLAIM, (first.evidence_id,), "c1")
+        second_cue = cue_record(CueType.EFFECT_CLAIM, (second.evidence_id,), "c2")
+        relation = relation_record(
+            RelationType.CLAIM_REPEATED_ACROSS_MODALITIES,
+            (first_cue.cue_id,),
+            (second_cue.cue_id,),
+            (first.evidence_id, second.evidence_id),
+        )
+
+        issues = validate_commercial_relation(
+            relation,
+            {first_cue.cue_id: first_cue, second_cue.cue_id: second_cue},
+            {first.evidence_id: first, second.evidence_id: second},
+        )
+
+        self.assertIn("RELATION_MODALITY_DIVERSITY", {issue.code for issue in issues})
     def test_cm_proposal_requires_two_distinct_modalities(self):
         first = evidence()
         second = evidence("v1_visual_001_def")

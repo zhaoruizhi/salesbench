@@ -477,6 +477,43 @@ class GoldBankPipelineTest(unittest.TestCase):
         self.assertNotRegex(result.evidence_units[0]["content_en"], r"[\u4e00-\u9fff]")
         self.assertIn("local_rejection_reasons", vlm.calls[1]["user_content"][-1]["text"])
 
+    def test_pipeline_repairs_failed_language_evidence_once(self):
+        responses = successful_responses_with_two_evidence()
+        visual_raw, asr_raw = responses[0]["evidence_units"]
+        vlm = FakeGoldClient([{"evidence_units": [visual_raw]}])
+        llm = FakeGoldClient(
+            [
+                '{"evidence_units":[',
+                {"evidence_units": [asr_raw]},
+                *responses[1:],
+            ]
+        )
+        split_bundle = build_context_bundle(
+            "v1",
+            raw_video={"video_id": "v1", "video_text": "这款产品采用编织材质"},
+            frames=[{"frame_index": 0, "timestamp_s": 0.0, "path": "/tmp/f0.jpg"}],
+        )
+
+        result = GoldBankPipeline(vlm, llm).run_video(split_bundle, frames_b64=["AAA"])
+
+        stages = [trace["stage"] for trace in result.agent_traces]
+        self.assertEqual(
+            stages[:3],
+            [
+                "language_evidence_extraction",
+                "language_evidence_repair",
+                "visual_evidence_extraction",
+            ],
+        )
+        self.assertEqual(
+            len([unit for unit in result.evidence_units if unit["modality"] == "asr"]),
+            1,
+        )
+        self.assertEqual(
+            len([call for call in llm.calls if "ASR Evidence Repairer" in call["system_prompt"]]),
+            1,
+        )
+
     def test_pipeline_extracts_language_and_visual_evidence_in_separate_stages(self):
         responses = successful_responses_with_two_evidence()
         visual_raw, asr_raw = responses[0]["evidence_units"]

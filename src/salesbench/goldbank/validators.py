@@ -555,6 +555,22 @@ def validate_commercial_relation(
                 )
             )
 
+    if relation.relation_type == RelationType.CLAIM_REPEATED_ACROSS_MODALITIES:
+        modalities = {
+            evidence[evidence_id].modality
+            for evidence_id in relation.evidence_ids
+            if evidence_id in evidence
+        }
+        if len(modalities) < 2:
+            issues.append(
+                ValidationIssue(
+                    "RELATION_MODALITY_DIVERSITY",
+                    "ERROR",
+                    relation.relation_id,
+                    "CLAIM_REPEATED_ACROSS_MODALITIES requires equivalent content in at least two distinct modalities.",
+                )
+            )
+
     expected_status = _RELATION_STATUS_CONTRACT.get(relation.relation_type)
     if expected_status is not None and relation.status != expected_status:
         issues.append(

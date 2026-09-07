@@ -22,6 +22,7 @@ from salesbench.goldbank.prompts import (  # noqa: E402
     build_commercial_relation_prompt,
     build_evidence_extractor_prompt,
     build_language_evidence_prompt,
+    build_language_evidence_repair_prompt,
     build_proposer_prompt,
     build_visual_evidence_prompt,
     build_visual_evidence_repair_prompt,
@@ -47,7 +48,7 @@ class GoldBankPromptTest(unittest.TestCase):
         system, user_blocks = build_evidence_extractor_prompt("v1", {"C3_text_language": {"title": "hello"}})
         text = system + " " + str(user_blocks)
 
-        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v10.4")
+        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v10.5")
         self.assertIn("assertion_scope", text)
         self.assertIn("BACKGROUND_HANDLING", text)
         self.assertIn("EvidenceUnit", text)
@@ -77,6 +78,7 @@ class GoldBankPromptTest(unittest.TestCase):
 
         self.assertIn("ASR Evidence Extractor", language_system)
         self.assertIn("modality=asr", language_system)
+        self.assertIn("action_role must be null", language_system)
         self.assertNotIn("modality=visual", language_system)
         self.assertIn("Visual and OCR Evidence Extractor", visual_system)
         self.assertIn("at least one visual EvidenceUnit", visual_system)
@@ -129,6 +131,21 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertNotRegex(repair_system, r"[\u4e00-\u9fff]")
         self.assertIn("NON_ENGLISH_NORMALIZED_TEXT", str(repair_user))
         self.assertIn("frame_index", str(repair_user))
+
+    def test_language_evidence_repair_prompt_repairs_parse_or_validation_failure_once(self):
+        system, user = build_language_evidence_repair_prompt(
+            "v1",
+            {"asr_subtitles": {"video_text": "原始口播"}},
+            [{"content_en": "The title is '中文'."}],
+            [{"code": "NON_ENGLISH_NORMALIZED_TEXT"}],
+        )
+
+        self.assertIn("ASR Evidence Repairer", system)
+        self.assertIn("source_text_native", system)
+        self.assertIn("CJK", system)
+        self.assertIn("closed enum", system)
+        self.assertIn("原始口播", user)
+        self.assertIn("NON_ENGLISH_NORMALIZED_TEXT", user)
 
     def test_v9_commerce_prompts_are_english_and_forbid_outcome_claims(self):
         evidence = [{
@@ -227,6 +244,8 @@ class GoldBankPromptTest(unittest.TestCase):
     def test_cue_prompt_keeps_asr_only_performance_statements_as_claims(self):
         system, _ = build_commerce_cue_prompt("v1", [])
 
+        self.assertIn("cue_type is a closed enum", system)
+        self.assertIn("must never contain an action-role value", system)
         self.assertIn("ASR-only performance", system)
         self.assertIn("must not become PRODUCT_ATTRIBUTE", system)
         self.assertIn("must not become PROCESS_DEMONSTRATION", system)

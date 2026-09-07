@@ -37,6 +37,7 @@ from .prompts import (
     build_commercial_relation_prompt,
     build_evidence_extractor_prompt,
     build_language_evidence_prompt,
+    build_language_evidence_repair_prompt,
     build_proposer_prompt,
     build_visual_evidence_prompt,
     build_visual_evidence_repair_prompt,
@@ -558,14 +559,32 @@ class GoldBankPipeline:
                 language_user,
                 response_format="json_object",
             )
-            language_accepted, _, _ = collect_evidence(
+            language_accepted, rejected_language, language_validation_issues = collect_evidence(
                 "language_evidence_extraction",
                 "asr_evidence_extractor",
                 language_call,
                 {EvidenceModality.ASR},
             )
             if not any(unit.modality == EvidenceModality.ASR for unit in language_accepted):
-                evidence_stage_failed = True
+                repair_system, repair_user = build_language_evidence_repair_prompt(
+                    video_id,
+                    content_context,
+                    rejected_language,
+                    language_validation_issues,
+                )
+                repair_call = self.llm_client.call_text_only(
+                    repair_system,
+                    repair_user,
+                    response_format="json_object",
+                )
+                repaired, _, _ = collect_evidence(
+                    "language_evidence_repair",
+                    "asr_evidence_repairer",
+                    repair_call,
+                    {EvidenceModality.ASR},
+                )
+                if not any(unit.modality == EvidenceModality.ASR for unit in repaired):
+                    evidence_stage_failed = True
 
         if image_blocks:
             visual_system, visual_user = build_visual_evidence_prompt(video_id, content_context)

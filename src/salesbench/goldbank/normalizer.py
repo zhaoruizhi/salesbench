@@ -243,6 +243,36 @@ def _source_action_role(values: list[ActionRole | None]) -> ActionRole | None:
     return next((candidate for candidate in priority if candidate in values), None)
 
 
+def _evidence_assertion_scope(
+    modality: EvidenceModality,
+    declared: object,
+    content: object,
+) -> AssertionScope:
+    inferred = infer_assertion_scope(modality, content)
+    normalized = _closed_assertion_scope(declared, inferred)
+    if modality == EvidenceModality.ASR and normalized == AssertionScope.OBSERVED_FACT:
+        return inferred if inferred != AssertionScope.OBSERVED_FACT else AssertionScope.SPOKEN_CLAIM
+    return normalized
+
+
+def _evidence_action_role(
+    modality: EvidenceModality,
+    declared: object,
+    content: object,
+) -> ActionRole | None:
+    if modality != EvidenceModality.VISUAL:
+        return None
+    inferred = infer_action_role(content)
+    normalized = _closed_action_role(declared, inferred)
+    if inferred in {
+        ActionRole.PRODUCT_INSPECTION,
+        ActionRole.FUNCTIONAL_OPERATION,
+        ActionRole.OUTCOME_DEMONSTRATION,
+    }:
+        return inferred
+    return normalized
+
+
 def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int) -> EvidenceUnit:
     modality = _normalize_modality(raw)
     subject = normalize_text(raw.get("subject"))
@@ -307,13 +337,15 @@ def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int)
             content_en or raw.get("value"),
             raw.get("temporal_scope"),
         ),
-        assertion_scope=_closed_assertion_scope(
+        assertion_scope=_evidence_assertion_scope(
+            modality,
             assertion_scope_raw,
-            infer_assertion_scope(modality, content_en or raw.get("value")),
+            content_en or raw.get("value"),
         ),
-        action_role=_closed_action_role(
+        action_role=_evidence_action_role(
+            modality,
             action_role_raw,
-            infer_action_role(content_en or raw.get("value")),
+            content_en or raw.get("value"),
         ),
     )
 

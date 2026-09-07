@@ -59,7 +59,7 @@ class EvidenceNormalizerTest(unittest.TestCase):
                 "content_en": "A hand tears open the bread, revealing its layered interior.",
                 "assertion_type": "OBSERVED",
                 "assertion_scope": "product demonstration",
-                "action_role": "PRODUCT_CONSUMPTION",
+                "action_role": "OUTCOME_DEMONSTRATION",
                 "temporal_scope": "FRAME",
                 "confidence": 0.95,
             },
@@ -70,6 +70,29 @@ class EvidenceNormalizerTest(unittest.TestCase):
         self.assertIsNone(spoken.action_role)
         self.assertEqual(visual.assertion_scope, AssertionScope.OBSERVED_FACT)
         self.assertEqual(visual.action_role, ActionRole.PRODUCT_INSPECTION)
+
+    def test_asr_never_becomes_observed_action_evidence(self):
+        unit = normalize_evidence_unit(
+            "v1",
+            {
+                "modality": "asr",
+                "timestamp_status": "unavailable",
+                "source_text_native": "承重十八斤没有问题",
+                "subject": "speaker",
+                "predicate": "claims",
+                "value": "the rack supports an 18-jin load",
+                "content_en": "The speaker claims the rack supports an 18-jin load.",
+                "assertion_type": "SPOKEN_CLAIM",
+                "assertion_scope": "OBSERVED_FACT",
+                "action_role": "FUNCTIONAL_OPERATION",
+                "temporal_scope": "SHORT_CLIP",
+                "confidence": 0.9,
+            },
+            0,
+        )
+
+        self.assertEqual(unit.assertion_scope, AssertionScope.SPOKEN_CLAIM)
+        self.assertIsNone(unit.action_role)
 
     def test_graph_and_proposal_scope_fall_back_to_cited_sources(self):
         evidence_unit = normalize_evidence_unit(

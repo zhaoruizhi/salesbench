@@ -21,7 +21,7 @@ from .quality_prompts import QUALITY_PROMPT_VERSION
 from .schema import stable_digest
 
 
-PIPELINE_VERSION = "evidence-first-pipeline-v10.5"
+PIPELINE_VERSION = "evidence-first-pipeline-v10.6"
 
 
 GOLD_BANK_OUTPUT_FILES = (

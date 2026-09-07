@@ -160,7 +160,7 @@ class BenchmarkConvergenceTest(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        run_id = "v10c2-smoke5-qwen-deepseek-20260907-002"
+        run_id = "v10c2-smoke5-qwen-deepseek-20260907-003"
         run_root = f"outputs/runs/{run_id}/"
 
         self.assertEqual(cohort["run_id"], run_id)
@@ -176,8 +176,8 @@ class BenchmarkConvergenceTest(unittest.TestCase):
             ],
         )
         self.assertTrue(cohort["strict_semantic_verification"])
-        self.assertEqual(cohort["prompt_version"], "evidence-prompt-v10.4")
-        self.assertEqual(cohort["pipeline_version"], "evidence-first-pipeline-v10.5")
+        self.assertEqual(cohort["prompt_version"], "evidence-prompt-v10.5")
+        self.assertEqual(cohort["pipeline_version"], "evidence-first-pipeline-v10.6")
         self.assertEqual(cohort["quality_prompt_version"], "quality-gate-prompt-v3")
         self.assertEqual(cohort["qa_quality_prompt_version"], "qa-quality-prompt-v2")
         self.assertEqual(cohort["compiler_version"], "evidence-qa-compiler-v9")
