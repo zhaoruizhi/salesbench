@@ -191,6 +191,53 @@ class GoldBankRunnerTest(unittest.TestCase):
         self.assertEqual(summary["quality_gate"]["target_rate"], 0.05)
         self.assertEqual(summary["quality_gate"]["block_rate"], 0.10)
 
+    def test_run_metadata_binds_evidence_to_release_and_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp) / "run-001"
+            summary = run_gold_bank_records(
+                self.records(),
+                self.pilot_config(),
+                run_root / "evidence",
+                FakePipeline(),
+                run_id="run-001",
+                benchmark_release="salesbench-v10-candidate.2",
+            )
+            manifest = json.loads((run_root / "run_manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(summary["run_id"], "run-001")
+        self.assertEqual(summary["benchmark_release"], "salesbench-v10-candidate.2")
+        self.assertEqual(summary["release_status"], "CANDIDATE")
+        self.assertEqual(len(summary["source_fingerprint"]), 64)
+        self.assertEqual(len(summary["evidence_fingerprint"]), 64)
+        self.assertEqual(manifest["fingerprints"]["evidence"], summary["evidence_fingerprint"])
+        self.assertEqual(manifest["artifacts"]["evidence"], "evidence")
+
+    def test_completed_output_rejects_a_different_run_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "run-001" / "evidence"
+            run_gold_bank_records(
+                self.records(), self.pilot_config(), output_dir, FakePipeline(), run_id="run-001"
+            )
+
+            with self.assertRaisesRegex(ValueError, "immutable Evidence output"):
+                run_gold_bank_records(
+                    self.records(), self.pilot_config(), output_dir, FakePipeline(), run_id="run-002"
+                )
+
+    def test_completed_output_rejects_changed_source_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "run-001" / "evidence"
+            run_gold_bank_records(
+                self.records(), self.pilot_config(), output_dir, FakePipeline(), run_id="run-001"
+            )
+            changed = self.pilot_config()
+            changed["min_confidence"] = 0.91
+
+            with self.assertRaisesRegex(ValueError, "source fingerprint"):
+                run_gold_bank_records(
+                    self.records(), changed, output_dir, FakePipeline(), run_id="run-001"
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

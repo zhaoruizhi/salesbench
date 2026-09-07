@@ -25,6 +25,8 @@ class GoldBankCLITest(unittest.TestCase):
         self.assertEqual(args.output_dir, "outputs/evidence/v2")
         self.assertEqual(args.model, "gpt-4o")
         self.assertTrue(args.resume)
+        self.assertIsNone(args.run_id)
+        self.assertEqual(args.benchmark_release, "salesbench-v10-candidate.2")
 
     def test_apply_gold_reviews_command_parses(self):
         args = build_parser().parse_args(
@@ -107,7 +109,15 @@ class GoldBankCLITest(unittest.TestCase):
     ):
         load_config.return_value = SimpleNamespace(repo_root=Path("/repo"))
         build_dataset.return_value = {"ok": True}
-        args = build_parser().parse_args(["build-evidence-dataset"])
+        args = build_parser().parse_args(
+            [
+                "build-evidence-dataset",
+                "--run-id",
+                "run-001",
+                "--benchmark-release",
+                "salesbench-v10-candidate.2",
+            ]
+        )
 
         self.assertEqual(build_evidence_dataset_command(args), 0)
         kwargs = build_dataset.call_args.kwargs
@@ -117,6 +127,8 @@ class GoldBankCLITest(unittest.TestCase):
         self.assertEqual(kwargs["text_api_key"], "deepseek-key")
         self.assertEqual(kwargs["text_base_url"], "https://deepseek.example/v1")
         self.assertEqual(kwargs["text_model"], "deepseek-text")
+        self.assertEqual(kwargs["run_id"], "run-001")
+        self.assertEqual(kwargs["benchmark_release"], "salesbench-v10-candidate.2")
 
     @patch.dict(
         "os.environ",

@@ -138,6 +138,8 @@ def build_evidence_dataset_command(args: argparse.Namespace) -> int:
             "TEXT_BASE_URL",
             "DEEPSEEK_BASE_URL",
         ) or _env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
+        run_id=args.run_id or "",
+        benchmark_release=args.benchmark_release,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
@@ -452,6 +454,10 @@ def build_parser() -> argparse.ArgumentParser:
     evidence.add_argument("--text-api-key", default=None)
     evidence.add_argument("--text-base-url", default=None)
     evidence.add_argument("--text-model", default=None)
+    evidence.add_argument("--run-id", default=None)
+    evidence.add_argument(
+        "--benchmark-release", default="salesbench-v10-candidate.2"
+    )
     evidence.add_argument("--max-workers", type=int, default=1)
     evidence.add_argument("--no-resume", action="store_false", dest="resume")
     evidence.set_defaults(func=build_evidence_dataset_command, resume=True)

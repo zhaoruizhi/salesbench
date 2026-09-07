@@ -12,6 +12,7 @@ from typing import Any, Callable
 from ..config import BenchmarkConfig
 from ..io_utils import read_json, write_json, write_jsonl
 from ..multiagent.context import SalesBenchContextStore, build_context_bundle
+from ..run_integrity import canonical_sha256, compute_evidence_fingerprint
 from ..utils import clean_text
 from ..vlm.api_client import VLMClient
 from ..vlm.frame_sampler import Frame, sample_frames
@@ -20,7 +21,7 @@ from .quality_prompts import QUALITY_PROMPT_VERSION
 from .schema import stable_digest
 
 
-PIPELINE_VERSION = "evidence-first-pipeline-v10.3"
+PIPELINE_VERSION = "evidence-first-pipeline-v10.4"
 
 
 GOLD_BANK_OUTPUT_FILES = (
@@ -203,6 +204,11 @@ def _merge_outputs(
     output_dir: Path,
     started_at: float,
     fingerprints: dict[str, str],
+    *,
+    run_id: str = "",
+    benchmark_release: str = "salesbench-v10-candidate.2",
+    source_fingerprint: str = "",
+    pipeline: GoldBankPipeline | None = None,
 ) -> dict[str, object]:
     evidence_units: list[dict[str, object]] = []
     commerce_cues: list[dict[str, object]] = []
@@ -274,7 +280,41 @@ def _merge_outputs(
     )
     write_jsonl(output_dir / "agent_traces.jsonl", _sort_records(traces, "video_id", "stage"))
 
+    component_versions = {
+        "evidence_schema": clean_text(pilot_config.get("schema_version")),
+        "evidence_prompt": clean_text(pilot_config.get("prompt_version")),
+        "evidence_pipeline": PIPELINE_VERSION,
+        "quality_prompt": QUALITY_PROMPT_VERSION,
+    }
+    models = {
+        "vision": getattr(getattr(pipeline, "vlm_client", None), "model", ""),
+        "text": getattr(getattr(pipeline, "llm_client", None), "model", ""),
+        "semantic_verifier": getattr(
+            getattr(pipeline, "semantic_verifier_client", None), "model", ""
+        ),
+    }
+    evidence_fingerprint = compute_evidence_fingerprint(
+        source={
+            "source_fingerprint": source_fingerprint,
+            "video_fingerprints": dict(sorted(fingerprints.items())),
+        },
+        components=component_versions,
+        models=models,
+        policy=pilot_config,
+        evidence_units=_sort_records(evidence_units, "video_id", "evidence_id"),
+        commerce_cues=_sort_records(commerce_cues, "video_id", "cue_id"),
+        commercial_relations=_sort_records(
+            commercial_relations, "video_id", "relation_id"
+        ),
+        dataset_rows=_sort_records(gold_records, "video_id"),
+    )
     summary = {
+        "benchmark_release": benchmark_release,
+        "run_id": run_id,
+        "release_status": "CANDIDATE",
+        "component_versions": component_versions,
+        "source_fingerprint": source_fingerprint,
+        "evidence_fingerprint": evidence_fingerprint,
         "version": pilot_config.get("version"),
         "prompt_version": pilot_config.get("prompt_version"),
         "schema_version": pilot_config.get("schema_version"),
@@ -319,6 +359,34 @@ def _merge_outputs(
         "outputs": {name: str(output_dir / name) for name in GOLD_BANK_OUTPUT_FILES},
     }
     write_json(output_dir / "generation_meta.json", summary)
+    if run_id:
+        run_root = output_dir.parent
+        manifest_path = run_root / "run_manifest.json"
+        existing: dict[str, object] = {}
+        if manifest_path.exists():
+            loaded = read_json(manifest_path)
+            if isinstance(loaded, dict):
+                existing = loaded
+        manifest = {
+            **existing,
+            "benchmark_release": benchmark_release,
+            "run_id": run_id,
+            "release_status": "CANDIDATE",
+            "components": {
+                **(existing.get("components") if isinstance(existing.get("components"), dict) else {}),
+                **component_versions,
+            },
+            "artifacts": {
+                **(existing.get("artifacts") if isinstance(existing.get("artifacts"), dict) else {}),
+                "evidence": output_dir.name,
+            },
+            "fingerprints": {
+                **(existing.get("fingerprints") if isinstance(existing.get("fingerprints"), dict) else {}),
+                "source": source_fingerprint,
+                "evidence": evidence_fingerprint,
+            },
+        }
+        write_json(manifest_path, manifest)
     return summary
 
 
@@ -331,6 +399,8 @@ def run_gold_bank_records(
     context_store: SalesBenchContextStore | None = None,
     frame_sampler: Callable[..., list[Frame]] = sample_frames,
     max_workers: int = 1,
+    run_id: str = "",
+    benchmark_release: str = "salesbench-v10-candidate.2",
 ) -> dict[str, object]:
     started_at = time.time()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -344,6 +414,20 @@ def run_gold_bank_records(
         video_id: _pipeline_fingerprint(lookup[video_id], pilot_config, pipeline)
         for video_id in requested_ids
     }
+    source_fingerprint = canonical_sha256(
+        {
+            "pipeline_version": PIPELINE_VERSION,
+            "pilot_config": pilot_config,
+            "video_fingerprints": dict(sorted(fingerprints.items())),
+        }
+    )
+    prior_meta_path = output_dir / "generation_meta.json"
+    if run_id and prior_meta_path.exists():
+        prior_meta = read_json(prior_meta_path)
+        if not isinstance(prior_meta, dict) or clean_text(prior_meta.get("run_id")) != run_id:
+            raise ValueError("immutable Evidence output belongs to a different run identity")
+        if clean_text(prior_meta.get("source_fingerprint")) != source_fingerprint:
+            raise ValueError("immutable Evidence output source fingerprint changed")
     completed = _load_completed(output_dir, requested_ids, fingerprints) if resume else {}
 
     results_by_id = dict(completed)
@@ -388,7 +472,18 @@ def run_gold_bank_records(
                 results_by_id[result.video_id] = result
 
     ordered_results = [results_by_id[video_id] for video_id in requested_ids if video_id in results_by_id]
-    return _merge_outputs(selected_records, pilot_config, ordered_results, output_dir, started_at, fingerprints)
+    return _merge_outputs(
+        selected_records,
+        pilot_config,
+        ordered_results,
+        output_dir,
+        started_at,
+        fingerprints,
+        run_id=run_id,
+        benchmark_release=benchmark_release,
+        source_fingerprint=source_fingerprint,
+        pipeline=pipeline,
+    )
 
 
 def build_gold_bank_dataset(
@@ -406,6 +501,8 @@ def build_gold_bank_dataset(
     text_api_key: str | None = None,
     text_model: str | None = None,
     text_base_url: str | None = None,
+    run_id: str = "",
+    benchmark_release: str = "salesbench-v10-candidate.2",
 ) -> dict[str, object]:
     pilot_config = read_json(pilot_config_path)
     if not isinstance(pilot_config, dict):
@@ -442,4 +539,6 @@ def build_gold_bank_dataset(
         resume=resume,
         context_store=store,
         max_workers=max_workers,
+        run_id=run_id,
+        benchmark_release=benchmark_release,
     )
