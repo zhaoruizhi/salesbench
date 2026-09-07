@@ -10,16 +10,23 @@ import re
 from ..goldbank.schema import GoldItem, stable_digest
 from ..goldbank.validators import PRIVATE_KEYS
 from ..io_utils import read_json, read_jsonl, write_json, write_jsonl
+from ..run_integrity import (
+    compute_compile_fingerprint,
+    read_required_fingerprint,
+    validate_reference_closure,
+)
 from ..utils import clean_text, contains_cjk, normalize_speaker_attribution
 from .goldbank_loader import load_compilable_gold
 from .item_validator import answer_type_for_task, validate_qa_candidate
 from .prompts import QA_QUALITY_PROMPT_VERSION
 from .question_programs import UnsupportedQuestionProgramError, render_question
 from .realizer import validate_realized_question
+from .ranking import score_qa_candidate
+from .semantic_verifier import QA_QUALITY_FIELDS
 from .specs import make_question_spec_id
 
 
-COMPILER_VERSION = "evidence-qa-compiler-v8"
+COMPILER_VERSION = "evidence-qa-compiler-v9"
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,7 @@ class CompilePolicy:
     include_tiers: tuple[str, ...] = ("Gold-A", "Gold-B")
     require_all_tasks: bool = True
     allow_auto_candidates: bool = False
+    max_per_capability: int = 1
 
 
 def _contains_private(payload: object) -> bool:
@@ -59,6 +67,8 @@ def _public_qa(record: dict[str, object]) -> dict[str, object]:
             "commerce_cue_ids",
             "commercial_relation_ids",
             "forbidden_inferences",
+            "selection_score",
+            "score_breakdown",
         }
     }
 
@@ -74,6 +84,7 @@ def compile_qa_records(
     gold_items: list[GoldItem],
     policy: CompilePolicy,
     realizations: dict[str, dict[str, object]] | None = None,
+    quality_verifications: dict[str, dict[str, object]] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     by_video: dict[str, list[GoldItem]] = defaultdict(list)
     for item in gold_items:
@@ -87,21 +98,46 @@ def compile_qa_records(
     for video_id in sorted(by_video):
         video_count = 0
         per_task_count = {task: 0 for task in policy.task_priority}
+        per_capability_count: dict[str, int] = defaultdict(int)
         ordered_items = sorted(
             by_video[video_id],
             key=lambda item: (
                 policy.task_priority.index(item.task_type.value)
                 if item.task_type.value in policy.task_priority
                 else len(policy.task_priority),
+                -score_qa_candidate(
+                    item,
+                    verification=(quality_verifications or {}).get(
+                        make_question_spec_id(
+                            item.video_id,
+                            item.annotation_id,
+                            item.capability or item.task_subtype,
+                        )
+                    ),
+                ).total,
                 item.gold_id,
             ),
         )
         for item in ordered_items:
+            selection_score = score_qa_candidate(
+                item,
+                verification=(quality_verifications or {}).get(
+                    make_question_spec_id(
+                        item.video_id,
+                        item.annotation_id,
+                        item.capability or item.task_subtype,
+                    )
+                ),
+            )
+            capability = clean_text(item.capability or item.task_subtype).upper()
             if video_count >= policy.max_questions_per_video:
-                validation.append({"gold_id": item.gold_id, "status": "skipped", "reason": "video_quota"})
+                validation.append({"gold_id": item.gold_id, "status": "skipped", "reason": "video_quota", "selection_score": selection_score.total, "score_breakdown": selection_score.to_dict()})
                 continue
             if per_task_count.get(item.task_type.value, 0) >= policy.max_per_task:
-                validation.append({"gold_id": item.gold_id, "status": "skipped", "reason": "task_quota"})
+                validation.append({"gold_id": item.gold_id, "status": "skipped", "reason": "task_quota", "selection_score": selection_score.total, "score_breakdown": selection_score.to_dict()})
+                continue
+            if per_capability_count[capability] >= policy.max_per_capability:
+                validation.append({"gold_id": item.gold_id, "status": "skipped", "reason": "capability_quota", "selection_score": selection_score.total, "score_breakdown": selection_score.to_dict()})
                 continue
             spec_id = make_question_spec_id(
                 item.video_id,
@@ -193,6 +229,8 @@ def compile_qa_records(
                 "quality_status": item.quality_status.value,
                 "review_status": item.review_status,
                 "compiler_version": COMPILER_VERSION,
+                "selection_score": selection_score.total,
+                "score_breakdown": selection_score.to_dict(),
             }
             if _contains_private(record):
                 validation.append({"gold_id": item.gold_id, "status": "rejected", "reason": "private_field_leak"})
@@ -200,7 +238,8 @@ def compile_qa_records(
             qa_records.append(record)
             video_count += 1
             per_task_count[item.task_type.value] = per_task_count.get(item.task_type.value, 0) + 1
-            validation.append({"annotation_id": item.annotation_id, "vqa_id": vqa_id, "status": "accepted", "reason": ""})
+            per_capability_count[capability] += 1
+            validation.append({"annotation_id": item.annotation_id, "vqa_id": vqa_id, "status": "accepted", "reason": "", "selection_score": selection_score.total, "score_breakdown": selection_score.to_dict()})
     return qa_records, validation
 
 
@@ -276,6 +315,7 @@ def _strict_qa_pass_ids(realizations_path: Path | None) -> tuple[bool, set[str]]
         for row in read_jsonl(verification_path)
         if clean_text(row.get("spec_id"))
         and clean_text(row.get("verdict")).upper() == "PASS"
+        and all(row.get(field) is True for field in QA_QUALITY_FIELDS)
     }
 
 
@@ -289,7 +329,28 @@ def compile_vqa_from_gold(
     bank_path = gold_bank_dir / bank_filename
     if not bank_path.exists():
         raise FileNotFoundError(f"EvidenceDataset file not found: {bank_path}")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    bank_records = read_jsonl(bank_path)
+    current_contract = any(
+        clean_text(record.get("schema_version")) == "evidence-dataset-schema-v4"
+        for record in bank_records
+    )
+    evidence_fingerprint = "legacy"
+    qa_realization_fingerprint = "legacy"
+    if current_contract:
+        evidence_fingerprint = read_required_fingerprint(
+            gold_bank_dir / "generation_meta.json", "evidence_fingerprint"
+        )
+        if realizations_path is None:
+            raise ValueError("EvidenceDataset v4 requires fingerprinted QA realizations")
+        qa_meta_path = realizations_path.parent / "qa_realizer_meta.json"
+        qa_evidence_fingerprint = read_required_fingerprint(
+            qa_meta_path, "evidence_fingerprint"
+        )
+        qa_realization_fingerprint = read_required_fingerprint(
+            qa_meta_path, "qa_realization_fingerprint"
+        )
+        if qa_evidence_fingerprint != evidence_fingerprint:
+            raise ValueError("Evidence fingerprint mismatch between Evidence and QA realization")
     strict_qa_verified_candidates, strict_pass_ids = _strict_qa_pass_ids(realizations_path)
     gold_items = load_compilable_gold(
         bank_path,
@@ -310,7 +371,6 @@ def compile_vqa_from_gold(
             )
             in strict_pass_ids
         ]
-    bank_records = read_jsonl(bank_path)
     if realizations_path is None and any(
         clean_text(record.get("schema_version"))
         in {"evidence-dataset-schema-v3", "evidence-dataset-schema-v4"}
@@ -318,6 +378,7 @@ def compile_vqa_from_gold(
     ):
         raise ValueError("EvidenceDataset v3 requires reviewed QA realizations")
     realization_lookup = None
+    quality_verification_lookup: dict[str, dict[str, object]] = {}
     if realizations_path is not None:
         realization_records = read_jsonl(realizations_path)
         realization_lookup = {
@@ -325,7 +386,19 @@ def compile_vqa_from_gold(
             for record in realization_records
             if clean_text(record.get("spec_id"))
         }
-    qa_records, validation = compile_qa_records(gold_items, policy, realization_lookup)
+        verification_path = realizations_path.parent / "qa_semantic_verifications.jsonl"
+        if verification_path.exists():
+            quality_verification_lookup = {
+                clean_text(record.get("spec_id")): record
+                for record in read_jsonl(verification_path)
+                if clean_text(record.get("spec_id"))
+            }
+    qa_records, validation = compile_qa_records(
+        gold_items,
+        policy,
+        realization_lookup,
+        quality_verification_lookup,
+    )
     task_counts = {
         task: sum(1 for record in qa_records if record.get("task_type") == task)
         for task in policy.task_priority
@@ -333,21 +406,37 @@ def compile_vqa_from_gold(
     missing_tasks = [task for task, count in task_counts.items() if count == 0]
     if policy.require_all_tasks and missing_tasks:
         raise ValueError(f"EvidenceDataset cannot compile a public benchmark with empty tasks: {missing_tasks}")
+    evidence_rows = read_jsonl(gold_bank_dir / "evidence_units.jsonl") if (gold_bank_dir / "evidence_units.jsonl").exists() else []
+    cue_rows = read_jsonl(gold_bank_dir / "commerce_cues.jsonl") if (gold_bank_dir / "commerce_cues.jsonl").exists() else []
+    relation_rows = read_jsonl(gold_bank_dir / "commercial_relations.jsonl") if (gold_bank_dir / "commercial_relations.jsonl").exists() else []
     evidence_lookup = {
         clean_text(record.get("evidence_id")): record
-        for record in read_jsonl(gold_bank_dir / "evidence_units.jsonl")
+        for record in evidence_rows
         if clean_text(record.get("evidence_id"))
-    } if (gold_bank_dir / "evidence_units.jsonl").exists() else {}
+    }
     cue_lookup = {
         clean_text(record.get("cue_id")): record
-        for record in read_jsonl(gold_bank_dir / "commerce_cues.jsonl")
+        for record in cue_rows
         if clean_text(record.get("cue_id"))
-    } if (gold_bank_dir / "commerce_cues.jsonl").exists() else {}
+    }
     relation_lookup = {
         clean_text(record.get("relation_id")): record
-        for record in read_jsonl(gold_bank_dir / "commercial_relations.jsonl")
+        for record in relation_rows
         if clean_text(record.get("relation_id"))
-    } if (gold_bank_dir / "commercial_relations.jsonl").exists() else {}
+    }
+    annotation_rows = [
+        annotation
+        for record in bank_records
+        for annotation in record.get("grounded_annotations", []) or []
+        if isinstance(annotation, dict)
+    ]
+    closure_report = validate_reference_closure(
+        qa_records,
+        annotations=annotation_rows,
+        evidence_units=evidence_rows,
+        commerce_cues=cue_rows,
+        commercial_relations=relation_rows,
+    )
     for record in qa_records:
         record["evidence_context"] = [
             evidence_lookup[evidence_id]
@@ -402,21 +491,35 @@ def compile_vqa_from_gold(
         for item in gold_items
     ]
 
+    output_dir.mkdir(parents=True, exist_ok=True)
     write_jsonl(output_dir / "qa_plan.jsonl", qa_plan)
     write_jsonl(output_dir / "qa_candidates.jsonl", qa_records)
     write_jsonl(output_dir / "qa_validation.jsonl", validation)
+    write_jsonl(output_dir / "qa_selection.jsonl", validation)
     write_jsonl(output_dir / "vqa_gold_private.jsonl", qa_records)
     public_records = [_public_qa(record) for record in qa_records]
     write_jsonl(output_dir / "vqa_public.jsonl", public_records)
     diversity = build_diversity_report(qa_records)
     write_json(output_dir / "qa_diversity.json", diversity)
+    write_json(output_dir / "reference_closure.json", closure_report)
     for task in policy.task_priority:
         write_jsonl(
             output_dir / "public" / f"{task.lower()}.jsonl",
             [record for record in public_records if record.get("task_type") == task],
         )
+    compile_fingerprint = compute_compile_fingerprint(
+        evidence_fingerprint=evidence_fingerprint,
+        qa_realization_fingerprint=qa_realization_fingerprint,
+        compiler_version=COMPILER_VERSION,
+        policy=policy.__dict__,
+        selected_records=qa_records,
+    )
     meta = {
         "compiler_version": COMPILER_VERSION,
+        "evidence_fingerprint": evidence_fingerprint,
+        "qa_realization_fingerprint": qa_realization_fingerprint,
+        "compile_fingerprint": compile_fingerprint,
+        "reference_closure": closure_report,
         "public_tasks": list(policy.task_priority),
         "bank_file": str(bank_path),
         "realizations_file": str(realizations_path) if realizations_path is not None else "legacy_question_programs",
@@ -437,4 +540,34 @@ def compile_vqa_from_gold(
         },
     }
     write_json(output_dir / "generation_meta.json", meta)
+    evidence_meta_path = gold_bank_dir / "generation_meta.json"
+    if evidence_meta_path.exists():
+        evidence_meta = read_json(evidence_meta_path)
+        run_id = clean_text(evidence_meta.get("run_id")) if isinstance(evidence_meta, dict) else ""
+        manifest_path = gold_bank_dir.parent / "run_manifest.json"
+        if run_id and manifest_path.exists():
+            manifest = read_json(manifest_path)
+            if isinstance(manifest, dict):
+                artifacts = dict(manifest.get("artifacts") or {})
+                fingerprints = dict(manifest.get("fingerprints") or {})
+                components = dict(manifest.get("components") or {})
+                try:
+                    artifacts["qa_compiled"] = str(output_dir.relative_to(gold_bank_dir.parent))
+                except ValueError:
+                    artifacts["qa_compiled"] = output_dir.name
+                fingerprints.update(
+                    {
+                        "qa_realization": qa_realization_fingerprint,
+                        "compile": compile_fingerprint,
+                    }
+                )
+                components["qa_compiler"] = COMPILER_VERSION
+                manifest.update(
+                    {
+                        "artifacts": artifacts,
+                        "fingerprints": fingerprints,
+                        "components": components,
+                    }
+                )
+                write_json(manifest_path, manifest)
     return meta

@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, "src")
 
 from salesbench.vqa.compiler import CompilePolicy, compile_qa_records, compile_vqa_from_gold  # noqa: E402
+from salesbench.run_integrity import ReferenceClosureError  # noqa: E402
 from salesbench.vqa.goldbank_loader import load_compilable_gold  # noqa: E402
 from salesbench.vqa.specs import build_question_specs, make_question_spec_id  # noqa: E402
 
@@ -57,6 +58,115 @@ def gold_record():
 
 
 class GoldBankQACompilerTest(unittest.TestCase):
+    def test_quality_ranking_beats_gold_id_order_under_task_quota(self):
+        record = gold_record()
+        low = record["grounded_annotations"][0]
+        low.update(
+            {
+                "annotation_id": "a_low",
+                "confidence": 0.71,
+                "task_subtype": "ACTION",
+                "gold_value": {"action": "opened"},
+            }
+        )
+        high = {
+            **low,
+            "annotation_id": "z_high",
+            "confidence": 0.98,
+            "task_subtype": "OCR_FACT",
+            "gold_value": {"value": "9.9 yuan"},
+        }
+        record["grounded_annotations"] = [low, high]
+
+        qa, selection = compile_qa_records(
+            load_compilable_gold_from_records([record]),
+            CompilePolicy(max_per_task=1, require_all_tasks=False),
+        )
+
+        self.assertEqual(qa[0]["source_annotation_ids"], ["z_high"])
+        accepted = next(row for row in selection if row["status"] == "accepted")
+        self.assertGreater(accepted["selection_score"], 0)
+
+    def test_v4_compile_rejects_mismatched_evidence_snapshot_before_writing_qa(self):
+        record = gold_record()
+        record["schema_version"] = "evidence-dataset-schema-v4"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gold_dir = root / "evidence"
+            qa_stage = root / "realizations"
+            out_dir = root / "compiled"
+            gold_dir.mkdir()
+            qa_stage.mkdir()
+            write_jsonl(gold_dir / "video_evidence_dataset.jsonl", [record])
+            write_jsonl(gold_dir / "evidence_units.jsonl", [{"evidence_id": "e1", "video_id": "v1"}])
+            (gold_dir / "generation_meta.json").write_text(
+                json.dumps({"evidence_fingerprint": "e" * 64}), encoding="utf-8"
+            )
+            realizations = qa_stage / "qa_realizations.jsonl"
+            write_jsonl(realizations, [])
+            (qa_stage / "qa_realizer_meta.json").write_text(
+                json.dumps(
+                    {
+                        "evidence_fingerprint": "x" * 64,
+                        "qa_realization_fingerprint": "q" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Evidence fingerprint mismatch"):
+                compile_vqa_from_gold(
+                    gold_dir,
+                    out_dir,
+                    CompilePolicy(require_all_tasks=False),
+                    bank_filename="video_evidence_dataset.jsonl",
+                    realizations_path=realizations,
+                )
+
+            self.assertFalse((out_dir / "vqa_gold_private.jsonl").exists())
+
+    def test_v4_compile_rejects_missing_graph_reference(self):
+        record = gold_record()
+        record["schema_version"] = "evidence-dataset-schema-v4"
+        record["grounded_annotations"][0]["evidence_refs"] = ["missing"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gold_dir = root / "evidence"
+            qa_stage = root / "realizations"
+            out_dir = root / "compiled"
+            gold_dir.mkdir()
+            qa_stage.mkdir()
+            write_jsonl(gold_dir / "video_evidence_dataset.jsonl", [record])
+            write_jsonl(gold_dir / "evidence_units.jsonl", [])
+            write_jsonl(gold_dir / "commerce_cues.jsonl", [])
+            write_jsonl(gold_dir / "commercial_relations.jsonl", [])
+            (gold_dir / "generation_meta.json").write_text(
+                json.dumps({"evidence_fingerprint": "e" * 64}), encoding="utf-8"
+            )
+            spec_id = make_question_spec_id("v1", "g_bp", "ACTION")
+            realizations = qa_stage / "qa_realizations.jsonl"
+            write_jsonl(
+                realizations,
+                [{"spec_id": spec_id, "question": "What action is shown with the product?"}],
+            )
+            (qa_stage / "qa_realizer_meta.json").write_text(
+                json.dumps(
+                    {
+                        "evidence_fingerprint": "e" * 64,
+                        "qa_realization_fingerprint": "q" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ReferenceClosureError):
+                compile_vqa_from_gold(
+                    gold_dir,
+                    out_dir,
+                    CompilePolicy(require_all_tasks=False),
+                    bank_filename="video_evidence_dataset.jsonl",
+                    realizations_path=realizations,
+                )
     def test_v5_compiler_uses_reviewed_english_realization_and_graph_fields(self):
         record = gold_record()
         item = record["grounded_annotations"][0]
@@ -264,7 +374,7 @@ class GoldBankQACompilerTest(unittest.TestCase):
             private = json.loads((out_dir / "vqa_gold_private.jsonl").read_text(encoding="utf-8").splitlines()[0])
             public = json.loads((out_dir / "vqa_public.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
-        self.assertEqual(summary["compiler_version"], "evidence-qa-compiler-v8")
+        self.assertEqual(summary["compiler_version"], "evidence-qa-compiler-v9")
         self.assertEqual(diversity["exact_duplicate_count"], 0)
         self.assertIn("normalized_stem_clusters", diversity)
         self.assertEqual(private["graph_context"]["commerce_cues"][0]["cue_id"], "c1")
@@ -298,6 +408,11 @@ class GoldBankQACompilerTest(unittest.TestCase):
             qa_stage.mkdir()
             write_jsonl(gold_dir / "video_evidence_dataset.jsonl", [record])
             write_jsonl(gold_dir / "evidence_units.jsonl", [{"evidence_id": "e1", "video_id": "v1"}])
+            write_jsonl(gold_dir / "commerce_cues.jsonl", [])
+            write_jsonl(gold_dir / "commercial_relations.jsonl", [])
+            (gold_dir / "generation_meta.json").write_text(
+                json.dumps({"evidence_fingerprint": "e" * 64}), encoding="utf-8"
+            )
             realizations = qa_stage / "qa_realizations.jsonl"
             write_jsonl(
                 realizations,
@@ -305,13 +420,38 @@ class GoldBankQACompilerTest(unittest.TestCase):
             )
             write_jsonl(
                 qa_stage / "qa_semantic_verifications.jsonl",
-                [{"spec_id": spec.spec_id, "verdict": "PASS", "reason": "Supported."}],
+                [
+                    {
+                        "spec_id": spec.spec_id,
+                        "verdict": "PASS",
+                        "reason": "Supported.",
+                        **{
+                            field: True
+                            for field in (
+                                "answerable_from_evidence",
+                                "gold_supported",
+                                "unique_answer",
+                                "task_aligned",
+                                "content_specific",
+                                "commerce_relevant",
+                                "natural_question",
+                                "non_trivial",
+                                "commercially_diagnostic",
+                                "claim_scope_preserved",
+                                "intended_modality_required",
+                                "reference_closed",
+                            )
+                        },
+                    }
+                ],
             )
             (qa_stage / "qa_realizer_meta.json").write_text(
                 json.dumps(
                     {
                         "strict_semantic_verification": True,
                         "quality_prompt_version": "qa-quality-prompt-v2",
+                        "evidence_fingerprint": "e" * 64,
+                        "qa_realization_fingerprint": "q" * 64,
                     }
                 ),
                 encoding="utf-8",

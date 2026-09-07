@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ..goldbank.parsing import ModelOutputError, parse_json_object
 from ..goldbank.schema import stable_digest
-from ..io_utils import read_jsonl, write_json, write_jsonl
+from ..io_utils import read_json, read_jsonl, write_json, write_jsonl
 from ..run_integrity import (
     compute_qa_realization_fingerprint,
     read_required_fingerprint,
@@ -599,4 +599,36 @@ def run_qa_realizer(
         "fingerprint": qa_realization_fingerprint,
     }
     write_json(output_dir / "qa_realizer_meta.json", summary)
+    evidence_meta = read_json(evidence_dir / "generation_meta.json")
+    run_id = clean_text(evidence_meta.get("run_id")) if isinstance(evidence_meta, dict) else ""
+    manifest_path = evidence_dir.parent / "run_manifest.json"
+    if run_id and manifest_path.exists():
+        manifest = read_json(manifest_path)
+        if isinstance(manifest, dict):
+            artifacts = dict(manifest.get("artifacts") or {})
+            fingerprints = dict(manifest.get("fingerprints") or {})
+            components = dict(manifest.get("components") or {})
+            try:
+                artifacts["qa_realizations"] = str(output_dir.relative_to(evidence_dir.parent))
+            except ValueError:
+                artifacts["qa_realizations"] = output_dir.name
+            fingerprints["qa_realization"] = qa_realization_fingerprint
+            components.update(
+                {
+                    "question_realizer": QUESTION_REALIZER_PROMPT_VERSION,
+                    "qa_quality_prompt": (
+                        QA_QUALITY_PROMPT_VERSION
+                        if strict_semantic_verification
+                        else "disabled"
+                    ),
+                }
+            )
+            manifest.update(
+                {
+                    "artifacts": artifacts,
+                    "fingerprints": fingerprints,
+                    "components": components,
+                }
+            )
+            write_json(manifest_path, manifest)
     return summary

@@ -18,7 +18,7 @@ class QASemanticVerdict(str, Enum):
     HUMAN_REVIEW = "HUMAN_REVIEW"
 
 
-_QUALITY_FIELDS = (
+QA_QUALITY_FIELDS = (
     "answerable_from_evidence",
     "gold_supported",
     "unique_answer",
@@ -57,7 +57,7 @@ class QASemanticVerification:
             "spec_id": self.spec_id,
             "verdict": self.verdict.value,
             "reason": self.reason,
-            **{field: getattr(self, field) for field in _QUALITY_FIELDS},
+            **{field: getattr(self, field) for field in QA_QUALITY_FIELDS},
         }
 
 
@@ -78,7 +78,7 @@ def parse_qa_semantic_verification(
     if not reason:
         raise ValueError("QA semantic verifier reason is required")
     values: dict[str, bool] = {}
-    for field in _QUALITY_FIELDS:
+    for field in QA_QUALITY_FIELDS:
         value = payload.get(field)
         if not isinstance(value, bool):
             raise ValueError(f"QA semantic verifier requires boolean {field}")

@@ -323,6 +323,18 @@ class EvidenceVQAE2ETest(unittest.TestCase):
                         )
                         + "\n"
                     )
+            evidence_meta = json.loads(
+                (evidence_dir / "generation_meta.json").read_text(encoding="utf-8")
+            )
+            (root / "qa_realizer_meta.json").write_text(
+                json.dumps(
+                    {
+                        "evidence_fingerprint": evidence_meta["evidence_fingerprint"],
+                        "qa_realization_fingerprint": "q" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             compile_meta = compile_vqa_from_gold(
                 evidence_dir,
