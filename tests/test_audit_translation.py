@@ -208,6 +208,7 @@ def test_runner_safely_appends_missing_controlled_tokens_to_chinese_translation(
 def test_collect_and_run_translations_from_delivery_manifest(tmp_path: Path):
     evidence = tmp_path / "evidence"
     qa = tmp_path / "qa"
+    qa_realizations = tmp_path / "qa-realizations"
     write_jsonl(
         evidence / "evidence_units.jsonl",
         [{"evidence_id": "e1", "video_id": "v1", "content_en": "The price is 9.9 yuan.", "source_text_native": "9.9元"}],
@@ -221,10 +222,15 @@ def test_collect_and_run_translations_from_delivery_manifest(tmp_path: Path):
         qa / "vqa_gold_private.jsonl",
         [{"vqa_id": "q1", "video_id": "v1", "question": "What price is presented?", "gold_answer": "The price is 9.9 yuan.", "likes": 100}],
     )
+    write_jsonl(
+        qa_realizations / "qa_realizations.jsonl",
+        [{"spec_id": "s1", "video_id": "v1", "question": "Which price appears in the video?"}],
+    )
     manifest = {
         "formal": {
             "artifacts": {
                 "evidence": {"source": str(evidence)},
+                "qa_realizations": {"source": str(qa_realizations)},
                 "qa": {"source": str(qa)},
             }
         }
@@ -246,6 +252,7 @@ def test_collect_and_run_translations_from_delivery_manifest(tmp_path: Path):
     assert all(row.audit_only for row in translations)
     assert "likes" not in serialized
     assert "translated_text" in serialized
+    assert any(row.object_type == "question_realization" for row in translations)
 
 
 def test_write_localized_vqa_private_keeps_only_chinese_review_fields(tmp_path: Path):

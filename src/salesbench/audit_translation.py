@@ -386,18 +386,26 @@ def collect_audit_translation_jobs(
                 ("reason", "candidate_snapshot", "verifier_result"),
             )
         qa_source = artifacts.get("qa", {}).get("source") if isinstance(artifacts.get("qa"), dict) else None
-        if qa_source:
-            root = _path(qa_source, repo_root)
-            _add_jobs(jobs, _existing_rows(root / "qa_specs.jsonl"), "question_spec", ("spec_id",), ("question_intent", "gold_answer"))
+        qa_realizations_source = (
+            artifacts.get("qa_realizations", {}).get("source")
+            if isinstance(artifacts.get("qa_realizations"), dict)
+            else None
+        )
+        realization_root = (
+            _path(qa_realizations_source, repo_root)
+            if qa_realizations_source
+            else (_path(qa_source, repo_root) if qa_source else None)
+        )
+        if realization_root is not None:
+            _add_jobs(jobs, _existing_rows(realization_root / "qa_specs.jsonl"), "question_spec", ("spec_id",), ("question_intent", "gold_answer"))
             _add_audit_fields(
                 jobs,
-                _existing_rows(root / "qa_specs.jsonl"),
+                _existing_rows(realization_root / "qa_specs.jsonl"),
                 "question_spec",
                 ("spec_id",),
                 ("target", "forbidden_inferences"),
             )
-            _add_jobs(jobs, _existing_rows(root / "qa_realizations.jsonl"), "question_realization", ("spec_id",), ("question",))
-            _add_jobs(jobs, _existing_rows(root / "vqa_gold_private.jsonl"), "qa", ("vqa_id",), ("question", "gold_answer"))
+            _add_jobs(jobs, _existing_rows(realization_root / "qa_realizations.jsonl"), "question_realization", ("spec_id",), ("question",))
             for filename, object_type in (
                 ("qa_rejected_candidates.jsonl", "qa_rejection"),
                 ("qa_human_review_queue.jsonl", "qa_human_review"),
@@ -406,11 +414,20 @@ def collect_audit_translation_jobs(
             ):
                 _add_audit_fields(
                     jobs,
-                    _existing_rows(root / filename),
+                    _existing_rows(realization_root / filename),
                     object_type,
                     ("spec_id", "vqa_id"),
                     ("reason", "issues", "candidate_snapshot", "semantic_verification"),
                 )
+        if qa_source:
+            qa_root = _path(qa_source, repo_root)
+            _add_jobs(
+                jobs,
+                _existing_rows(qa_root / "vqa_gold_private.jsonl"),
+                "qa",
+                ("vqa_id",),
+                ("question", "gold_answer"),
+            )
         model_run_source = artifacts.get("model_run", {}).get("source") if isinstance(artifacts.get("model_run"), dict) else None
         if model_run_source:
             root = _path(model_run_source, repo_root)

@@ -148,6 +148,72 @@ class BenchmarkConvergenceTest(unittest.TestCase):
         self.assertIn("v10_pilot64", serialized)
         self.assertNotIn("v9_pilot64", serialized)
 
+    def test_v10_candidate2_smoke_config_is_one_immutable_run(self):
+        repo = Path(__file__).resolve().parents[1]
+        cohort = json.loads(
+            (repo / "configs/evidence_smoke_v10_candidate2_5videos.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        delivery = json.loads(
+            (repo / "configs/v10_candidate2_smoke_delivery.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        run_id = "v10c2-smoke5-qwen-deepseek-20260907-001"
+        run_root = f"outputs/runs/{run_id}/"
+
+        self.assertEqual(cohort["run_id"], run_id)
+        self.assertEqual(cohort["benchmark_release"], "salesbench-v10-candidate.2")
+        self.assertEqual(
+            cohort["video_ids"],
+            [
+                "7362856271365606683",
+                "7360594186715909416",
+                "7360565413341613348",
+                "7359538830657064192",
+                "7365054535036849420",
+            ],
+        )
+        self.assertTrue(cohort["strict_semantic_verification"])
+        self.assertEqual(cohort["prompt_version"], "evidence-prompt-v10.3")
+        self.assertEqual(cohort["quality_prompt_version"], "quality-gate-prompt-v3")
+        self.assertEqual(cohort["qa_quality_prompt_version"], "qa-quality-prompt-v2")
+        self.assertEqual(cohort["compiler_version"], "evidence-qa-compiler-v9")
+        self.assertEqual(cohort["question_realizer_prompt_version"], "question-realizer-prompt-v3")
+        self.assertEqual(cohort["human_ambiguity_target_rate"], 0.05)
+        self.assertEqual(cohort["human_ambiguity_block_rate"], 0.1)
+        self.assertEqual(cohort["accepted_sample_fraction"], 0.1)
+
+        self.assertEqual(delivery["run_id"], run_id)
+        self.assertEqual(set(delivery), {
+            "version",
+            "run_id",
+            "benchmark_release",
+            "release_status",
+            "generation_models",
+            "tested_model",
+            "judge_model",
+            "frame_cache_root",
+            "versions",
+            "formal",
+            "smoke",
+        })
+        for group in ("formal", "smoke"):
+            for artifact in delivery[group]["artifacts"].values():
+                self.assertTrue(artifact["source"].startswith(run_root))
+        serialized = json.dumps({"cohort": cohort, "delivery": delivery})
+        self.assertNotRegex(serialized, r"sk-[A-Za-z0-9._-]{12,}")
+
+        guide = (repo / "docs/Pilot_v10_Quality_Gate_Execution_Guide.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(run_id, guide)
+        self.assertIn("Qwen", guide)
+        self.assertIn("DeepSeek", guide)
+        self.assertIn("ASR 时间戳不可用", guide)
+        self.assertIn("不生成依赖时序定位的任务", guide)
+
     def test_public_task_contract_has_exactly_four_tasks(self):
         self.assertEqual([task.value for task in GoldTaskType], ["BP", "CM", "SS", "AE"])
 

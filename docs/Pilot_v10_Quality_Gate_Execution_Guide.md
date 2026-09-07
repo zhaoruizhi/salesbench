@@ -1,54 +1,49 @@
-# SalesBench v10 质量门禁执行指南
+# SalesBench v10 Candidate.2 质量链路执行指南
 
-> v10 不覆盖任何 v9 产物。先跑 5 视频 smoke；只有生产门禁、审计视图和 QA 候选质量通过后，才允许重新运行 64 视频 pilot。
+本指南只描述新的不可变运行链路。旧版 v10 smoke 仍可作为历史对照，但不能与本次产物混合，也不能直接升级为正式 Gold。
 
-## 1. v10 解决什么问题
-
-v9 的 440 条“人工审核”中，大部分其实是低置信度、校验失败、解析失败、重复、Abstention 或明确拒绝。v10 将生成结果固定路由到：
+本轮固定身份：
 
 ```text
-ACCEPT       -> 下一生产阶段
-REPAIR       -> 最多一次自动修复，再走全部本地规则
-REJECT       -> rejected_candidates.jsonl
-HUMAN_REVIEW -> 仅限无法由帧和证据唯一判定的语义歧义
+run_id: v10c2-smoke5-qwen-deepseek-20260907-001
+benchmark_release: salesbench-v10-candidate.2
+run_root: outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/
 ```
 
-人工歧义队列目标不超过生成候选的 5%；超过 10% 时阻断该次 pilot，先修复生产链路，不能把问题转嫁给标注员。
+## 1. 本轮质量路由
 
-## 2. 固定版本与输出目录
+质量问题必须在生产阶段分流，而不是全部交给人工：
 
-| 环节 | v10 契约 |
+```text
+PASS         -> 允许进入下一生产阶段
+REPAIR       -> 最多自动修复一次，再执行全部规则
+REJECT       -> 明确错误，写入 rejected_candidates.jsonl
+HUMAN_REVIEW -> 只有证据支持两种合理解释时才进入人工队列
+DIAGNOSTIC   -> API、解析或程序故障，写入 pipeline_diagnostics.jsonl
+```
+
+人工歧义队列目标不超过候选的 5%，超过 10% 时阻断 candidate。自动通过项只做按任务分层的约 10% 抽样审核，用于估计门禁漏检率，不是全量人审。
+
+## 2. 固定版本
+
+| 环节 | 固定版本 |
 | --- | --- |
 | Evidence schema | `evidence-dataset-schema-v4` |
-| Evidence/Commerce prompt | `evidence-prompt-v10.2` |
-| Pipeline | `evidence-first-pipeline-v10.3` |
-| Semantic quality prompt | `quality-gate-prompt-v2` |
-| QA compiler | `evidence-qa-compiler-v8` |
-| Question realizer | `question-realizer-prompt-v2` |
+| Evidence/Commerce prompt | `evidence-prompt-v10.3` |
+| Evidence pipeline | `evidence-first-pipeline-v10.4` |
+| Evidence quality prompt | `quality-gate-prompt-v3` |
+| Question realizer | `question-realizer-prompt-v3` |
+| QA quality prompt | `qa-quality-prompt-v2` |
+| QA compiler | `evidence-qa-compiler-v9` |
 | Judge | `judge-prompt-v5` |
 | Audit translation | `audit-translation-prompt-v2` |
+| Audit workbench | `audit-workbench-v11` |
 
-Smoke 和正式目录必须分开。当前官方 API 运行使用以下不含密钥的命名：
+组件版本和 benchmark release 是两个概念。例如 `compiler-v9` 只是编译器版本，不表示 benchmark 是 v9。
 
-```text
-outputs/evidence/v10_smoke5_qwen_deepseek_official/
-outputs/vqa/v10_smoke5_qwen_deepseek_official/
-outputs/evidence/v10_pilot64_qwen_deepseek_official/
-outputs/vqa/v10_pilot64_qwen_deepseek_official/
-```
+## 3. API 与模型职责
 
-本地 `.env` 只保存 provider 配置，不进入 Git。视觉 Evidence 和 VQA 答题使用 Qwen，文本生成、语义门禁、审计翻译和 Judge 使用 DeepSeek：
-
-```dotenv
-QWEN_API_KEY=<local-secret>
-QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-QWEN_VISION_MODEL=qwen3-vl-plus
-DEEPSEEK_API_KEY=<local-secret>
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-pro
-```
-
-运行命令前加载 `.env`：
+密钥只保存在本地 `.env`，禁止复制到配置、文档、命令输出和 Git。加载时不打印变量值：
 
 ```bash
 set -a
@@ -56,131 +51,156 @@ source .env
 set +a
 ```
 
-## 3. 先运行 5 视频严格 smoke
+沿用已有变量：
 
-凭证仍通过本地 `.env` 或环境变量注入，不写入配置、日志或 Git：
+```text
+QWEN_API_KEY, QWEN_BASE_URL, QWEN_VISION_MODEL
+DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+```
+
+模型职责固定如下：
+
+- Qwen：视觉/OCR Evidence、视觉商业线索、跨模态关系复核、QA 独立语义质量复核；
+- DeepSeek：文本商业线索、CM/SS/AE 候选、英文问题实现、中文审计翻译；
+- 正式评测时由 Qwen benchmark runner 回答视频问题，由 DeepSeek Judge 评分。
+
+QA 生成模型和质量复核模型是两个独立 client：DeepSeek 生成，Qwen 复核，避免生成器自评直接放行。
+
+## 4. 不可变目录与指纹
+
+本轮所有产物位于同一 run root：
+
+```text
+outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/
+  run_manifest.json
+  evidence/
+  qa/
+    realizations/
+    compiled/
+  evaluation/
+  translations/
+  audit/
+```
+
+完整性链路：
+
+1. Evidence 对视频、配置、帧策略、模型和组件版本生成 `source_fingerprint`，再对产物生成 `evidence_fingerprint`。
+2. QA realization 必须读取该 Evidence 指纹；`.parts` 按 Evidence 指纹隔离。
+3. Compiler 必须匹配 Evidence 与 QA realization 指纹，并验证 Annotation、Evidence、Cue、Relation 四类引用 100% 闭合。
+4. HTML 再执行一次指纹和引用闭包检查；不一致时隐藏最终 QA 并显示阻断原因。
+
+即使目录名都包含 v10，只要指纹不同，也不能把旧 Evidence 与新 QA 拼接。
+
+## 5. 生成五视频 Evidence
+
+固定 cohort：`configs/evidence_smoke_v10_candidate2_5videos.json`。
 
 ```bash
 python salesbench.py build-evidence-dataset \
   --config configs/benchmark_v1.json \
-  --cohort-config configs/evidence_smoke_v10_5videos.json \
-  --output-dir outputs/evidence/v10_smoke5_qwen_deepseek_official \
-  --vision-model qwen3-vl-plus \
-  --text-model deepseek-v4-pro \
+  --cohort-config configs/evidence_smoke_v10_candidate2_5videos.json \
+  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/evidence \
+  --run-id v10c2-smoke5-qwen-deepseek-20260907-001 \
+  --benchmark-release salesbench-v10-candidate.2 \
   --max-workers 2
 ```
 
-配置中的 `strict_semantic_verification=true` 会让商业关系在进入任务生成器前接受引用帧复核。它不会使用标题、互动量、粉丝量或私有分析字段。
+该命令从现有 processed dataset 读取指定五个视频，重新运行 Evidence、商业图和四任务 Annotation。它不重新下载视频，也不重建 C1-C6。C1-C6 只通过 Context Store 管理内部来源，公开 Evidence 仍只允许帧、OCR 和 ASR。
 
-每个 Evidence 目录必须包含：
+主要产物：
 
-- `evidence_units.jsonl`：通过 schema、语言、定位、断言类型、时间范围和置信度门禁的证据；
-- `commerce_cues.jsonl`、`commercial_relations.jsonl`：通过本地合同和严格语义验证的商业图；
-- `video_evidence_dataset.jsonl`：自动通过的候选 annotation，不等于正式 Gold；
-- `human_review_queue.jsonl`：真正的语义歧义；
-- `repaired_candidates.jsonl`：一次修复成功的候选；
-- `rejected_candidates.jsonl`：确定性淘汰项；
-- `pipeline_diagnostics.jsonl`：API、解析、Abstention 和阶段故障；
-- `quality_decisions.jsonl`：所有质量路由决定；
-- `generation_meta.json`：视频、配置、模型和质量 prompt 指纹。
+- `evidence_units.jsonl`：可直接引用的帧、OCR、ASR 事实；
+- `commerce_cues.jsonl`：产品、报价、演示、情景、问题、异议、CTA 等商业线索；
+- `commercial_relations.jsonl`：主张—演示、问题—解决、异议—回应、优惠条件等证据关系；
+- `video_evidence_dataset.jsonl`：通过门禁的 BP/CM/SS/AE Annotation；
+- `human_review_queue.jsonl`：真正语义歧义；
+- `rejected_candidates.jsonl`：过度推断、背景动作、主张当事实、内部 ID 泄漏等明确拒绝项；
+- `pipeline_diagnostics.jsonl`：API 或解析故障；
+- `quality_decisions.jsonl`：所有质量路由；
+- `generation_meta.json` 与 `../run_manifest.json`：模型、计数、组件和指纹。
 
-## 4. 先做候选 QA 审计，不发布正式集
+### ASR 时间戳不可用
 
-为了查看自动候选质量，需要显式声明候选模式：
+当前 ASR 可能只有全文，没有可靠片段时间。此时 `start_s/end_s=null`、`timestamp_status=unavailable`。ASR 时间戳不可用是输入能力边界，不是 Evidence 缺陷，也不进入人工审核。
+
+- 仍可生成口播事实和不依赖顺序的视觉—语音一致性任务；
+- 不生成依赖时序定位的任务或关系，例如“主张是否早于 CTA”或“某一口播片段是否与画面错位”；
+- HTML 用中性提示展示代表帧，并说明无法精确定位语音片段。
+
+## 6. 生成英文 QA，并由 Qwen 独立复核
 
 ```bash
 python salesbench.py realize-qa \
-  --evidence-dir outputs/evidence/v10_smoke5_qwen_deepseek_official \
+  --evidence-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/evidence \
   --dataset-file video_evidence_dataset.jsonl \
-  --output-dir outputs/vqa/v10_smoke5_qwen_deepseek_official \
-  --text-model deepseek-v4-pro \
+  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/qa/realizations \
+  --allow-auto-candidates \
   --strict-semantic-verification \
-  --allow-auto-candidates
+  --max-workers 2
+```
 
+DeepSeek 只实现自然英文问题；Gold 来自 EvidenceDataset，不允许模型改写事实范围。Qwen 检查 12 项：证据可回答、Gold 受支持、答案唯一、任务对齐、内容具体、商业相关、问法自然、非琐碎、具有商业诊断价值、断言范围不升级、确实需要预期模态、引用闭合。
+
+只有 12 项全部为真才进入 `qa_realizations.jsonl`。明确不合格进入 `qa_rejected_candidates.jsonl`，真正歧义进入 `qa_human_review_queue.jsonl`，模型/API 故障进入 `qa_pipeline_diagnostics.jsonl`。
+
+## 7. 编译最终候选 QA
+
+```bash
 python salesbench.py compile-vqa \
-  --evidence-dir outputs/evidence/v10_smoke5_qwen_deepseek_official \
+  --evidence-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/evidence \
   --dataset-file video_evidence_dataset.jsonl \
-  --realizations outputs/vqa/v10_smoke5_qwen_deepseek_official/qa_realizations.jsonl \
-  --output-dir outputs/vqa/v10_smoke5_qwen_deepseek_official \
+  --realizations outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/qa/realizations/qa_realizations.jsonl \
+  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/qa/compiled \
   --allow-auto-candidates \
   --allow-missing-tasks
 ```
 
-`--allow-auto-candidates` 只用于 smoke/pilot 阶段读取尚未冻结的 Evidence annotation。Question Realizer 没有该参数时只读取 `human_accepted`。Compiler v7 在正式模式下还有一条受限自动路径：只有同目录 `qa_realizer_meta.json` 明确启用当前版本的严格 QA 门禁，并且相同 `spec_id` 在 `qa_semantic_verifications.jsonl` 中为 `PASS`，`auto_accepted_candidate` 才能进入编译；旧版 `verified`、缺少门禁元数据或没有 PASS 记录的候选仍会失败关闭。这样不需要逐题人工确认全部 PASS QA，同时也不能把普通候选误发为正式集。
+Compiler v9 先失败关闭地检查指纹和引用，再按 Evidence 置信度、商业图强度、推理价值、12 项验证、内容具体性，以及背景动作、啰嗦答案和能力重复惩罚排序。
 
-`--strict-semantic-verification` 会在英文问题实现后增加独立 QA 语义门禁：明确缺证据、Gold 过度推断、任务错位、答案不唯一或领域性不足的候选写入 `qa_rejected_candidates.jsonl`；API/解析故障写入 `qa_pipeline_diagnostics.jsonl`；只有真正存在两种合理解释的候选进入 `qa_human_review_queue.jsonl`。只有 `PASS` 项写入 `qa_realizations.jsonl`，因此坏 QA 不会再依赖人工审核阶段淘汰。
+重点检查：
 
-QA 输出目录的质量文件含义如下：
+- `vqa_gold_private.jsonl`：最终接受的英文问题与私有 Gold；
+- `vqa_public.jsonl`：不含 Gold 的公开输入；
+- `qa_selection.jsonl`：选中/跳过原因与分项分数；
+- `reference_closure.json`：四类引用必须 100%；
+- `generation_meta.json`：Evidence、QA realization、compile 三个指纹。
 
-- `qa_realizations.jsonl`：通过本地表面规则和严格语义门禁的 QA；
-- `qa_semantic_verifications.jsonl`：每题五个语义质量维度与英文理由；
-- `qa_rejected_candidates.jsonl`：确定性或语义上明确不合格的 QA，只读；
-- `qa_human_review_queue.jsonl`：仅保存无法由现有证据唯一消歧的 QA；
-- `qa_pipeline_diagnostics.jsonl`：API、解析或执行故障，不交给内容审核员；
-- `qa_accepted_sample.jsonl`：按任务稳定抽取约 10% 的 PASS QA，用来估计自动通过精度，不要求全量人工逐题确认。
+## 8. 生成审计中文版与翻页 HTML
 
-## 5. 使用 Qwen 答题并由 DeepSeek Judge
-
-Qwen runner 只接收视频帧、ASR/字幕和英文问题；DeepSeek Judge 接收题目、Gold、模型答案及已公开的证据上下文：
-
-```bash
-python salesbench.py run-vqa-benchmark \
-  --config configs/benchmark_v1.json \
-  --vqa outputs/vqa/v10_smoke5_qwen_deepseek_official/vqa_gold_private.jsonl \
-  --output-dir outputs/evaluation/v10_smoke5_qwen_deepseek_official/predictions_qwen3_vl_plus \
-  --model qwen3-vl-plus \
-  --max-workers 2
-
-python salesbench.py evaluate-vqa-benchmark \
-  --config configs/benchmark_v1.json \
-  --gold outputs/vqa/v10_smoke5_qwen_deepseek_official/vqa_gold_private.jsonl \
-  --predictions outputs/evaluation/v10_smoke5_qwen_deepseek_official/predictions_qwen3_vl_plus/predictions.jsonl \
-  --output-dir outputs/evaluation/v10_smoke5_qwen_deepseek_official/judge_deepseek_v4_pro \
-  --judge-model deepseek-v4-pro \
-  --max-workers 2
-```
-
-缺失模型答案仍由本地规则计 0；Judge API 或解析失败必须作为失败显式保留，不能伪造评分。
-
-## 6. 构建翻页式审计 HTML
-
-中文仅作为审计 sidecar；Evidence、Prompt、QA、Gold、预测和 Judge canonical 内容仍为英文。
+中文只作为审计 sidecar，不修改英文 canonical Evidence、QA 或 Gold：
 
 ```bash
 python salesbench.py build-audit-translations \
-  --manifest configs/pilot64_qwen_deepseek_v10_delivery.json \
-  --output outputs/audit/translations/v10_smoke_qwen_deepseek/audit_translations.jsonl \
-  --model deepseek-v4-pro
+  --manifest configs/v10_candidate2_smoke_delivery.json \
+  --output outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/translations/audit_translations.jsonl \
+  --batch-size 20
 
 python -m tools.audit_workbench.build \
-  --manifest configs/pilot64_qwen_deepseek_v10_delivery.json \
-  --translations outputs/audit/translations/v10_smoke_qwen_deepseek/audit_translations.jsonl \
-  --output outputs/audit/SalesBench_Quality_Audit_v10_smoke.html \
-  --fragment outputs/audit/SalesBench_Quality_Audit_v10_smoke_fragment.html \
+  --manifest configs/v10_candidate2_smoke_delivery.json \
+  --translations outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/translations/audit_translations.jsonl \
+  --output outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/audit/SalesBench_v10c2_Smoke_Audit.html \
+  --fragment outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/audit/SalesBench_v10c2_Smoke_Audit_fragment.html \
   --group smoke \
   --skip-organize
 ```
 
-审计页每次只展示一个案例，可用上一条、下一条、序号跳转、键盘方向键和筛选器导航。视图分为：
+工作台含六页：运行概览、当前 Prompt、Evidence 审计、QA 审计、最终 QA 浏览、评估 / Judge。Evidence/QA 审计每页一个案例，只对真正歧义和约 10% 监控样本提供按钮。最终 QA 浏览只读取 `qa/compiled/vqa_gold_private.jsonl`，不读取 `.parts`、未筛选 QuestionSpec、拒绝项或诊断；中文问题/答案优先，英文可展开，并展示可读 Cue、Relation、Evidence 和懒加载关联帧。
 
-1. 人工语义审核：唯一有 Accept/Edit/Reject 控件的 Evidence/Graph 队列；
-2. 自动通过抽样：每任务约 10% 的漏检监控样本；
-3. 自动拒绝：只读，检查生产门禁是否按预期淘汰；
-4. 流水线诊断：只读，供修代码而不是标内容；
-5. Abstention/补采样：决定是否补尾帧、重采样或替换视频；
-6. QA：再分为人工语义审核、自动通过抽样、自动拒绝、流水线诊断和自动通过全集只读五个翻页队列；
-7. Judge：逐题翻页查看问题、Gold、模型输出、评分理由和实际使用的 Evidence。
+## 9. Smoke 验收顺序
 
-## 7. Smoke 验收后再启动 64 视频
+1. 五个视频都已处理，Evidence fingerprint 非空；
+2. 人工歧义率不超过 10%，理想值不超过 5%；
+3. 没有背景 handling 被当作产品身份或功能演示；
+4. 没有卖家效果主张被升级为观察事实；
+5. 没有依赖 unavailable ASR 时间的任务；
+6. QA 生成器/复核器分别是 DeepSeek/Qwen；
+7. QA 的 12 项质量全部 PASS；
+8. `reference_closure.json` 为 100%；
+9. 最终 QA 不含空泛、琐碎、模板化问法；
+10. HTML 不含互动量、粉丝量、标题或私有分析元数据。
 
-必须同时满足：
+只有本轮 smoke 经人工确认后，才使用新的 run ID 执行 64 视频。不能在当前 smoke run root 中覆盖或追加 64 视频。
 
-- 明显错误均出现在 `rejected_candidates.jsonl` 或 `pipeline_diagnostics.jsonl`，不在人工队列；
-- `human_review_queue` 比例不超过 10%，目标不超过 5%；
-- 自动通过的分层抽样人工精度至少 95%；
-- 没有口播效果主张被写成观察事实；
-- 没有短时演示被当成长效、心理、因果或转化证明；
-- QA 无答案泄漏、泛化空问、明显公式模板和缺证据问题；
-- 公开、模型和 Judge payload 不含互动、粉丝、标题或私有分析字段。
+## 10. 后续评测
 
-满足后，将 cohort 改为 `configs/evidence_pilot_v10_64videos.json`、输出改到 `v10_pilot64_qwen_deepseek_official`，执行相同命令。64 视频仍是 candidate pilot；完成质量校准与人工接受之前不能称为正式 Gold 或公开 benchmark。
+Smoke QA 通过抽检后，再用 Qwen 生成 `predictions.jsonl`，用 DeepSeek Judge 评分。缺失答案由本地规则计 0；Judge API/解析失败必须保留为失败。主排行榜仍使用 BP、CM、SS、AE 四任务 macro-average；互动分析始终是私有独立实验，不进入 QA、Gold、模型输入或 Judge。

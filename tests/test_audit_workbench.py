@@ -1043,6 +1043,7 @@ def test_workbench_data_makes_queue_qa_and_judge_evidence_readable(tmp_path: Pat
 def test_v10_workbench_consumes_separated_quality_artifacts_directly(tmp_path: Path) -> None:
     evidence_dir = tmp_path / "evidence"
     qa_dir = tmp_path / "qa"
+    qa_realizations_dir = tmp_path / "qa-realizations"
     _write(
         evidence_dir / "generation_meta.json",
         json.dumps({"video_ids": ["v1"], "prompt_version": "evidence-prompt-v10"}),
@@ -1144,7 +1145,7 @@ def test_v10_workbench_consumes_separated_quality_artifacts_directly(tmp_path: P
         },
     }
     _write(
-        qa_dir / "qa_human_review_queue.jsonl",
+        qa_realizations_dir / "qa_human_review_queue.jsonl",
         json.dumps(
             {
                 **qa_quality_common,
@@ -1156,7 +1157,7 @@ def test_v10_workbench_consumes_separated_quality_artifacts_directly(tmp_path: P
     )
     rejected_spec = {**qa_spec, "spec_id": "qs-reject", "annotation_id": "a-reject"}
     _write(
-        qa_dir / "qa_rejected_candidates.jsonl",
+        qa_realizations_dir / "qa_rejected_candidates.jsonl",
         json.dumps(
             {
                 **qa_quality_common,
@@ -1172,7 +1173,7 @@ def test_v10_workbench_consumes_separated_quality_artifacts_directly(tmp_path: P
     )
     diagnostic_spec = {**qa_spec, "spec_id": "qs-diagnostic", "annotation_id": "a-diagnostic"}
     _write(
-        qa_dir / "qa_pipeline_diagnostics.jsonl",
+        qa_realizations_dir / "qa_pipeline_diagnostics.jsonl",
         json.dumps(
             {
                 **qa_quality_common,
@@ -1184,7 +1185,7 @@ def test_v10_workbench_consumes_separated_quality_artifacts_directly(tmp_path: P
         + "\n",
     )
     _write(
-        qa_dir / "qa_accepted_sample.jsonl",
+        qa_realizations_dir / "qa_accepted_sample.jsonl",
         json.dumps(
             {
                 "spec_id": "qs-pass",
@@ -1200,6 +1201,7 @@ def test_v10_workbench_consumes_separated_quality_artifacts_directly(tmp_path: P
         "formal": {
             "artifacts": {
                 "evidence": {"source": "evidence"},
+                "qa_realizations": {"source": "qa-realizations"},
                 "qa": {"source": "qa"},
             }
         },

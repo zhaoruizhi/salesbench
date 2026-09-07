@@ -940,6 +940,7 @@ def build_workbench_data(
     paths = _source_paths(manifest, repo_root, group)
     evidence_dir = paths["evidence"]
     qa_dir = paths["qa"]
+    qa_realizations_dir = paths.get("qa_realizations", qa_dir)
     evaluation_dir = paths.get("evaluation", repo_root / "__missing_evaluation__")
     units = _read_jsonl(evidence_dir / "evidence_units.jsonl")
     evidence_by_id = {str(row.get("evidence_id")): row for row in units}
@@ -1072,10 +1073,10 @@ def build_workbench_data(
     audit = _read_json(evidence_dir / "audit_before_review.json", {})
     qa_rows = _read_jsonl(qa_dir / "vqa_gold_private.jsonl")
     qa_meta = _read_json(qa_dir / "generation_meta.json", {})
-    qa_human_rows = _read_jsonl(qa_dir / "qa_human_review_queue.jsonl")
-    qa_rejected_rows = _read_jsonl(qa_dir / "qa_rejected_candidates.jsonl")
-    qa_diagnostic_rows = _read_jsonl(qa_dir / "qa_pipeline_diagnostics.jsonl")
-    qa_accepted_sample_rows = _read_jsonl(qa_dir / "qa_accepted_sample.jsonl")
+    qa_human_rows = _read_jsonl(qa_realizations_dir / "qa_human_review_queue.jsonl")
+    qa_rejected_rows = _read_jsonl(qa_realizations_dir / "qa_rejected_candidates.jsonl")
+    qa_diagnostic_rows = _read_jsonl(qa_realizations_dir / "qa_pipeline_diagnostics.jsonl")
+    qa_accepted_sample_rows = _read_jsonl(qa_realizations_dir / "qa_accepted_sample.jsonl")
     qa_sample_spec_ids = {
         str(row.get("spec_id") or "")
         for row in qa_accepted_sample_rows

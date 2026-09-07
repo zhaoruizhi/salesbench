@@ -1,0 +1,52 @@
+{
+  "version": "salesbench-v10-candidate2-smoke-delivery",
+  "run_id": "v10c2-smoke5-qwen-deepseek-20260907-001",
+  "benchmark_release": "salesbench-v10-candidate.2",
+  "release_status": "candidate_requires_human_review",
+  "generation_models": {
+    "vision_and_qa_verifier": "qwen3-vl-plus",
+    "text_and_translation": "deepseek-v4-pro"
+  },
+  "tested_model": "qwen3-vl-plus",
+  "judge_model": "deepseek-v4-pro",
+  "frame_cache_root": "outputs/cache/frames",
+  "versions": {
+    "schema": "evidence-dataset-schema-v4",
+    "prompt": "evidence-prompt-v10.3",
+    "pipeline": "evidence-first-pipeline-v10.4",
+    "quality_prompt": "quality-gate-prompt-v3",
+    "qa_quality_prompt": "qa-quality-prompt-v2",
+    "compiler": "evidence-qa-compiler-v9",
+    "question_realizer": "question-realizer-prompt-v3",
+    "judge": "judge-prompt-v5",
+    "audit_translation": "audit-translation-prompt-v2",
+    "audit_workbench": "audit-workbench-v11"
+  },
+  "formal": {
+    "root": "outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/formal_reserved",
+    "artifacts": {}
+  },
+  "smoke": {
+    "root": "outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001",
+    "artifacts": {
+      "evidence": {
+        "source": "outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/evidence"
+      },
+      "qa_realizations": {
+        "source": "outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/qa/realizations"
+      },
+      "qa": {
+        "source": "outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/qa/compiled"
+      },
+      "model_run": {
+        "source": "outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/evaluation/predictions_qwen3_vl_plus"
+      },
+      "evaluation": {
+        "source": "outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/evaluation/judge_deepseek_v4_pro"
+      },
+      "audit_translations": {
+        "source": "outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-001/translations/audit_translations.jsonl"
+      }
+    }
+  }
+}
