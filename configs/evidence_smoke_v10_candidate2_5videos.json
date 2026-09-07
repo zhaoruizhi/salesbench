@@ -1,6 +1,6 @@
 {
   "version": "evidence-smoke-v10-candidate2",
-  "run_id": "v10c2-smoke5-qwen-deepseek-20260907-001",
+  "run_id": "v10c2-smoke5-qwen-deepseek-20260907-002",
   "benchmark_release": "salesbench-v10-candidate.2",
   "video_ids": [
     "7362856271365606683",
@@ -11,9 +11,9 @@
   ],
   "frame_strategy": "hook_plus_uniform",
   "frames_per_video": 16,
-  "prompt_version": "evidence-prompt-v10.3",
+  "prompt_version": "evidence-prompt-v10.4",
   "schema_version": "evidence-dataset-schema-v4",
-  "pipeline_version": "evidence-first-pipeline-v10.4",
+  "pipeline_version": "evidence-first-pipeline-v10.5",
   "quality_prompt_version": "quality-gate-prompt-v3",
   "qa_quality_prompt_version": "qa-quality-prompt-v2",
   "compiler_version": "evidence-qa-compiler-v9",

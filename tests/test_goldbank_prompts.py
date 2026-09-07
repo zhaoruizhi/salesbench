@@ -47,7 +47,7 @@ class GoldBankPromptTest(unittest.TestCase):
         system, user_blocks = build_evidence_extractor_prompt("v1", {"C3_text_language": {"title": "hello"}})
         text = system + " " + str(user_blocks)
 
-        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v10.3")
+        self.assertEqual(PROMPT_VERSION, "evidence-prompt-v10.4")
         self.assertIn("assertion_scope", text)
         self.assertIn("BACKGROUND_HANDLING", text)
         self.assertIn("EvidenceUnit", text)
@@ -84,6 +84,26 @@ class GoldBankPromptTest(unittest.TestCase):
         self.assertIn('exact field "modality"', visual_system)
         self.assertNotIn("asr_subtitles", str(visual_user))
         self.assertNotRegex(language_system + visual_system, r"[\u4e00-\u9fff]")
+
+    def test_all_generation_prompts_define_scope_and_action_role_as_closed_enums(self):
+        language_system, _ = build_language_evidence_prompt("v1", {"asr_subtitles": {}})
+        visual_system, _ = build_visual_evidence_prompt("v1", {"sampled_frames": []})
+        cue_system, _ = build_commerce_cue_prompt("v1", [])
+        visual_cue_system, _ = build_visual_commerce_cue_prompt("v1", [])
+        proposer_system, _ = build_proposer_prompt("ss_proposer", "v1", [], [], [])
+
+        for prompt in (language_system, visual_system, cue_system, visual_cue_system, proposer_system):
+            self.assertIn("OBSERVED_FACT", prompt)
+            self.assertIn("SPOKEN_CLAIM", prompt)
+            self.assertIn("PROMOTIONAL_PROMISE", prompt)
+            self.assertIn("must never contain free text", prompt)
+        for prompt in (language_system, visual_system, cue_system, visual_cue_system):
+            self.assertIn("BACKGROUND_HANDLING", prompt)
+            self.assertIn("PRODUCT_INSPECTION", prompt)
+            self.assertIn("FUNCTIONAL_OPERATION", prompt)
+            self.assertIn("OUTCOME_DEMONSTRATION", prompt)
+        self.assertIn("tearing open a product to inspect its interior", visual_system)
+        self.assertIn("actual intended product use", visual_system)
 
     def test_relation_generation_and_verification_do_not_treat_feature_presence_as_effect_proof(self):
         relation_system, _ = build_commercial_relation_prompt("v1", [], [])

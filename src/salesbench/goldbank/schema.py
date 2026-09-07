@@ -138,6 +138,10 @@ def infer_action_role(content: object = "") -> ActionRole | None:
             "loads ",
             "uses the ",
             "demonstrates how",
+            "eats ",
+            "tastes ",
+            "drinks ",
+            "consumes ",
         )
     ):
         return ActionRole.FUNCTIONAL_OPERATION
@@ -151,6 +155,16 @@ def infer_action_role(content: object = "") -> ActionRole | None:
             "close-up",
             "printed content",
             "connector",
+            "tears open",
+            "torn open",
+            "revealing its",
+            "reveals its",
+            "layered interior",
+            "product label",
+            "labeled ",
+            "tilts the product",
+            "tilts the cart",
+            "flexes the",
         )
     ):
         return ActionRole.PRODUCT_INSPECTION
@@ -162,6 +176,8 @@ def infer_action_role(content: object = "") -> ActionRole | None:
             "points to",
             "pointing to",
             "shows ",
+            "displays ",
+            "presents ",
             "lifts ",
             "rotates ",
             "flips through",

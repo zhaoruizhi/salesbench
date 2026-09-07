@@ -56,6 +56,8 @@ _PROPOSER_TASKS = {
     "ae_proposer": GoldTaskType.AE,
 }
 
+_NULL_ENUM_VALUES = {"", "N/A", "NA", "NONE", "NULL", "NOT_APPLICABLE"}
+
 _MODEL_PLACEHOLDER_TEXT = {
     "english content-specific focus",
     "specific supported claim",
@@ -198,6 +200,49 @@ def _normalize_attributes(value: object) -> dict[str, object]:
     return {"value": normalized} if normalized else {}
 
 
+def _closed_assertion_scope(
+    value: object,
+    fallback: AssertionScope,
+) -> AssertionScope:
+    normalized = normalize_text(value).upper().replace("-", "_")
+    if normalized in _NULL_ENUM_VALUES:
+        return fallback
+    try:
+        return AssertionScope(normalized)
+    except ValueError:
+        return fallback
+
+
+def _closed_action_role(
+    value: object,
+    fallback: ActionRole | None,
+) -> ActionRole | None:
+    normalized = normalize_text(value).upper().replace("-", "_")
+    if normalized in _NULL_ENUM_VALUES:
+        return fallback
+    try:
+        return ActionRole(normalized)
+    except ValueError:
+        return fallback
+
+
+def _source_assertion_scope(values: list[AssertionScope]) -> AssertionScope:
+    return next(
+        (value for value in values if value != AssertionScope.OBSERVED_FACT),
+        AssertionScope.OBSERVED_FACT,
+    )
+
+
+def _source_action_role(values: list[ActionRole | None]) -> ActionRole | None:
+    priority = (
+        ActionRole.OUTCOME_DEMONSTRATION,
+        ActionRole.FUNCTIONAL_OPERATION,
+        ActionRole.PRODUCT_INSPECTION,
+        ActionRole.BACKGROUND_HANDLING,
+    )
+    return next((candidate for candidate in priority if candidate in values), None)
+
+
 def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int) -> EvidenceUnit:
     modality = _normalize_modality(raw)
     subject = normalize_text(raw.get("subject"))
@@ -262,15 +307,13 @@ def normalize_evidence_unit(video_id: str, raw: dict[str, object], ordinal: int)
             content_en or raw.get("value"),
             raw.get("temporal_scope"),
         ),
-        assertion_scope=(
-            AssertionScope(assertion_scope_raw)
-            if assertion_scope_raw
-            else infer_assertion_scope(modality, content_en or raw.get("value"))
+        assertion_scope=_closed_assertion_scope(
+            assertion_scope_raw,
+            infer_assertion_scope(modality, content_en or raw.get("value")),
         ),
-        action_role=(
-            ActionRole(action_role_raw)
-            if action_role_raw
-            else infer_action_role(content_en or raw.get("value"))
+        action_role=_closed_action_role(
+            action_role_raw,
+            infer_action_role(content_en or raw.get("value")),
         ),
     )
 
@@ -341,6 +384,8 @@ def normalize_commerce_cues(
         if cue_id in seen_ids:
             continue
         seen_ids.add(cue_id)
+        source_scopes = [evidence[evidence_id].assertion_scope for evidence_id in evidence_ids]
+        source_roles = [evidence[evidence_id].action_role for evidence_id in evidence_ids]
         payload.update(
             {
                 "cue_id": cue_id,
@@ -352,20 +397,18 @@ def normalize_commerce_cues(
                 "directness": normalize_text(payload.get("directness") or "DIRECT").upper(),
                 "extractor": normalize_text(payload.get("extractor") or "commerce_cue_extractor"),
                 "confidence": _normalize_confidence(payload.get("confidence", 0.0)),
-                "assertion_scope": normalize_text(payload.get("assertion_scope"))
-                or next(
-                    (
-                        evidence[evidence_id].assertion_scope.value
-                        for evidence_id in evidence_ids
-                        if evidence[evidence_id].assertion_scope
-                        != AssertionScope.OBSERVED_FACT
-                    ),
-                    AssertionScope.OBSERVED_FACT.value,
-                ),
-                "action_role": normalize_text(payload.get("action_role"))
-                or (
-                    infer_action_role(content_en).value
-                    if infer_action_role(content_en) is not None
+                "assertion_scope": _closed_assertion_scope(
+                    payload.get("assertion_scope"),
+                    _source_assertion_scope(source_scopes),
+                ).value,
+                "action_role": (
+                    normalized_role.value
+                    if (
+                        normalized_role := _closed_action_role(
+                            payload.get("action_role"),
+                            infer_action_role(content_en) or _source_action_role(source_roles),
+                        )
+                    )
                     else None
                 ),
             }
@@ -421,6 +464,10 @@ def normalize_commercial_relations(
         if relation_id in seen_ids:
             continue
         seen_ids.add(relation_id)
+        relation_scope = _closed_assertion_scope(
+            payload.get("assertion_scope"),
+            _source_assertion_scope([cue.assertion_scope for cue in endpoint_cues]),
+        )
         payload.update(
             {
                 "relation_id": relation_id,
@@ -434,15 +481,7 @@ def normalize_commercial_relations(
                 "directness": normalize_text(payload.get("directness") or "INFERRED").upper(),
                 "extractor": normalize_text(payload.get("extractor") or "commercial_relation_builder"),
                 "confidence": _normalize_confidence(payload.get("confidence", 0.0)),
-                "assertion_scope": normalize_text(payload.get("assertion_scope"))
-                or next(
-                    (
-                        cue.assertion_scope.value
-                        for cue in endpoint_cues
-                        if cue.assertion_scope != AssertionScope.OBSERVED_FACT
-                    ),
-                    AssertionScope.OBSERVED_FACT.value,
-                ),
+                "assertion_scope": relation_scope.value,
             }
         )
         relations.append(parse_commercial_relation(payload))
@@ -572,6 +611,18 @@ def normalize_proposals(
         payload["commercial_relation_ids"] = list(relation_ids)
         payload["question_intent"] = question_intent
         payload["forbidden_inferences"] = list(forbidden_inferences)
+        source_scopes: list[AssertionScope] = []
+        if isinstance(commerce_cues, Mapping):
+            source_scopes.extend(commerce_cues[cue_id].assertion_scope for cue_id in cue_ids)
+        if isinstance(commercial_relations, Mapping):
+            source_scopes.extend(
+                commercial_relations[relation_id].assertion_scope
+                for relation_id in relation_ids
+            )
+        payload["assertion_scope"] = _closed_assertion_scope(
+            payload.get("assertion_scope"),
+            _source_assertion_scope(source_scopes),
+        ).value
         proposal_id = normalize_text(payload.get("proposal_id"))
         if proposal_id.lower() in {"optional", "optional string", "none", "null", "n/a"}:
             proposal_id = ""

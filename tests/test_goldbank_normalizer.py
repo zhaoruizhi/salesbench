@@ -19,11 +19,122 @@ from salesbench.goldbank.normalizer import (  # noqa: E402
     normalize_proposals,
     normalize_task_subtype,
 )
-from salesbench.goldbank.schema import EvidenceModality, GoldTaskType  # noqa: E402
+from salesbench.goldbank.schema import (  # noqa: E402
+    ActionRole,
+    AssertionScope,
+    EvidenceModality,
+    GoldTaskType,
+)
 from salesbench.goldbank.validators import validate_evidence_unit  # noqa: E402
 
 
 class EvidenceNormalizerTest(unittest.TestCase):
+    def test_model_descriptions_cannot_replace_scope_and_action_role_enums(self):
+        spoken = normalize_evidence_unit(
+            "v1",
+            {
+                "modality": "asr",
+                "timestamp_status": "unavailable",
+                "source_text_native": "适合多个房间收纳",
+                "subject": "speaker",
+                "predicate": "claims",
+                "value": "the rack suits storage in several rooms",
+                "content_en": "The speaker claims that the rack suits storage in several rooms.",
+                "assertion_type": "SPOKEN_CLAIM",
+                "assertion_scope": "product versatility",
+                "action_role": "N/A",
+                "temporal_scope": "SHORT_CLIP",
+                "confidence": 0.9,
+            },
+            0,
+        )
+        visual = normalize_evidence_unit(
+            "v1",
+            {
+                "modality": "visual",
+                "frame_indices": [6],
+                "subject": "bread",
+                "predicate": "reveals",
+                "value": "a layered interior",
+                "content_en": "A hand tears open the bread, revealing its layered interior.",
+                "assertion_type": "OBSERVED",
+                "assertion_scope": "product demonstration",
+                "action_role": "PRODUCT_CONSUMPTION",
+                "temporal_scope": "FRAME",
+                "confidence": 0.95,
+            },
+            1,
+        )
+
+        self.assertEqual(spoken.assertion_scope, AssertionScope.SPOKEN_CLAIM)
+        self.assertIsNone(spoken.action_role)
+        self.assertEqual(visual.assertion_scope, AssertionScope.OBSERVED_FACT)
+        self.assertEqual(visual.action_role, ActionRole.PRODUCT_INSPECTION)
+
+    def test_graph_and_proposal_scope_fall_back_to_cited_sources(self):
+        evidence_unit = normalize_evidence_unit(
+            "v1",
+            {
+                "modality": "asr",
+                "timestamp_status": "unavailable",
+                "source_text_native": "这个可以快速充电",
+                "subject": "speaker",
+                "predicate": "claims",
+                "value": "the cable supports fast charging",
+                "content_en": "The speaker claims that the cable supports fast charging.",
+                "assertion_scope": "product capability",
+                "action_role": "N/A",
+                "confidence": 0.9,
+            },
+            0,
+        )
+        cue = normalize_commerce_cues(
+            "v1",
+            [
+                {
+                    "cue_type": "FUNCTION_CLAIM",
+                    "content_en": "The speaker claims that the cable supports fast charging.",
+                    "evidence_ids": [evidence_unit.evidence_id],
+                    "attributes": {},
+                    "directness": "DIRECT",
+                    "theory_tags": ["product_claim"],
+                    "confidence": 0.9,
+                    "assertion_scope": "product capability",
+                    "action_role": "N/A",
+                }
+            ],
+            {evidence_unit.evidence_id: evidence_unit},
+        )[0]
+        proposal = normalize_proposals(
+            "v1",
+            "ss_proposer",
+            [
+                {
+                    "task_type": "SS",
+                    "task_subtype": "FEATURE_BENEFIT",
+                    "target": {"claim": "fast charging"},
+                    "proposed_gold": {
+                        "answer": "The speaker presents fast charging as the cable's value."
+                    },
+                    "evidence_ids": [evidence_unit.evidence_id, "e2"],
+                    "commerce_cue_ids": [cue.cue_id],
+                    "commercial_relation_ids": [],
+                    "reasoning_edges": [],
+                    "question_intent": "Ask how fast charging is presented as value.",
+                    "forbidden_inferences": ["Do not treat the claim as verified performance."],
+                    "assertion_scope": "The answer is limited to the seller's statement.",
+                    "proposal_confidence": 0.9,
+                }
+            ],
+            {cue.cue_id: cue},
+            {},
+            {evidence_unit.evidence_id, "e2"},
+        )[0]
+
+        self.assertEqual(cue.assertion_scope, AssertionScope.SPOKEN_CLAIM)
+        self.assertIsNone(cue.action_role)
+        self.assertEqual(proposal.assertion_scope, AssertionScope.SPOKEN_CLAIM)
+
     def test_unavailable_asr_zero_sentinel_becomes_null_and_disables_only_temporal_order(self):
         unit = normalize_evidence_unit(
             "v1",

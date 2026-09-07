@@ -150,6 +150,38 @@ class GoldBankValidatorTest(unittest.TestCase):
 
         self.assertIn("BACKGROUND_ACTION_AS_DEMONSTRATION", {issue.code for issue in issues})
 
+    def test_demonstration_cue_requires_a_compatible_action_role(self):
+        unit = replace(
+            evidence(),
+            content_en="A hand tears open the bread to inspect its layers.",
+            action_role=ActionRole.PRODUCT_INSPECTION,
+        )
+        missing_role = replace(
+            cue_record(CueType.PROCESS_DEMONSTRATION, (unit.evidence_id,), "c_process"),
+            action_role=None,
+        )
+        inspection_as_outcome = replace(
+            cue_record(CueType.OUTCOME_DISPLAY, (unit.evidence_id,), "c_outcome"),
+            action_role=ActionRole.PRODUCT_INSPECTION,
+        )
+        unsupported_process = replace(
+            cue_record(CueType.PROCESS_DEMONSTRATION, (unit.evidence_id,), "c_unsupported"),
+            action_role=ActionRole.FUNCTIONAL_OPERATION,
+        )
+
+        missing_issues = validate_commerce_cue(missing_role, {unit.evidence_id: unit})
+        outcome_issues = validate_commerce_cue(inspection_as_outcome, {unit.evidence_id: unit})
+        unsupported_issues = validate_commerce_cue(
+            unsupported_process, {unit.evidence_id: unit}
+        )
+
+        self.assertIn("INVALID_DEMONSTRATION_ACTION_ROLE", {issue.code for issue in missing_issues})
+        self.assertIn("INVALID_DEMONSTRATION_ACTION_ROLE", {issue.code for issue in outcome_issues})
+        self.assertIn(
+            "DEMONSTRATION_ROLE_NOT_GROUNDED",
+            {issue.code for issue in unsupported_issues},
+        )
+
     def test_gold_rejects_internal_ids_and_task_specific_verbosity(self):
         id_leak = gold_item(value={"answer": "Use evidence_id v1_visual_000_abc."})
         verbose = gold_item(

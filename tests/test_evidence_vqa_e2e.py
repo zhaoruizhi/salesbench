@@ -64,9 +64,9 @@ class RepeatingClient:
 def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     e1 = "v1_visual_000"
     e2 = "v1_asr_001"
-    product_content = "A yellow product package is shown."
+    product_content = "The presenter uses a yellow product."
     usage_content = "The speaker presents commuting as a usage scenario."
-    process_content = "The product is demonstrated in use."
+    process_content = "The presenter uses the yellow product."
     claim_content = "The speaker claims that the product is suitable for commuting."
     product_cue_id = make_cue_id("v1", CueType.PRODUCT_IDENTITY, (e1,), product_content)
     usage_cue_id = make_cue_id("v1", CueType.USAGE_SCENARIO, (e2,), usage_content)
@@ -88,14 +88,16 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
                     "end_s": 1,
                     "frame_indices": [0],
                     "text_span": "",
-                    "subject": "product package",
-                    "predicate": "has color",
-                    "value": "yellow",
+                    "content_en": "The presenter uses the yellow product.",
+                    "subject": "presenter",
+                    "predicate": "uses",
+                    "value": "a yellow product",
                     "attributes": {},
                     "source_domains": ["C1_visual"],
                     "extractor": "fake",
                     "confidence": 0.95,
                     "timestamp_status": "available",
+                    "action_role": "FUNCTIONAL_OPERATION",
                 },
                 {
                     "evidence_id": e2,
@@ -215,6 +217,7 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
                     "directness": "DIRECT",
                     "theory_tags": ["product_description"],
                     "confidence": 0.95,
+                    "action_role": "FUNCTIONAL_OPERATION",
                 },
                 {
                     "cue_type": "USAGE_SCENARIO",
@@ -235,6 +238,7 @@ def evidence_responses() -> tuple[list[dict[str, object]], list[dict[str, object
                     "directness": "DIRECT",
                     "theory_tags": ["product_demonstration"],
                     "confidence": 0.95,
+                    "action_role": "FUNCTIONAL_OPERATION",
                 },
                 {
                     "cue_type": "FIT_CLAIM",

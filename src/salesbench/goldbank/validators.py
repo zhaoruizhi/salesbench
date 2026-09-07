@@ -384,6 +384,33 @@ def validate_commerce_cue(
                 "Holding, pointing, generic showing, and page flipping are not functional or outcome demonstrations.",
             )
         )
+    required_demonstration_roles = {
+        CueType.PROCESS_DEMONSTRATION: ActionRole.FUNCTIONAL_OPERATION,
+        CueType.VICARIOUS_TRIAL: ActionRole.FUNCTIONAL_OPERATION,
+        CueType.OUTCOME_DISPLAY: ActionRole.OUTCOME_DEMONSTRATION,
+        CueType.BEFORE_AFTER: ActionRole.OUTCOME_DEMONSTRATION,
+    }
+    required_role = required_demonstration_roles.get(cue.cue_type)
+    if required_role is not None and cue.action_role != required_role:
+        issues.append(
+            ValidationIssue(
+                "INVALID_DEMONSTRATION_ACTION_ROLE",
+                "ERROR",
+                cue.cue_id,
+                f"{cue.cue_type.value} requires action_role={required_role.value}; inspection or generic handling is not a demonstration.",
+            )
+        )
+    if required_role is not None and cited_units and not any(
+        unit.action_role == required_role for unit in cited_units
+    ):
+        issues.append(
+            ValidationIssue(
+                "DEMONSTRATION_ROLE_NOT_GROUNDED",
+                "ERROR",
+                cue.cue_id,
+                f"No cited EvidenceUnit supports the required {required_role.value} action role.",
+            )
+        )
     cited_non_facts = {
         unit.assertion_scope
         for unit in cited_units

@@ -195,6 +195,15 @@ def successful_responses() -> list[dict[str, object]]:
 
 def successful_responses_with_two_evidence() -> list[dict[str, object]]:
     responses = deepcopy(successful_responses())
+    responses[0]["evidence_units"][0].update(
+        {
+            "content_en": "The presenter uses the product.",
+            "subject": "presenter",
+            "predicate": "uses",
+            "value": "the product",
+            "action_role": "FUNCTIONAL_OPERATION",
+        }
+    )
     second_id = "v1_asr_001_def"
     responses[0]["evidence_units"].append(
         {
@@ -215,7 +224,7 @@ def successful_responses_with_two_evidence() -> list[dict[str, object]]:
             "timestamp_status": "available",
         }
     )
-    process_content = "The product is demonstrated in use."
+    process_content = "The presenter uses the product."
     claim_content = "The speaker claims that the product uses braided material."
     process_cue_id = make_cue_id(
         "v1", CueType.PROCESS_DEMONSTRATION, ("v1_visual_000_abc",), process_content
@@ -238,6 +247,7 @@ def successful_responses_with_two_evidence() -> list[dict[str, object]]:
                 "directness": "DIRECT",
                 "theory_tags": ["product_demonstration"],
                 "confidence": 0.95,
+                "action_role": "FUNCTIONAL_OPERATION",
             },
             {
                 "cue_type": "FUNCTION_CLAIM",
