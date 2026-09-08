@@ -12,6 +12,7 @@ from ..config import BenchmarkConfig
 from ..io_utils import read_records, write_json, write_jsonl
 from ..utils import clean_text
 from ..vlm.api_client import VLMClient
+from ..vlm.dashscope_oss import DEFAULT_UPLOAD_API_URL, DashScopeTemporaryOSSUploader
 from ..vlm.frame_sampler import sample_frames
 from ..vqa.schema import PUBLIC_TASKS, sanitize_model_name
 from ..vqa_evaluate.runner import evaluate_salesbench_qa_files
@@ -44,7 +45,14 @@ def _video_lookup(config: BenchmarkConfig) -> dict[str, dict[str, Any]]:
     }
 
 
-def _frame_blocks(video_record: dict[str, Any], max_frames: int = 16) -> list[dict[str, Any]]:
+def _frame_blocks(
+    video_record: dict[str, Any],
+    max_frames: int = 16,
+    *,
+    frame_transport: str = "base64",
+    frame_uploader: DashScopeTemporaryOSSUploader | None = None,
+    model: str = "",
+) -> list[dict[str, Any]]:
     video_id = clean_text(video_record.get("video_id"))
     video_path = clean_text(video_record.get("primary_video_path"))
     if not video_id or not video_path or not video_record.get("has_video_asset"):
@@ -55,30 +63,73 @@ def _frame_blocks(video_record: dict[str, Any], max_frames: int = 16) -> list[di
         strategy="hook_plus_uniform",
         total_frames=max_frames,
     )
+    if frame_transport not in {"base64", "dashscope_temporary_oss"}:
+        raise ValueError(f"Unsupported frame_transport: {frame_transport}")
+    if frame_transport == "dashscope_temporary_oss":
+        if len(frames) != max_frames:
+            raise ValueError(
+                f"{video_id}: expected {max_frames} sampled frames, got {len(frames)}"
+            )
+        if frame_uploader is None:
+            raise ValueError("dashscope_temporary_oss requires a frame uploader")
+        frame_references = frame_uploader.upload_frames(
+            [frame.path for frame in frames], model
+        )
+        if len(frame_references) != max_frames:
+            raise ValueError(
+                f"{video_id}: expected {max_frames} uploaded frame URLs, got {len(frame_references)}"
+            )
+    else:
+        frame_references = [
+            f"data:image/jpeg;base64,{frame.image_base64}" for frame in frames
+        ]
     content: list[dict[str, Any]] = [{"type": "text", "text": "Video: sampled key frames."}]
-    for frame in frames:
-        content.append(
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{frame.image_base64}", "detail": "low"},
-            }
+    for frame, frame_reference in zip(frames, frame_references, strict=True):
+        content.extend(
+            [
+                {
+                    "type": "text",
+                    "text": (
+                        f"[FRAME frame_index={frame.frame_index} "
+                        f"timestamp_s={frame.timestamp_s}]"
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": frame_reference, "detail": "low"},
+                },
+            ]
         )
     return content
 
 
-def build_user_content(item: dict[str, Any], video_lookup: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def build_user_content(
+    item: dict[str, Any],
+    video_lookup: dict[str, dict[str, Any]],
+    prepared_frame_blocks: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
     video_id = clean_text(item.get("video_id"))
     video_record = video_lookup.get(video_id, {"video_id": video_id})
+    frame_content = (
+        prepared_frame_blocks[video_id]
+        if prepared_frame_blocks is not None and video_id in prepared_frame_blocks
+        else _frame_blocks(video_record)
+    )
     return [
-        *_frame_blocks(video_record),
+        *frame_content,
         {"type": "text", "text": build_closed_source_user_prompt({"question": item.get("question")}, video_record)},
     ]
 
 
-def _process_item(item: dict[str, Any], video_lookup: dict[str, dict[str, Any]], client: VLMClient) -> dict[str, Any]:
+def _process_item(
+    item: dict[str, Any],
+    video_lookup: dict[str, dict[str, Any]],
+    client: VLMClient,
+    prepared_frame_blocks: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
     result = client.call(
         system_prompt=CLOSED_SOURCE_SYSTEM_PROMPT,
-        user_content=build_user_content(item, video_lookup),
+        user_content=build_user_content(item, video_lookup, prepared_frame_blocks),
         response_format=None,
     )
     parsed = parse_closed_source_response(result.raw_response) if result.success else {
@@ -99,6 +150,7 @@ def _process_item(item: dict[str, Any], video_lookup: dict[str, dict[str, Any]],
         "success": result.success and bool(answer),
         "raw_response": result.raw_response,
         "error": result.error,
+        "error_kind": result.error_kind,
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
         "latency_s": result.latency_s,
@@ -113,6 +165,8 @@ def run_salesbench_qa_baseline_records(
     model: str,
     client: VLMClient,
     max_workers: int = 2,
+    frame_transport: str = "base64",
+    frame_uploader: DashScopeTemporaryOSSUploader | None = None,
 ) -> dict[str, Any]:
     _validate_public_items(items)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -127,10 +181,25 @@ def run_salesbench_qa_baseline_records(
     failed = 0
     lock = threading.Lock()
     start_time = time.time()
+    frame_blocks_by_video: dict[str, list[dict[str, Any]]] = {}
+    for video_id in dict.fromkeys(clean_text(item.get("video_id")) for item in items):
+        video_record = video_lookup.get(video_id, {"video_id": video_id})
+        frame_blocks_by_video[video_id] = _frame_blocks(
+            video_record,
+            frame_transport=frame_transport,
+            frame_uploader=frame_uploader,
+            model=model,
+        )
 
     with ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
         futures = {
-            executor.submit(_process_item, item, video_lookup, client): clean_text(item.get("vqa_id"))
+            executor.submit(
+                _process_item,
+                item,
+                video_lookup,
+                client,
+                frame_blocks_by_video,
+            ): clean_text(item.get("vqa_id"))
             for item in items
         }
         for future in as_completed(futures):
@@ -156,6 +225,7 @@ def run_salesbench_qa_baseline_records(
         "vqa_count": len(items),
         "answer_count": len(answers),
         "failed_count": failed,
+        "frame_transport": frame_transport,
         "total_cost_usd": round(sum(float(item.get("cost_usd") or 0.0) for item in answers), 6),
         "outputs": {
             "answers": str(answer_path),
@@ -177,6 +247,8 @@ def run_salesbench_qa_baseline(
     max_workers: int = 2,
     evaluate: bool = False,
     judge_model: str = "gpt-4o",
+    frame_transport: str = "base64",
+    frame_upload_cache_root: str | Path = "outputs/cache/dashscope_temporary_oss",
 ) -> dict[str, Any]:
     items = [
         record for record in read_records(vqa_path)
@@ -186,6 +258,26 @@ def run_salesbench_qa_baseline(
     if max_samples:
         items = items[:max_samples]
 
+    frame_uploader = None
+    default_headers = None
+    if frame_transport == "dashscope_temporary_oss":
+        if base_url and "dashscope-intl.aliyuncs.com" in base_url:
+            upload_api_url = "https://dashscope-intl.aliyuncs.com/api/v1/uploads"
+        elif base_url and "dashscope.aliyuncs.com" in base_url:
+            upload_api_url = DEFAULT_UPLOAD_API_URL
+        else:
+            raise ValueError(
+                "dashscope_temporary_oss requires an official DashScope base URL"
+            )
+        cache_root = Path(frame_upload_cache_root)
+        if not cache_root.is_absolute():
+            cache_root = config.repo_root / cache_root
+        frame_uploader = DashScopeTemporaryOSSUploader(
+            api_key=api_key,
+            cache_root=cache_root,
+            upload_api_url=upload_api_url,
+        )
+        default_headers = {"X-DashScope-OssResourceResolve": "enable"}
     client = VLMClient(
         api_key=api_key,
         model=model,
@@ -193,7 +285,11 @@ def run_salesbench_qa_baseline(
         temperature=0.0,
         max_tokens=300,
         rate_limit_rpm=0,
+        retry_max=5 if frame_transport == "dashscope_temporary_oss" else 3,
+        retry_backoff_s=5.0 if frame_transport == "dashscope_temporary_oss" else 2.0,
+        request_timeout_s=300.0 if frame_transport == "dashscope_temporary_oss" else 180.0,
         disable_thinking=True,
+        default_headers=default_headers,
     )
     summary = run_salesbench_qa_baseline_records(
         items=items,
@@ -202,6 +298,8 @@ def run_salesbench_qa_baseline(
         model=model,
         client=client,
         max_workers=max_workers,
+        frame_transport=frame_transport,
+        frame_uploader=frame_uploader,
     )
 
     if evaluate:

@@ -235,3 +235,15 @@ python -m tools.audit_workbench.build \
 ## 10. 后续评测
 
 Smoke QA 通过抽检后，再用 Qwen 生成 `predictions.jsonl`，用 DeepSeek Judge 评分。缺失答案由本地规则计 0；Judge API/解析失败必须保留为失败。主排行榜仍使用 BP、CM、SS、AE 四任务 macro-average；互动分析始终是私有独立实验，不进入 QA、Gold、模型输入或 Judge。
+
+Qwen 评测 runner 与 Evidence 阶段使用同一 16 帧 URL 传输；帧按视频上传/解析一次，同一视频的
+多道 QA 复用相同的 16 个带帧号和时间戳的图像块：
+
+```bash
+python salesbench.py run-vqa-benchmark \
+  --config configs/benchmark_v1.json \
+  --vqa outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/qa/compiled/vqa_public.jsonl \
+  --output-dir outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/evaluation/predictions_qwen3_7_plus \
+  --vision-transport dashscope_temporary_oss \
+  --max-workers 1
+```

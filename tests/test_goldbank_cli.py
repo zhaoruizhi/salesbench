@@ -247,6 +247,34 @@ class GoldBankCLITest(unittest.TestCase):
 
     @patch.dict(
         "os.environ",
+        {"QWEN_API_KEY": "qwen-key", "QWEN_VISION_MODEL": "qwen3.7-plus"},
+        clear=True,
+    )
+    @patch("salesbench.vqa_baseline.runner.run_salesbench_qa_baseline")
+    @patch("salesbench.cli.load_config")
+    def test_benchmark_runner_routes_dashscope_url_transport(
+        self, load_config, run_baseline
+    ):
+        load_config.return_value = SimpleNamespace(repo_root=Path("/repo"))
+        run_baseline.return_value = {"ok": True}
+        args = build_parser().parse_args(
+            [
+                "run-vqa-benchmark",
+                "--vqa",
+                "qa.jsonl",
+                "--vision-transport",
+                "dashscope_temporary_oss",
+            ]
+        )
+
+        self.assertEqual(run_vqa_benchmark_command(args), 0)
+        self.assertEqual(
+            run_baseline.call_args.kwargs["frame_transport"],
+            "dashscope_temporary_oss",
+        )
+
+    @patch.dict(
+        "os.environ",
         {
             "DEEPSEEK_API_KEY": "deepseek-key",
             "DEEPSEEK_BASE_URL": "https://deepseek.example/v1",
