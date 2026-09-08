@@ -7,11 +7,7 @@ import unittest
 
 sys.path.insert(0, "src")
 
-from salesbench.goldbank.pipeline import (  # noqa: E402
-    GoldBankPipeline,
-    GoldBankResult,
-    build_bp_proposals_from_graph,
-)
+from salesbench.goldbank.pipeline import GoldBankPipeline, build_bp_proposals_from_graph  # noqa: E402
 from salesbench.goldbank.commerce_schema import (  # noqa: E402
     ActionRole,
     CommerceCue,
@@ -54,25 +50,6 @@ class FakeGoldClient:
     def call_text_only(self, system_prompt: str, user_text: str, response_format: str | None = None) -> APICallResult:
         self.calls.append({"method": "call_text_only", "system_prompt": system_prompt, "user_text": user_text})
         return self._result()
-
-
-class FailedGoldClient(FakeGoldClient):
-    def __init__(self, error: str = "SSL EOF"):
-        super().__init__([])
-        self.error = error
-
-    def call(self, system_prompt: str, user_content: list[dict], response_format: str | None = None) -> APICallResult:
-        self.calls.append({"method": "call", "system_prompt": system_prompt, "user_content": user_content})
-        return APICallResult(
-            raw_response="",
-            model=self.model,
-            input_tokens=0,
-            output_tokens=0,
-            latency_s=0.01,
-            cost_usd=0.0,
-            success=False,
-            error=self.error,
-        )
 
 
 def test_background_handling_cue_never_becomes_bp_proposal():
@@ -594,55 +571,6 @@ class GoldBankPipelineTest(unittest.TestCase):
         self.assertEqual({unit["modality"] for unit in result.evidence_units}, {"asr", "visual"})
         self.assertEqual(vlm.calls[0]["user_content"][0]["text"], "[FRAME frame_index=0 timestamp_s=0.0]")
 
-    def test_resume_reuses_successful_language_evidence_and_rebuilds_downstream_stages(self):
-        responses = successful_responses_with_two_evidence()
-        visual_raw, asr_raw = responses[0]["evidence_units"]
-        previous = GoldBankResult(
-            video_id="v1",
-            evidence_units=[asr_raw],
-            gold_proposals=[],
-            gold_reviews=[],
-            video_gold_record=None,
-            human_review_queue=[],
-            agent_traces=[
-                {
-                    "stage": "language_evidence_extraction",
-                    "agent_name": "asr_evidence_extractor",
-                    "success": True,
-                    "model": "deepseek-v4-pro",
-                },
-                {
-                    "stage": "visual_evidence_extraction",
-                    "agent_name": "visual_ocr_evidence_extractor",
-                    "success": False,
-                    "model": "qwen3.7-plus",
-                },
-            ],
-            status="partial",
-        )
-        vlm = FakeGoldClient([{"evidence_units": [visual_raw]}])
-        llm = FakeGoldClient(responses[1:])
-        split_bundle = build_context_bundle(
-            "v1",
-            raw_video={"video_id": "v1", "video_text": "这款产品采用编织材质"},
-            frames=[{"frame_index": 0, "timestamp_s": 0.0, "path": "/tmp/f0.jpg"}],
-        )
-
-        result = GoldBankPipeline(vlm, llm).run_video(
-            split_bundle,
-            frame_urls=["oss://bucket/f0.jpg"],
-            resume_result=previous,
-        )
-
-        self.assertEqual(
-            [trace["stage"] for trace in result.agent_traces[:2]],
-            ["language_evidence_resume", "visual_evidence_extraction"],
-        )
-        self.assertFalse(
-            any("ASR Evidence Extractor" in call["system_prompt"] for call in llm.calls)
-        )
-        self.assertEqual({unit["modality"] for unit in result.evidence_units}, {"asr", "visual"})
-
     def test_pipeline_repairs_missing_visual_commerce_cues_before_relations(self):
         responses = successful_responses_with_two_evidence()
         visual_raw, asr_raw = responses[0]["evidence_units"]
@@ -806,67 +734,6 @@ class GoldBankPipelineTest(unittest.TestCase):
         self.assertTrue(content[1]["image_url"]["url"].endswith("AAA"))
         self.assertEqual(content[2]["text"], "[FRAME frame_index=9 timestamp_s=4.0]")
         self.assertTrue(content[3]["image_url"]["url"].endswith("BBB"))
-
-    def test_evidence_url_transport_keeps_all_sixteen_labels_and_urls(self):
-        vlm = FakeGoldClient(successful_responses()[:1])
-        llm = FakeGoldClient(successful_responses()[1:])
-        frames = [
-            {"frame_index": index + 10, "timestamp_s": index + 0.25, "path": f"/tmp/f{index}.jpg"}
-            for index in range(16)
-        ]
-        frame_bundle = build_context_bundle(
-            "v1",
-            raw_video={"video_id": "v1", "video_text": ""},
-            frames=frames,
-        )
-        urls = [f"oss://bucket/frame-{index}.jpg" for index in range(16)]
-
-        result = GoldBankPipeline(vlm, llm).run_video(frame_bundle, frame_urls=urls)
-
-        content = vlm.calls[0]["user_content"]
-        image_blocks = [block for block in content if block["type"] == "image_url"]
-        labels = [block for block in content if block["type"] == "text" and block["text"].startswith("[FRAME")]
-        self.assertEqual([block["image_url"]["url"] for block in image_blocks], urls)
-        self.assertEqual(len(labels), 16)
-        self.assertEqual(labels[0]["text"], "[FRAME frame_index=10 timestamp_s=0.25]")
-        self.assertEqual(result.video_gold_record["observation_scope"]["sampled_frame_count"], 16)
-
-    def test_visual_transport_failure_does_not_invoke_model_output_repair(self):
-        vlm = FailedGoldClient("RemoteProtocolError before response")
-        empty_text_client = FakeGoldClient([])
-        frame_bundle = build_context_bundle(
-            "v1",
-            raw_video={"video_id": "v1", "video_text": ""},
-            frames=[{"frame_index": 0, "timestamp_s": 0.25, "path": "/tmp/f0.jpg"}],
-        )
-
-        result = GoldBankPipeline(vlm, empty_text_client).run_video(
-            frame_bundle,
-            frame_urls=["oss://bucket/frame-0.jpg"],
-        )
-
-        self.assertEqual(len(vlm.calls), 1)
-        self.assertEqual(result.status, "failed")
-        self.assertEqual(result.pipeline_diagnostics[0]["item_type"], "stage_failure")
-
-    def test_successful_but_empty_visual_output_invokes_one_repair(self):
-        visual_repair_response = successful_responses()[0]
-        vlm = FakeGoldClient([{"evidence_units": []}, visual_repair_response])
-        llm = FakeGoldClient(successful_responses()[1:])
-        frame_bundle = build_context_bundle(
-            "v1",
-            raw_video={"video_id": "v1", "video_text": ""},
-            frames=[{"frame_index": 0, "timestamp_s": 0.25, "path": "/tmp/f0.jpg"}],
-        )
-
-        result = GoldBankPipeline(vlm, llm).run_video(
-            frame_bundle,
-            frame_urls=["oss://bucket/frame-0.jpg"],
-        )
-
-        self.assertEqual(len(vlm.calls), 2)
-        self.assertIsNotNone(result.video_gold_record)
-        self.assertIn("visual_evidence_repair", [trace["stage"] for trace in result.agent_traces])
 
     def test_pipeline_builds_evidence_before_proposals(self):
         vlm = FakeGoldClient(successful_responses()[:1])

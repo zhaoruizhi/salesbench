@@ -140,8 +140,6 @@ def build_evidence_dataset_command(args: argparse.Namespace) -> int:
         ) or _env_or_arg(args, "base_url", "OPENAI_BASE_URL"),
         run_id=args.run_id or "",
         benchmark_release=args.benchmark_release,
-        vision_transport=args.vision_transport,
-        vision_preflight=args.vision_preflight,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
@@ -376,7 +374,6 @@ def run_vqa_benchmark_command(args: argparse.Namespace) -> int:
         ),
         max_samples=args.max_samples,
         max_workers=args.max_workers,
-        frame_transport=args.vision_transport or "base64",
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
@@ -485,22 +482,6 @@ def build_parser() -> argparse.ArgumentParser:
     evidence.add_argument("--vision-api-key", default=None)
     evidence.add_argument("--vision-base-url", default=None)
     evidence.add_argument("--vision-model", default=None)
-    evidence.add_argument(
-        "--vision-transport",
-        choices=("base64", "dashscope_temporary_oss"),
-        default=None,
-    )
-    evidence.add_argument(
-        "--vision-preflight",
-        action="store_true",
-        dest="vision_preflight",
-        default=None,
-    )
-    evidence.add_argument(
-        "--no-vision-preflight",
-        action="store_false",
-        dest="vision_preflight",
-    )
     evidence.add_argument("--text-api-key", default=None)
     evidence.add_argument("--text-base-url", default=None)
     evidence.add_argument("--text-model", default=None)
@@ -574,11 +555,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--api-key", default=None)
     run_parser.add_argument("--base-url", default=None)
     run_parser.add_argument("--model", default=None)
-    run_parser.add_argument(
-        "--vision-transport",
-        choices=("base64", "dashscope_temporary_oss"),
-        default=None,
-    )
     run_parser.add_argument("--max-samples", type=int, default=None)
     run_parser.add_argument("--max-workers", type=int, default=2)
     run_parser.set_defaults(func=run_vqa_benchmark_command)

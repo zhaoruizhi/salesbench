@@ -27,8 +27,6 @@ class GoldBankCLITest(unittest.TestCase):
         self.assertTrue(args.resume)
         self.assertIsNone(args.run_id)
         self.assertEqual(args.benchmark_release, "salesbench-v10-candidate.2")
-        self.assertIsNone(args.vision_transport)
-        self.assertIsNone(args.vision_preflight)
 
     def test_apply_gold_reviews_command_parses(self):
         args = build_parser().parse_args(
@@ -135,36 +133,6 @@ class GoldBankCLITest(unittest.TestCase):
     @patch.dict(
         "os.environ",
         {
-            "QWEN_API_KEY": "qwen-key",
-            "DEEPSEEK_API_KEY": "deepseek-key",
-        },
-        clear=True,
-    )
-    @patch("salesbench.goldbank.runner.build_gold_bank_dataset")
-    @patch("salesbench.cli.ensure_output_dirs")
-    @patch("salesbench.cli.load_config")
-    def test_evidence_command_propagates_transport_and_preflight_overrides(
-        self, load_config, _ensure_output_dirs, build_dataset
-    ):
-        load_config.return_value = SimpleNamespace(repo_root=Path("/repo"))
-        build_dataset.return_value = {"ok": True}
-        args = build_parser().parse_args(
-            [
-                "build-evidence-dataset",
-                "--vision-transport",
-                "dashscope_temporary_oss",
-                "--vision-preflight",
-            ]
-        )
-
-        self.assertEqual(build_evidence_dataset_command(args), 0)
-        kwargs = build_dataset.call_args.kwargs
-        self.assertEqual(kwargs["vision_transport"], "dashscope_temporary_oss")
-        self.assertTrue(kwargs["vision_preflight"])
-
-    @patch.dict(
-        "os.environ",
-        {
             "DEEPSEEK_API_KEY": "deepseek-key",
             "DEEPSEEK_BASE_URL": "https://deepseek.example/v1",
             "DEEPSEEK_MODEL": "deepseek-text",
@@ -244,34 +212,6 @@ class GoldBankCLITest(unittest.TestCase):
         self.assertEqual(run_baseline.call_args.kwargs["api_key"], "qwen-key")
         self.assertEqual(run_baseline.call_args.kwargs["base_url"], "https://qwen.example/v1")
         self.assertEqual(run_baseline.call_args.kwargs["model"], "qwen-vision")
-
-    @patch.dict(
-        "os.environ",
-        {"QWEN_API_KEY": "qwen-key", "QWEN_VISION_MODEL": "qwen3.7-plus"},
-        clear=True,
-    )
-    @patch("salesbench.vqa_baseline.runner.run_salesbench_qa_baseline")
-    @patch("salesbench.cli.load_config")
-    def test_benchmark_runner_routes_dashscope_url_transport(
-        self, load_config, run_baseline
-    ):
-        load_config.return_value = SimpleNamespace(repo_root=Path("/repo"))
-        run_baseline.return_value = {"ok": True}
-        args = build_parser().parse_args(
-            [
-                "run-vqa-benchmark",
-                "--vqa",
-                "qa.jsonl",
-                "--vision-transport",
-                "dashscope_temporary_oss",
-            ]
-        )
-
-        self.assertEqual(run_vqa_benchmark_command(args), 0)
-        self.assertEqual(
-            run_baseline.call_args.kwargs["frame_transport"],
-            "dashscope_temporary_oss",
-        )
 
     @patch.dict(
         "os.environ",

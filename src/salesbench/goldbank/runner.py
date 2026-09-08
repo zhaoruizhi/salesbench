@@ -15,23 +15,13 @@ from ..multiagent.context import SalesBenchContextStore, build_context_bundle
 from ..run_integrity import canonical_sha256, compute_evidence_fingerprint
 from ..utils import clean_text
 from ..vlm.api_client import VLMClient
-from ..vlm.dashscope_oss import (
-    DEFAULT_UPLOAD_API_URL,
-    UPLOAD_CACHE_VERSION,
-    DashScopeTemporaryOSSUploader,
-    classify_transport_error,
-)
 from ..vlm.frame_sampler import Frame, sample_frames
 from .pipeline import GoldBankPipeline, GoldBankResult
 from .quality_prompts import QUALITY_PROMPT_VERSION
 from .schema import stable_digest
 
 
-PIPELINE_VERSION = "evidence-first-pipeline-v10.8"
-
-
-class VisionPreflightError(RuntimeError):
-    """The declared visual input contract could not be established."""
+PIPELINE_VERSION = "evidence-first-pipeline-v10.7"
 
 
 GOLD_BANK_OUTPUT_FILES = (
@@ -99,76 +89,10 @@ def _payload_to_result(payload: dict[str, object]) -> GoldBankResult:
     )
 
 
-def _result_quality_key(result: GoldBankResult) -> tuple[int, int, int, int, int, int]:
-    """Prefer complete, grounded, multimodal results over destructive retries."""
-
-    status_rank = {"failed": 0, "partial": 1, "ok": 2}.get(result.status, -1)
-    modalities = {
-        clean_text(unit.get("modality"))
-        for unit in result.evidence_units
-        if isinstance(unit, dict) and clean_text(unit.get("modality"))
-    }
-    failed_traces = sum(
-        1
-        for trace in result.agent_traces
-        if isinstance(trace, dict) and trace.get("success") is False
-    )
-    downstream_count = (
-        len(result.commerce_cues)
-        + len(result.commercial_relations)
-        + len(result.gold_proposals)
-    )
-    return (
-        status_rank,
-        int(result.video_gold_record is not None),
-        len(modalities),
-        len(result.evidence_units),
-        downstream_count,
-        -failed_traces,
-    )
-
-
-def _prefer_result(previous: GoldBankResult, candidate: GoldBankResult) -> GoldBankResult:
-    return candidate if _result_quality_key(candidate) > _result_quality_key(previous) else previous
-
-
-def _load_matching_parts(
-    output_dir: Path,
-    video_ids: list[str],
-    fingerprints: dict[str, str],
-) -> dict[str, GoldBankResult]:
-    matched: dict[str, GoldBankResult] = {}
-    for video_id in video_ids:
-        path = _part_result_path(output_dir, video_id)
-        if not path.exists():
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if clean_text(payload.get("pipeline_fingerprint")) != fingerprints.get(video_id):
-                continue
-            matched[video_id] = _payload_to_result(payload)
-        except (json.JSONDecodeError, OSError, ValueError):
-            continue
-    return matched
-
-
-def _write_part(
-    output_dir: Path,
-    result: GoldBankResult,
-    pipeline_fingerprint: str,
-) -> GoldBankResult:
+def _write_part(output_dir: Path, result: GoldBankResult, pipeline_fingerprint: str) -> None:
     path = _part_result_path(output_dir, result.video_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    chosen = result
-    if path.is_file():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if clean_text(payload.get("pipeline_fingerprint")) == pipeline_fingerprint:
-                chosen = _prefer_result(_payload_to_result(payload), result)
-        except (json.JSONDecodeError, OSError, ValueError):
-            pass
-    write_json(path, _result_to_payload(chosen, pipeline_fingerprint))
-    return chosen
+    write_json(path, _result_to_payload(result, pipeline_fingerprint))
 
 
 def _load_completed(
@@ -177,19 +101,26 @@ def _load_completed(
     fingerprints: dict[str, str],
 ) -> dict[str, GoldBankResult]:
     completed: dict[str, GoldBankResult] = {}
-    for video_id, result in _load_matching_parts(
-        output_dir, video_ids, fingerprints
-    ).items():
-        terminal_partial = (
-            result.status == "partial"
-            and result.video_gold_record is not None
-            and not any(
-                isinstance(trace, dict) and trace.get("success") is False
-                for trace in result.agent_traces
+    for video_id in video_ids:
+        path = _part_result_path(output_dir, video_id)
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if clean_text(payload.get("pipeline_fingerprint")) != fingerprints.get(video_id):
+                continue
+            status = clean_text(payload.get("status"))
+            traces = list(payload.get("agent_traces") or [])
+            terminal_partial = (
+                status == "partial"
+                and isinstance(payload.get("video_gold_record"), dict)
+                and not any(isinstance(trace, dict) and trace.get("success") is False for trace in traces)
             )
-        )
-        if result.status == "ok" or terminal_partial:
-            completed[video_id] = result
+            if status != "ok" and not terminal_partial:
+                continue
+            completed[video_id] = _payload_to_result(payload)
+        except (json.JSONDecodeError, OSError, ValueError):
+            continue
     return completed
 
 
@@ -249,15 +180,6 @@ def _pipeline_fingerprint(
             "strict_semantic_verification": bool(
                 pilot_config.get("strict_semantic_verification", False)
             ),
-            "vision_transport": clean_text(
-                pilot_config.get("vision_transport") or "base64"
-            ),
-            "vision_upload_cache_version": (
-                UPLOAD_CACHE_VERSION
-                if clean_text(pilot_config.get("vision_transport"))
-                == "dashscope_temporary_oss"
-                else ""
-            ),
             "quality_prompt_version": QUALITY_PROMPT_VERSION,
             "video_id": clean_text(record.get("video_id")),
             "video_sha256": _file_digest(_video_path(record)),
@@ -273,101 +195,6 @@ def _pipeline_fingerprint(
 
 def _sort_records(records: list[dict[str, object]], *keys: str) -> list[dict[str, object]]:
     return sorted(records, key=lambda item: tuple(clean_text(item.get(key)) for key in keys))
-
-
-def _preflight_content(frames: list[Frame], frame_urls: list[str]) -> list[dict[str, object]]:
-    content: list[dict[str, object]] = []
-    for frame, frame_url in zip(frames, frame_urls, strict=True):
-        content.extend(
-            [
-                {
-                    "type": "text",
-                    "text": (
-                        f"[FRAME frame_index={frame.frame_index} "
-                        f"timestamp_s={frame.timestamp_s}]"
-                    ),
-                },
-                {"type": "image_url", "image_url": {"url": frame_url}},
-            ]
-        )
-    content.append(
-        {
-            "type": "text",
-            "text": (
-                "Return one JSON object with received_frame_count set to the number of "
-                "FRAME-labelled images you received. Do not describe the images."
-            ),
-        }
-    )
-    return content
-
-
-def _run_vision_preflight(
-    pipeline: GoldBankPipeline,
-    frames: list[Frame],
-    frame_urls: list[str],
-    output_dir: Path,
-    *,
-    attempts: int,
-    required_successes: int,
-) -> dict[str, object]:
-    if attempts < 1 or required_successes < 1 or required_successes > attempts:
-        raise ValueError("vision preflight requires 1 <= required_successes <= attempts")
-    client = getattr(pipeline, "vlm_client", None)
-    if client is None:
-        raise VisionPreflightError("visual pipeline has no client for full-frame preflight")
-    expected = len(frames)
-    outcomes: list[dict[str, object]] = []
-    success_count = 0
-    for attempt in range(1, attempts + 1):
-        call = client.call(
-            (
-                "You are a transport health checker. Count the supplied labelled image "
-                "blocks and return strict JSON only."
-            ),
-            _preflight_content(frames, frame_urls),
-            response_format="json_object",
-        )
-        received_count: int | None = None
-        if call.success:
-            try:
-                payload = json.loads(call.raw_response)
-                value = payload.get("received_frame_count") if isinstance(payload, dict) else None
-                if isinstance(value, int) and not isinstance(value, bool):
-                    received_count = value
-            except json.JSONDecodeError:
-                received_count = None
-        accepted = bool(call.success and received_count == expected)
-        if accepted:
-            success_count += 1
-        outcomes.append(
-            {
-                "attempt": attempt,
-                "success": accepted,
-                "api_success": call.success,
-                "received_frame_count": received_count,
-                "error_kind": call.error_kind or (None if call.success else "api_call_failed"),
-                "latency_s": call.latency_s,
-            }
-        )
-    report = {
-        "status": "passed" if success_count >= required_successes else "failed",
-        "model": clean_text(getattr(client, "model", "")),
-        "transport": "dashscope_temporary_oss",
-        "requested_frame_count": expected,
-        "attempt_count": attempts,
-        "required_successes": required_successes,
-        "success_count": success_count,
-        "outcomes": outcomes,
-    }
-    report_path = output_dir / ".parts" / "vision_preflight.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(report_path, report)
-    if success_count < required_successes:
-        raise VisionPreflightError(
-            f"full-frame preflight failed: {success_count}/{required_successes} required successes"
-        )
-    return report
 
 
 def _merge_outputs(
@@ -574,7 +401,6 @@ def run_gold_bank_records(
     max_workers: int = 1,
     run_id: str = "",
     benchmark_release: str = "salesbench-v10-candidate.2",
-    frame_uploader: DashScopeTemporaryOSSUploader | None = None,
 ) -> dict[str, object]:
     started_at = time.time()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -602,35 +428,12 @@ def run_gold_bank_records(
             raise ValueError("immutable Evidence output belongs to a different run identity")
         if clean_text(prior_meta.get("source_fingerprint")) != source_fingerprint:
             raise ValueError("immutable Evidence output source fingerprint changed")
-    matched_parts = (
-        _load_matching_parts(output_dir, requested_ids, fingerprints) if resume else {}
-    )
     completed = _load_completed(output_dir, requested_ids, fingerprints) if resume else {}
-    retry_seeds = {
-        video_id: result
-        for video_id, result in matched_parts.items()
-        if video_id not in completed
-    }
 
     results_by_id = dict(completed)
-    vision_transport = clean_text(pilot_config.get("vision_transport") or "base64")
-    if vision_transport not in {"base64", "dashscope_temporary_oss"}:
-        raise ValueError(f"Unsupported vision_transport: {vision_transport}")
-    if vision_transport == "dashscope_temporary_oss" and frame_uploader is None:
-        raise ValueError("dashscope_temporary_oss requires a frame uploader")
-    require_exact_frame_count = bool(
-        pilot_config.get(
-            "require_exact_frame_count",
-            vision_transport == "dashscope_temporary_oss",
-        )
-    )
 
-    prepared: dict[str, tuple[list[Frame], list[str]]] = {}
-
-    def prepare_record(record: dict[str, object]) -> tuple[list[Frame], list[str]]:
+    def process_record(record: dict[str, object]) -> GoldBankResult:
         video_id = clean_text(record.get("video_id"))
-        if video_id in prepared:
-            return prepared[video_id]
         frames: list[Frame] = []
         path = _video_path(record)
         if path and bool(record.get("has_video_asset", True)):
@@ -640,73 +443,6 @@ def run_gold_bank_records(
                 strategy=clean_text(pilot_config.get("frame_strategy")) or "hook_plus_uniform",
                 total_frames=int(pilot_config.get("frames_per_video", 16)),
             )
-            expected = int(pilot_config.get("frames_per_video", 16))
-            if require_exact_frame_count and len(frames) != expected:
-                raise VisionPreflightError(
-                    f"{video_id}: expected {expected} sampled frames, got {len(frames)}"
-                )
-        if vision_transport == "dashscope_temporary_oss":
-            expected = int(pilot_config.get("frames_per_video", 16))
-            if not path:
-                raise VisionPreflightError(f"{video_id}: video path is unavailable")
-            if len(frames) != expected:
-                raise VisionPreflightError(
-                    f"{video_id}: expected {expected} sampled frames, got {len(frames)}"
-                )
-            frame_urls = frame_uploader.upload_frames(
-                [frame.path for frame in frames],
-                clean_text(getattr(getattr(pipeline, "vlm_client", None), "model", "")),
-            )
-            if len(frame_urls) != expected:
-                raise VisionPreflightError(
-                    f"{video_id}: expected {expected} uploaded frame URLs, got {len(frame_urls)}"
-                )
-        else:
-            frame_urls = []
-        prepared[video_id] = (frames, frame_urls)
-        return prepared[video_id]
-
-    preflight_report: dict[str, object] | None = None
-    if bool(pilot_config.get("vision_preflight", False)):
-        if vision_transport != "dashscope_temporary_oss":
-            raise ValueError("vision_preflight currently requires dashscope_temporary_oss")
-        if not selected_records:
-            raise VisionPreflightError("full-frame preflight requires at least one video")
-        try:
-            first_frames, first_urls = prepare_record(selected_records[0])
-        except Exception as exc:
-            report = {
-                "status": "failed",
-                "phase": "frame_preparation",
-                "model": clean_text(
-                    getattr(getattr(pipeline, "vlm_client", None), "model", "")
-                ),
-                "transport": vision_transport,
-                "requested_frame_count": int(
-                    pilot_config.get("frames_per_video", 16)
-                ),
-                "error_kind": classify_transport_error(exc),
-            }
-            report_path = output_dir / ".parts" / "vision_preflight.json"
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            write_json(report_path, report)
-            raise VisionPreflightError(
-                "full-frame preflight preparation failed"
-            ) from exc
-        preflight_report = _run_vision_preflight(
-            pipeline,
-            first_frames,
-            first_urls,
-            output_dir,
-            attempts=int(pilot_config.get("vision_preflight_attempts", 1)),
-            required_successes=int(
-                pilot_config.get("vision_preflight_required_successes", 1)
-            ),
-        )
-
-    def process_record(record: dict[str, object]) -> GoldBankResult:
-        video_id = clean_text(record.get("video_id"))
-        frames, frame_urls = prepare_record(record)
         frame_metadata = [
             {
                 "frame_index": frame.frame_index,
@@ -719,31 +455,24 @@ def run_gold_bank_records(
             bundle = context_store.bundle_for_video(video_id, frames=frame_metadata)
         else:
             bundle = build_context_bundle(video_id, raw_video=record, frames=frame_metadata)
-        call_kwargs: dict[str, object]
-        if vision_transport == "dashscope_temporary_oss":
-            call_kwargs = {"frame_urls": frame_urls}
-        else:
-            call_kwargs = {"frames_b64": [frame.image_base64 for frame in frames]}
-        if video_id in retry_seeds:
-            call_kwargs["resume_result"] = retry_seeds[video_id]
-        return pipeline.run_video(bundle, **call_kwargs)
+        return pipeline.run_video(bundle, frames_b64=[frame.image_base64 for frame in frames])
 
     pending = [record for record in selected_records if clean_text(record.get("video_id")) not in completed]
     if max_workers <= 1:
         for record in pending:
             result = process_record(record)
-            chosen = _write_part(output_dir, result, fingerprints[result.video_id])
-            results_by_id[result.video_id] = chosen
+            _write_part(output_dir, result, fingerprints[result.video_id])
+            results_by_id[result.video_id] = result
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(process_record, record): clean_text(record.get("video_id")) for record in pending}
             for future in as_completed(futures):
                 result = future.result()
-                chosen = _write_part(output_dir, result, fingerprints[result.video_id])
-                results_by_id[result.video_id] = chosen
+                _write_part(output_dir, result, fingerprints[result.video_id])
+                results_by_id[result.video_id] = result
 
     ordered_results = [results_by_id[video_id] for video_id in requested_ids if video_id in results_by_id]
-    summary = _merge_outputs(
+    return _merge_outputs(
         selected_records,
         pilot_config,
         ordered_results,
@@ -755,11 +484,6 @@ def run_gold_bank_records(
         source_fingerprint=source_fingerprint,
         pipeline=pipeline,
     )
-    summary["vision_transport"] = vision_transport
-    if preflight_report is not None:
-        summary["vision_preflight"] = preflight_report
-        write_json(output_dir / "generation_meta.json", summary)
-    return summary
 
 
 def build_gold_bank_dataset(
@@ -779,37 +503,18 @@ def build_gold_bank_dataset(
     text_base_url: str | None = None,
     run_id: str = "",
     benchmark_release: str = "salesbench-v10-candidate.2",
-    vision_transport: str | None = None,
-    vision_preflight: bool | None = None,
 ) -> dict[str, object]:
     pilot_config = read_json(pilot_config_path)
     if not isinstance(pilot_config, dict):
         raise ValueError(f"{pilot_config_path} must contain a JSON object")
-    pilot_config = dict(pilot_config)
-    if vision_transport is not None:
-        pilot_config["vision_transport"] = vision_transport
-    if vision_preflight is not None:
-        pilot_config["vision_preflight"] = vision_preflight
     store = SalesBenchContextStore.from_config(config)
     records = store.raw_records_for_ids([clean_text(video_id) for video_id in pilot_config.get("video_ids", [])])
-    resolved_vision_key = vision_api_key or api_key
-    resolved_vision_model = vision_model or model
-    resolved_vision_base_url = vision_base_url if vision_base_url is not None else base_url
-    resolved_transport = clean_text(pilot_config.get("vision_transport") or "base64")
     vlm_client = VLMClient(
-        api_key=resolved_vision_key,
-        model=resolved_vision_model,
-        base_url=resolved_vision_base_url,
+        api_key=vision_api_key or api_key,
+        model=vision_model or model,
+        base_url=vision_base_url if vision_base_url is not None else base_url,
         max_tokens=4096,
-        retry_max=int(pilot_config.get("vision_inference_retry_max", 3)),
-        retry_backoff_s=float(pilot_config.get("vision_inference_retry_backoff_s", 2.0)),
-        request_timeout_s=float(pilot_config.get("vision_request_timeout_s", 180.0)),
         disable_thinking=True,
-        default_headers=(
-            {"X-DashScope-OssResourceResolve": "enable"}
-            if resolved_transport == "dashscope_temporary_oss"
-            else None
-        ),
     )
     llm_client = VLMClient(
         api_key=text_api_key or api_key,
@@ -826,36 +531,6 @@ def build_gold_bank_dataset(
             pilot_config.get("strict_semantic_verification", False)
         ),
     )
-    frame_uploader = None
-    if resolved_transport == "dashscope_temporary_oss":
-        upload_api_url = clean_text(pilot_config.get("vision_upload_api_url"))
-        if not upload_api_url:
-            if resolved_vision_base_url and "dashscope-intl.aliyuncs.com" in resolved_vision_base_url:
-                upload_api_url = "https://dashscope-intl.aliyuncs.com/api/v1/uploads"
-            elif resolved_vision_base_url and "dashscope.aliyuncs.com" in resolved_vision_base_url:
-                upload_api_url = DEFAULT_UPLOAD_API_URL
-            else:
-                raise ValueError(
-                    "dashscope_temporary_oss requires an official DashScope base URL"
-                )
-        cache_root = Path(
-            clean_text(pilot_config.get("vision_upload_cache_root"))
-            or "outputs/cache/dashscope_temporary_oss"
-        )
-        if not cache_root.is_absolute():
-            cache_root = config.repo_root / cache_root
-        frame_uploader = DashScopeTemporaryOSSUploader(
-            api_key=resolved_vision_key,
-            cache_root=cache_root,
-            upload_api_url=upload_api_url,
-            retry_max=int(pilot_config.get("vision_upload_retry_max", 5)),
-            retry_backoff_s=float(
-                pilot_config.get("vision_upload_retry_backoff_s", 5.0)
-            ),
-            request_timeout_s=float(
-                pilot_config.get("vision_upload_timeout_s", 60.0)
-            ),
-        )
     return run_gold_bank_records(
         records,
         pilot_config,
@@ -866,5 +541,4 @@ def build_gold_bank_dataset(
         max_workers=max_workers,
         run_id=run_id,
         benchmark_release=benchmark_release,
-        frame_uploader=frame_uploader,
     )

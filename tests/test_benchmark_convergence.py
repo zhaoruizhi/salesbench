@@ -215,37 +215,6 @@ class BenchmarkConvergenceTest(unittest.TestCase):
         self.assertIn("ASR 时间戳不可用", guide)
         self.assertIn("不生成依赖时序定位的任务", guide)
 
-    def test_qwen37_url_smoke_config_freezes_sixteen_frame_transport(self):
-        repo = Path(__file__).resolve().parents[1]
-        cohort = json.loads(
-            (
-                repo
-                / "configs/evidence_smoke_v10_candidate2_qwen37_5videos.json"
-            ).read_text(encoding="utf-8")
-        )
-        delivery = json.loads(
-            (repo / "configs/v10_candidate2_qwen37_smoke_delivery.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        run_id = "v10c2-smoke5-qwen37-deepseek-20260908-005"
-
-        self.assertEqual(cohort["run_id"], run_id)
-        self.assertEqual(delivery["run_id"], run_id)
-        self.assertEqual(cohort["frames_per_video"], 16)
-        self.assertTrue(cohort["require_exact_frame_count"])
-        self.assertEqual(cohort["vision_transport"], "dashscope_temporary_oss")
-        self.assertTrue(cohort["vision_preflight"])
-        self.assertEqual(cohort["vision_preflight_attempts"], 3)
-        self.assertEqual(cohort["vision_preflight_required_successes"], 3)
-        self.assertEqual(cohort["pipeline_version"], "evidence-first-pipeline-v10.8")
-        self.assertEqual(delivery["generation_models"]["vision_and_qa_verifier"], "qwen3.7-plus")
-        self.assertEqual(delivery["vision_transport"], "dashscope_temporary_oss")
-        self.assertNotRegex(
-            json.dumps({"cohort": cohort, "delivery": delivery}),
-            r"sk-[A-Za-z0-9._-]{12,}",
-        )
-
     def test_public_task_contract_has_exactly_four_tasks(self):
         self.assertEqual([task.value for task in GoldTaskType], ["BP", "CM", "SS", "AE"])
 

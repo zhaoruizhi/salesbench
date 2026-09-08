@@ -7,12 +7,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 sys.path.insert(0, "src")
 
 from salesbench.vlm.api_client import APICallResult  # noqa: E402
-from salesbench.vlm.frame_sampler import Frame  # noqa: E402
 
 
 class FakeVLMClient:
@@ -40,15 +38,6 @@ class FakeVLMClient:
             cost_usd=0.002,
             success=True,
         )
-
-
-class FakeFrameUploader:
-    def __init__(self):
-        self.calls: list[tuple[list[str], str]] = []
-
-    def upload_frames(self, paths, model):
-        self.calls.append((list(paths), model))
-        return [f"oss://temporary/frame-{index}.jpg" for index in range(len(paths))]
 
 
 def _gold_item(task_type: str = "BP") -> dict[str, object]:
@@ -132,72 +121,6 @@ class BaselineParserTest(unittest.TestCase):
 
 
 class BaselineRunnerTest(unittest.TestCase):
-    @patch("salesbench.vqa_baseline.runner.sample_frames")
-    def test_qwen_url_transport_keeps_sixteen_labelled_frames(self, sampler) -> None:
-        from salesbench.vqa_baseline.runner import _frame_blocks
-
-        sampler.return_value = [
-            Frame("AAA", index + 0.5, index + 10, f"/tmp/frame-{index}.jpg")
-            for index in range(16)
-        ]
-        uploader = FakeFrameUploader()
-        record = {
-            "video_id": "v1",
-            "primary_video_path": "/tmp/video.mp4",
-            "has_video_asset": True,
-        }
-
-        blocks = _frame_blocks(
-            record,
-            max_frames=16,
-            frame_transport="dashscope_temporary_oss",
-            frame_uploader=uploader,
-            model="qwen3.7-plus",
-        )
-
-        image_blocks = [block for block in blocks if block["type"] == "image_url"]
-        labels = [
-            block
-            for block in blocks
-            if block["type"] == "text" and block["text"].startswith("[FRAME")
-        ]
-        self.assertEqual(len(image_blocks), 16)
-        self.assertEqual(len(labels), 16)
-        self.assertEqual(image_blocks[0]["image_url"]["url"], "oss://temporary/frame-0.jpg")
-        self.assertEqual(labels[0]["text"], "[FRAME frame_index=10 timestamp_s=0.5]")
-        self.assertEqual(len(uploader.calls), 1)
-
-    @patch("salesbench.vqa_baseline.runner.sample_frames")
-    def test_runner_uploads_frames_once_per_video_not_once_per_question(self, sampler) -> None:
-        from salesbench.vqa_baseline.runner import run_salesbench_qa_baseline_records
-
-        sampler.return_value = [
-            Frame("AAA", float(index), index, f"/tmp/frame-{index}.jpg")
-            for index in range(16)
-        ]
-        uploader = FakeFrameUploader()
-        lookup = {
-            "v1": {
-                "video_id": "v1",
-                "primary_video_path": "/tmp/video.mp4",
-                "has_video_asset": True,
-            }
-        }
-
-        with tempfile.TemporaryDirectory() as tmp:
-            run_salesbench_qa_baseline_records(
-                items=[_gold_item("BP"), _gold_item("SS")],
-                video_lookup=lookup,
-                output_dir=Path(tmp),
-                model="qwen3.7-plus",
-                client=FakeVLMClient(["answer one", "answer two"]),
-                max_workers=2,
-                frame_transport="dashscope_temporary_oss",
-                frame_uploader=uploader,
-            )
-
-        self.assertEqual(len(uploader.calls), 1)
-
     def test_mock_runner_writes_answers_and_hides_private_fields(self) -> None:
         from salesbench.vqa_baseline.runner import run_salesbench_qa_baseline_records
 
