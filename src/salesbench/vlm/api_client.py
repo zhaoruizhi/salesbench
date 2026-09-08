@@ -78,9 +78,11 @@ class VLMClient:
         rate_limit_rpm: int = 60,
         disable_thinking: bool = False,
         request_timeout_s: float = 180.0,
+        default_headers: dict[str, str] | None = None,
     ):
         self.api_key = api_key
         self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self.default_headers = dict(default_headers or {})
         self.client = None
         try:
             from openai import OpenAI
@@ -92,6 +94,8 @@ class VLMClient:
             }
             if base_url:
                 client_kwargs["base_url"] = base_url
+            if self.default_headers:
+                client_kwargs["default_headers"] = self.default_headers
             self.client = OpenAI(**client_kwargs)
         except ModuleNotFoundError:
             self.client = None
@@ -214,6 +218,7 @@ class VLMClient:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                **self.default_headers,
             },
             method="POST",
         )

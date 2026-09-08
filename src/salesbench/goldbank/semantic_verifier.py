@@ -123,12 +123,15 @@ def verify_relations(
     )
     content: list[dict[str, object]] = [{"type": "text", "text": user}]
     for frame_index in frame_indices:
+        frame_reference = frame_images[frame_index]
+        if not frame_reference.startswith(("data:", "oss://", "http://", "https://")):
+            frame_reference = f"data:image/jpeg;base64,{frame_reference}"
         content.extend(
             [
                 {"type": "text", "text": f"[CITED_FRAME frame_index={frame_index}]"},
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{frame_images[frame_index]}"},
+                    "image_url": {"url": frame_reference},
                 },
             ]
         )

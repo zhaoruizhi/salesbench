@@ -419,22 +419,30 @@ class GoldBankPipeline:
         self,
         bundle: VideoContextBundle,
         frames_b64: list[str] | None = None,
+        frame_urls: list[str] | None = None,
     ) -> GoldBankResult:
+        if frames_b64 and frame_urls:
+            raise ValueError("frames_b64 and frame_urls are mutually exclusive")
         video_id = bundle.video_id
         traces: list[dict[str, object]] = []
         content_context = public_observation_context(bundle)
         frame_metadata = list(content_context.get("sampled_frames") or [])
         image_blocks: list[dict[str, object]] = []
         frame_images: dict[int, str] = {}
-        for position, image_b64 in enumerate(frames_b64 or []):
+        frame_references = list(frame_urls or [])
+        if not frame_references:
+            frame_references = [
+                f"data:image/jpeg;base64,{image_b64}" for image_b64 in frames_b64 or []
+            ]
+        for position, image_reference in enumerate(frame_references):
             metadata = frame_metadata[position] if position < len(frame_metadata) else {}
             frame_index = metadata.get("frame_index", position)
             timestamp_s = metadata.get("timestamp_s")
-            frame_images[int(frame_index)] = image_b64
+            frame_images[int(frame_index)] = image_reference
             image_blocks.extend(
                 [
                     {"type": "text", "text": f"[FRAME frame_index={frame_index} timestamp_s={timestamp_s}]"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                    {"type": "image_url", "image_url": {"url": image_reference}},
                 ]
             )
 
@@ -563,7 +571,9 @@ class GoldBankPipeline:
                 language_call,
                 {EvidenceModality.ASR},
             )
-            if not any(unit.modality == EvidenceModality.ASR for unit in language_accepted):
+            if language_call.success and not any(
+                unit.modality == EvidenceModality.ASR for unit in language_accepted
+            ):
                 repair_system, repair_user = build_language_evidence_repair_prompt(
                     video_id,
                     content_context,
@@ -583,6 +593,8 @@ class GoldBankPipeline:
                 )
                 if not any(unit.modality == EvidenceModality.ASR for unit in repaired):
                     evidence_stage_failed = True
+            elif not language_call.success:
+                evidence_stage_failed = True
 
         if image_blocks:
             visual_system, visual_user = build_visual_evidence_prompt(video_id, content_context)
@@ -597,7 +609,9 @@ class GoldBankPipeline:
                 visual_call,
                 {EvidenceModality.VISUAL, EvidenceModality.OCR},
             )
-            if not any(unit.modality == EvidenceModality.VISUAL for unit in visual_accepted):
+            if visual_call.success and not any(
+                unit.modality == EvidenceModality.VISUAL for unit in visual_accepted
+            ):
                 repair_system, repair_user = build_visual_evidence_repair_prompt(
                     video_id,
                     content_context,
@@ -617,6 +631,8 @@ class GoldBankPipeline:
                 )
                 if not any(unit.modality == EvidenceModality.VISUAL for unit in repaired):
                     evidence_stage_failed = True
+            elif not visual_call.success:
+                evidence_stage_failed = True
 
         if not asr_subtitles and not image_blocks:
             system, user_blocks = build_evidence_extractor_prompt(video_id, content_context)
@@ -1544,7 +1560,7 @@ class GoldBankPipeline:
             quality_summary=_quality(validated_items, human_review_queue),
             observation_scope={
                 "frame_strategy": "hook_plus_uniform",
-                "sampled_frame_count": len(frames_b64 or []),
+                "sampled_frame_count": len(frame_references),
                 "source_capabilities": source_capabilities,
                 "known_limitations": (
                     ["ASR temporal order is unavailable; temporal tasks are disabled."]
