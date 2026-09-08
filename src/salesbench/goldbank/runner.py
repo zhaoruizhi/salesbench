@@ -89,18 +89,45 @@ def _payload_to_result(payload: dict[str, object]) -> GoldBankResult:
     )
 
 
-def _write_part(output_dir: Path, result: GoldBankResult, pipeline_fingerprint: str) -> None:
-    path = _part_result_path(output_dir, result.video_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(path, _result_to_payload(result, pipeline_fingerprint))
+def _result_quality_key(result: GoldBankResult) -> tuple[int, int, int, int, int, int]:
+    """Prefer complete, grounded, multimodal results over destructive retries."""
+
+    status_rank = {"failed": 0, "partial": 1, "ok": 2}.get(result.status, -1)
+    modalities = {
+        clean_text(unit.get("modality"))
+        for unit in result.evidence_units
+        if isinstance(unit, dict) and clean_text(unit.get("modality"))
+    }
+    failed_traces = sum(
+        1
+        for trace in result.agent_traces
+        if isinstance(trace, dict) and trace.get("success") is False
+    )
+    downstream_count = (
+        len(result.commerce_cues)
+        + len(result.commercial_relations)
+        + len(result.gold_proposals)
+    )
+    return (
+        status_rank,
+        int(result.video_gold_record is not None),
+        len(modalities),
+        len(result.evidence_units),
+        downstream_count,
+        -failed_traces,
+    )
 
 
-def _load_completed(
+def _prefer_result(previous: GoldBankResult, candidate: GoldBankResult) -> GoldBankResult:
+    return candidate if _result_quality_key(candidate) > _result_quality_key(previous) else previous
+
+
+def _load_matching_parts(
     output_dir: Path,
     video_ids: list[str],
     fingerprints: dict[str, str],
 ) -> dict[str, GoldBankResult]:
-    completed: dict[str, GoldBankResult] = {}
+    matched: dict[str, GoldBankResult] = {}
     for video_id in video_ids:
         path = _part_result_path(output_dir, video_id)
         if not path.exists():
@@ -109,18 +136,50 @@ def _load_completed(
             payload = json.loads(path.read_text(encoding="utf-8"))
             if clean_text(payload.get("pipeline_fingerprint")) != fingerprints.get(video_id):
                 continue
-            status = clean_text(payload.get("status"))
-            traces = list(payload.get("agent_traces") or [])
-            terminal_partial = (
-                status == "partial"
-                and isinstance(payload.get("video_gold_record"), dict)
-                and not any(isinstance(trace, dict) and trace.get("success") is False for trace in traces)
-            )
-            if status != "ok" and not terminal_partial:
-                continue
-            completed[video_id] = _payload_to_result(payload)
+            matched[video_id] = _payload_to_result(payload)
         except (json.JSONDecodeError, OSError, ValueError):
             continue
+    return matched
+
+
+def _write_part(
+    output_dir: Path,
+    result: GoldBankResult,
+    pipeline_fingerprint: str,
+) -> GoldBankResult:
+    path = _part_result_path(output_dir, result.video_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    chosen = result
+    if path.is_file():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if clean_text(payload.get("pipeline_fingerprint")) == pipeline_fingerprint:
+                chosen = _prefer_result(_payload_to_result(payload), result)
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+    write_json(path, _result_to_payload(chosen, pipeline_fingerprint))
+    return chosen
+
+
+def _load_completed(
+    output_dir: Path,
+    video_ids: list[str],
+    fingerprints: dict[str, str],
+) -> dict[str, GoldBankResult]:
+    completed: dict[str, GoldBankResult] = {}
+    for video_id, result in _load_matching_parts(
+        output_dir, video_ids, fingerprints
+    ).items():
+        terminal_partial = (
+            result.status == "partial"
+            and result.video_gold_record is not None
+            and not any(
+                isinstance(trace, dict) and trace.get("success") is False
+                for trace in result.agent_traces
+            )
+        )
+        if result.status == "ok" or terminal_partial:
+            completed[video_id] = result
     return completed
 
 
@@ -428,7 +487,15 @@ def run_gold_bank_records(
             raise ValueError("immutable Evidence output belongs to a different run identity")
         if clean_text(prior_meta.get("source_fingerprint")) != source_fingerprint:
             raise ValueError("immutable Evidence output source fingerprint changed")
+    matched_parts = (
+        _load_matching_parts(output_dir, requested_ids, fingerprints) if resume else {}
+    )
     completed = _load_completed(output_dir, requested_ids, fingerprints) if resume else {}
+    retry_seeds = {
+        video_id: result
+        for video_id, result in matched_parts.items()
+        if video_id not in completed
+    }
 
     results_by_id = dict(completed)
 
@@ -455,21 +522,26 @@ def run_gold_bank_records(
             bundle = context_store.bundle_for_video(video_id, frames=frame_metadata)
         else:
             bundle = build_context_bundle(video_id, raw_video=record, frames=frame_metadata)
-        return pipeline.run_video(bundle, frames_b64=[frame.image_base64 for frame in frames])
+        call_kwargs: dict[str, object] = {
+            "frames_b64": [frame.image_base64 for frame in frames]
+        }
+        if video_id in retry_seeds:
+            call_kwargs["resume_result"] = retry_seeds[video_id]
+        return pipeline.run_video(bundle, **call_kwargs)
 
     pending = [record for record in selected_records if clean_text(record.get("video_id")) not in completed]
     if max_workers <= 1:
         for record in pending:
             result = process_record(record)
-            _write_part(output_dir, result, fingerprints[result.video_id])
-            results_by_id[result.video_id] = result
+            chosen = _write_part(output_dir, result, fingerprints[result.video_id])
+            results_by_id[result.video_id] = chosen
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(process_record, record): clean_text(record.get("video_id")) for record in pending}
             for future in as_completed(futures):
                 result = future.result()
-                _write_part(output_dir, result, fingerprints[result.video_id])
-                results_by_id[result.video_id] = result
+                chosen = _write_part(output_dir, result, fingerprints[result.video_id])
+                results_by_id[result.video_id] = chosen
 
     ordered_results = [results_by_id[video_id] for video_id in requested_ids if video_id in results_by_id]
     return _merge_outputs(

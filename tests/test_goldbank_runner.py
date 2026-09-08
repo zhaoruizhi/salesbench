@@ -16,7 +16,7 @@ class FakePipeline:
     def __init__(self):
         self.calls: list[str] = []
 
-    def run_video(self, bundle, frames_b64=None):
+    def run_video(self, bundle, frames_b64=None, frame_urls=None, resume_result=None):
         self.calls.append(bundle.video_id)
         return GoldBankResult(
             video_id=bundle.video_id,
@@ -74,6 +74,18 @@ class FakePipeline:
             agent_traces=[{"stage": "evidence_extraction", "video_id": bundle.video_id}],
             status="ok",
         )
+
+
+class PartialPipeline:
+    def __init__(self, result: GoldBankResult):
+        self.result = result
+        self.calls: list[str] = []
+        self.resume_results: list[GoldBankResult | None] = []
+
+    def run_video(self, bundle, frames_b64=None, frame_urls=None, resume_result=None):
+        self.calls.append(bundle.video_id)
+        self.resume_results.append(resume_result)
+        return GoldBankResult(**{**self.result.__dict__, "video_id": bundle.video_id})
 
 
 class GoldBankRunnerTest(unittest.TestCase):
@@ -164,6 +176,90 @@ class GoldBankRunnerTest(unittest.TestCase):
             run_gold_bank_records(self.records(), self.pilot_config(), output_dir, retry)
 
         self.assertEqual(retry.calls, ["v2"])
+
+    def test_resume_passes_matching_partial_as_stage_retry_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            first = PartialPipeline(
+                GoldBankResult(
+                    video_id="v2",
+                    evidence_units=[
+                        {
+                            "evidence_id": "v2_asr_000_seed",
+                            "video_id": "v2",
+                            "modality": "asr",
+                            "content_en": "The speaker names the product.",
+                        }
+                    ],
+                    gold_proposals=[],
+                    gold_reviews=[],
+                    video_gold_record=None,
+                    human_review_queue=[],
+                    agent_traces=[
+                        {"stage": "language_evidence_extraction", "success": True},
+                        {"stage": "visual_evidence_extraction", "success": False},
+                    ],
+                    status="partial",
+                )
+            )
+            config = {**self.pilot_config(), "video_ids": ["v2"]}
+            run_gold_bank_records(self.records(), config, output_dir, first)
+            retry = PartialPipeline(first.result)
+
+            run_gold_bank_records(self.records(), config, output_dir, retry)
+
+        self.assertEqual(len(retry.resume_results), 1)
+        self.assertIsNotNone(retry.resume_results[0])
+        self.assertEqual(retry.resume_results[0].evidence_units[0]["modality"], "asr")
+
+    def test_resume_never_overwrites_a_better_partial_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            config = {**self.pilot_config(), "video_ids": ["v2"]}
+            better = GoldBankResult(
+                video_id="v2",
+                evidence_units=[
+                    {
+                        "evidence_id": "v2_asr_000_seed",
+                        "video_id": "v2",
+                        "modality": "asr",
+                        "content_en": "The speaker names the product.",
+                    }
+                ],
+                gold_proposals=[],
+                gold_reviews=[],
+                video_gold_record=None,
+                human_review_queue=[],
+                agent_traces=[
+                    {"stage": "language_evidence_extraction", "success": True},
+                    {"stage": "visual_evidence_extraction", "success": False},
+                ],
+                status="partial",
+            )
+            worse = GoldBankResult(
+                video_id="v2",
+                evidence_units=[],
+                gold_proposals=[],
+                gold_reviews=[],
+                video_gold_record=None,
+                human_review_queue=[],
+                agent_traces=[{"stage": "visual_evidence_extraction", "success": False}],
+                status="failed",
+            )
+            run_gold_bank_records(
+                self.records(), config, output_dir, PartialPipeline(better)
+            )
+
+            summary = run_gold_bank_records(
+                self.records(), config, output_dir, PartialPipeline(worse)
+            )
+            payload = json.loads(
+                (output_dir / ".parts" / "v2" / "result.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(payload["status"], "partial")
+        self.assertEqual(payload["evidence_units"][0]["modality"], "asr")
+        self.assertEqual(summary["counts"]["evidence_units"], 1)
 
     def test_generation_meta_records_prompt_and_schema_versions(self):
         with tempfile.TemporaryDirectory() as tmp:

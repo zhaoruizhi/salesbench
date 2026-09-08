@@ -56,6 +56,7 @@ from .schema import (
     ReviewVerdict,
     VideoGoldRecord,
     make_gold_id,
+    parse_evidence_unit,
     parse_gold_item,
     parse_gold_review,
     stable_digest,
@@ -420,6 +421,7 @@ class GoldBankPipeline:
         bundle: VideoContextBundle,
         frames_b64: list[str] | None = None,
         frame_urls: list[str] | None = None,
+        resume_result: GoldBankResult | None = None,
     ) -> GoldBankResult:
         if frames_b64 and frame_urls:
             raise ValueError("frames_b64 and frame_urls are mutually exclusive")
@@ -449,6 +451,64 @@ class GoldBankPipeline:
         evidence_units: list[EvidenceUnit] = []
         evidence_stage_failed = False
         evidence_quality_records: list[dict[str, object]] = []
+
+        reusable_language_units: list[EvidenceUnit] = []
+        if resume_result is not None and resume_result.video_id == video_id:
+            language_succeeded = any(
+                isinstance(trace, dict)
+                and clean_text(trace.get("stage"))
+                in {"language_evidence_extraction", "language_evidence_repair"}
+                and trace.get("success") is True
+                for trace in resume_result.agent_traces
+            )
+            if language_succeeded:
+                for raw_unit in resume_result.evidence_units:
+                    if not isinstance(raw_unit, dict) or clean_text(raw_unit.get("modality")) != "asr":
+                        continue
+                    try:
+                        unit = parse_evidence_unit(raw_unit)
+                    except (TypeError, ValueError):
+                        continue
+                    issues = validate_evidence_unit(unit)
+                    if (
+                        unit.video_id == video_id
+                        and unit.confidence >= self.min_confidence
+                        and not any(issue.severity == "ERROR" for issue in issues)
+                    ):
+                        reusable_language_units.append(unit)
+        if reusable_language_units:
+            evidence_units.extend(reusable_language_units)
+            source_trace = next(
+                (
+                    trace
+                    for trace in resume_result.agent_traces
+                    if isinstance(trace, dict)
+                    and clean_text(trace.get("stage"))
+                    in {"language_evidence_extraction", "language_evidence_repair"}
+                    and trace.get("success") is True
+                ),
+                {},
+            )
+            traces.append(
+                {
+                    "stage": "language_evidence_resume",
+                    "agent_name": "asr_evidence_resume",
+                    "success": True,
+                    "raw_response": "",
+                    "parsed_output": {
+                        "accepted_evidence_units": [
+                            unit.to_dict() for unit in reusable_language_units
+                        ],
+                        "source_stage": clean_text(source_trace.get("stage")),
+                    },
+                    "model": clean_text(source_trace.get("model")),
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "latency_s": 0.0,
+                    "cost_usd": 0.0,
+                    "resumed": True,
+                }
+            )
 
         def collect_evidence(
             stage: str,
@@ -558,7 +618,7 @@ class GoldBankPipeline:
                 return [], [], []
 
         asr_subtitles = content_context.get("asr_subtitles") or {}
-        if asr_subtitles:
+        if asr_subtitles and not reusable_language_units:
             language_system, language_user = build_language_evidence_prompt(video_id, content_context)
             language_call = self.llm_client.call_text_only(
                 language_system,

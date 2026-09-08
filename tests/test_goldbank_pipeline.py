@@ -7,7 +7,11 @@ import unittest
 
 sys.path.insert(0, "src")
 
-from salesbench.goldbank.pipeline import GoldBankPipeline, build_bp_proposals_from_graph  # noqa: E402
+from salesbench.goldbank.pipeline import (  # noqa: E402
+    GoldBankPipeline,
+    GoldBankResult,
+    build_bp_proposals_from_graph,
+)
 from salesbench.goldbank.commerce_schema import (  # noqa: E402
     ActionRole,
     CommerceCue,
@@ -589,6 +593,55 @@ class GoldBankPipelineTest(unittest.TestCase):
         self.assertLess(stages.index("visual_evidence_extraction"), stages.index("commerce_cue_extraction"))
         self.assertEqual({unit["modality"] for unit in result.evidence_units}, {"asr", "visual"})
         self.assertEqual(vlm.calls[0]["user_content"][0]["text"], "[FRAME frame_index=0 timestamp_s=0.0]")
+
+    def test_resume_reuses_successful_language_evidence_and_rebuilds_downstream_stages(self):
+        responses = successful_responses_with_two_evidence()
+        visual_raw, asr_raw = responses[0]["evidence_units"]
+        previous = GoldBankResult(
+            video_id="v1",
+            evidence_units=[asr_raw],
+            gold_proposals=[],
+            gold_reviews=[],
+            video_gold_record=None,
+            human_review_queue=[],
+            agent_traces=[
+                {
+                    "stage": "language_evidence_extraction",
+                    "agent_name": "asr_evidence_extractor",
+                    "success": True,
+                    "model": "deepseek-v4-pro",
+                },
+                {
+                    "stage": "visual_evidence_extraction",
+                    "agent_name": "visual_ocr_evidence_extractor",
+                    "success": False,
+                    "model": "qwen3.7-plus",
+                },
+            ],
+            status="partial",
+        )
+        vlm = FakeGoldClient([{"evidence_units": [visual_raw]}])
+        llm = FakeGoldClient(responses[1:])
+        split_bundle = build_context_bundle(
+            "v1",
+            raw_video={"video_id": "v1", "video_text": "这款产品采用编织材质"},
+            frames=[{"frame_index": 0, "timestamp_s": 0.0, "path": "/tmp/f0.jpg"}],
+        )
+
+        result = GoldBankPipeline(vlm, llm).run_video(
+            split_bundle,
+            frame_urls=["oss://bucket/f0.jpg"],
+            resume_result=previous,
+        )
+
+        self.assertEqual(
+            [trace["stage"] for trace in result.agent_traces[:2]],
+            ["language_evidence_resume", "visual_evidence_extraction"],
+        )
+        self.assertFalse(
+            any("ASR Evidence Extractor" in call["system_prompt"] for call in llm.calls)
+        )
+        self.assertEqual({unit["modality"] for unit in result.evidence_units}, {"asr", "visual"})
 
     def test_pipeline_repairs_missing_visual_commerce_cues_before_relations(self):
         responses = successful_responses_with_two_evidence()
