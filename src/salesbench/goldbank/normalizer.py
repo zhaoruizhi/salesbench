@@ -264,6 +264,11 @@ def _evidence_action_role(
         return None
     inferred = infer_action_role(content)
     normalized = _closed_action_role(declared, inferred)
+    if inferred == ActionRole.BACKGROUND_HANDLING and any(
+        marker in normalize_text(content).lower()
+        for marker in ("simulating", "simulates", "pretends to", "poses with")
+    ):
+        return inferred
     if inferred in {
         ActionRole.PRODUCT_INSPECTION,
         ActionRole.FUNCTIONAL_OPERATION,

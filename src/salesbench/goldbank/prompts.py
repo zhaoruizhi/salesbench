@@ -12,7 +12,7 @@ from .schema import GoldTaskType
 from .validators import PRIVATE_KEYS
 
 
-PROMPT_VERSION = "evidence-prompt-v10.5"
+PROMPT_VERSION = "evidence-prompt-v10.6"
 
 _ASSERTION_SCOPE_CONTRACT = (
     "assertion_scope is a closed enum: OBSERVED_FACT, SPOKEN_CLAIM, CONDITIONAL, "
@@ -202,7 +202,8 @@ def build_visual_evidence_prompt(
         "action_role=BACKGROUND_HANDLING. Use PRODUCT_INSPECTION for close-up inspection, reading a product "
         "label, exposing a connector, flexing construction, or tearing open a product to inspect its interior. "
         "Use FUNCTIONAL_OPERATION only for actual intended product use. Use OUTCOME_DEMONSTRATION only when "
-        "a changed result is visibly shown. Describe observable content only, preserve claim-versus-proof boundaries, "
+        "a changed result is visibly shown. Posed or simulated use without a visible operation or result, such "
+        "as merely holding food near the mouth, is BACKGROUND_HANDLING. Describe observable content only, preserve claim-versus-proof boundaries, "
         "and do not infer product effects, audience response, sales, or external facts. Return strict "
         "JSON with exactly one top-level key, evidence_units, and do not generate questions."
     )
@@ -242,7 +243,8 @@ def build_visual_evidence_repair_prompt(
         "with no inspection, intended use, or visible result must use action_role=BACKGROUND_HANDLING. Use "
         "PRODUCT_INSPECTION for close-up inspection, labels, connectors, construction, or exposed interiors; "
         "FUNCTIONAL_OPERATION for actual intended product use; and OUTCOME_DEMONSTRATION only for a visibly "
-        "changed result. Do not infer product effects, audience response, sales, or external facts. Rejected candidates are "
+        "changed result. Posed or simulated use without a visible operation or result is BACKGROUND_HANDLING. "
+        "Do not infer product effects, audience response, sales, or external facts. Rejected candidates are "
         "diagnostic hints, not trusted facts: retain a candidate only if the supplied frames independently "
         "show it. Return strict JSON with exactly one top-level key, evidence_units, and do not generate "
         "questions."

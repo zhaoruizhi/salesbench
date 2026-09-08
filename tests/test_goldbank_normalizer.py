@@ -94,6 +94,30 @@ class EvidenceNormalizerTest(unittest.TestCase):
         self.assertEqual(unit.assertion_scope, AssertionScope.SPOKEN_CLAIM)
         self.assertIsNone(unit.action_role)
 
+    def test_simulated_use_is_background_not_an_observed_outcome(self):
+        unit = normalize_evidence_unit(
+            "v1",
+            {
+                "modality": "visual",
+                "frame_indices": [5],
+                "subject": "woman",
+                "predicate": "holds",
+                "value": "bread near her mouth",
+                "content_en": (
+                    "The woman holds a bite-sized piece of bread near her mouth with her eyes "
+                    "closed, simulating tasting."
+                ),
+                "assertion_type": "OBSERVED",
+                "assertion_scope": "OBSERVED_FACT",
+                "action_role": "OUTCOME_DEMONSTRATION",
+                "temporal_scope": "FRAME",
+                "confidence": 0.95,
+            },
+            0,
+        )
+
+        self.assertEqual(unit.action_role, ActionRole.BACKGROUND_HANDLING)
+
     def test_graph_and_proposal_scope_fall_back_to_cited_sources(self):
         evidence_unit = normalize_evidence_unit(
             "v1",

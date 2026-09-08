@@ -89,6 +89,44 @@ def test_background_handling_cue_never_becomes_bp_proposal():
     assert build_bp_proposals_from_graph("v1", [unit], [cue], []) == []
 
 
+def test_single_outcome_display_never_becomes_state_change_bp_proposal():
+    unit = EvidenceUnit(
+        evidence_id="v1_visual_000_outcome",
+        video_id="v1",
+        modality=EvidenceModality.VISUAL,
+        start_s=0.0,
+        end_s=1.0,
+        frame_indices=(0,),
+        text_span="",
+        subject="power meter",
+        predicate="shows",
+        value="5.079 W",
+        attributes={},
+        source_domains=("C6_raw_video",),
+        extractor="test",
+        confidence=0.95,
+        timestamp_status="available",
+        content_en="The connected power meter shows 5.079 W.",
+        action_role=ActionRole.OUTCOME_DEMONSTRATION,
+    )
+    cue = CommerceCue(
+        cue_id="c_outcome",
+        video_id="v1",
+        cue_type=CueType.OUTCOME_DISPLAY,
+        content_en="The connected power meter shows 5.079 W.",
+        source_text_native="",
+        evidence_ids=(unit.evidence_id,),
+        attributes={},
+        directness="DIRECT",
+        theory_tags=(),
+        extractor="test",
+        confidence=0.95,
+        action_role=ActionRole.OUTCOME_DEMONSTRATION,
+    )
+
+    assert build_bp_proposals_from_graph("v1", [unit], [cue], []) == []
+
+
 def bundle():
     return build_context_bundle(
         "v1",

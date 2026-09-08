@@ -116,6 +116,16 @@ def infer_action_role(content: object = "") -> ActionRole | None:
     if any(
         marker in text
         for marker in (
+            "simulating tasting",
+            "simulates tasting",
+            "pretends to use",
+            "poses with",
+        )
+    ):
+        return ActionRole.BACKGROUND_HANDLING
+    if any(
+        marker in text
+        for marker in (
             "state change",
             "before and after",
             "before-after",
