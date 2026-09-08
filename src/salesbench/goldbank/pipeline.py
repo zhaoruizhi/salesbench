@@ -135,6 +135,8 @@ def _trace(
     }
     if result.error or error:
         payload["error"] = error or result.error
+    if result.error_kind:
+        payload["error_kind"] = result.error_kind
     return payload
 
 

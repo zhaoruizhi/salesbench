@@ -9,7 +9,14 @@ from pathlib import Path
 sys.path.insert(0, "src")
 
 from salesbench.goldbank.pipeline import GoldBankResult  # noqa: E402
-from salesbench.goldbank.runner import GOLD_BANK_OUTPUT_FILES, run_gold_bank_records  # noqa: E402
+from salesbench.goldbank.runner import (  # noqa: E402
+    GOLD_BANK_OUTPUT_FILES,
+    VisionPreflightError,
+    _pipeline_fingerprint,
+    run_gold_bank_records,
+)
+from salesbench.vlm.api_client import APICallResult  # noqa: E402
+from salesbench.vlm.frame_sampler import Frame  # noqa: E402
 
 
 class FakePipeline:
@@ -86,6 +93,50 @@ class PartialPipeline:
         self.calls.append(bundle.video_id)
         self.resume_results.append(resume_result)
         return GoldBankResult(**{**self.result.__dict__, "video_id": bundle.video_id})
+
+
+class FailedPreflightClient:
+    model = "qwen3.7-plus"
+
+    def __init__(self):
+        self.calls = 0
+
+    def call(self, system_prompt, user_content, response_format=None):
+        self.calls += 1
+        return APICallResult(
+            raw_response="",
+            model=self.model,
+            input_tokens=0,
+            output_tokens=0,
+            latency_s=0.01,
+            cost_usd=0.0,
+            success=False,
+            error="SSL EOF",
+            error_kind="retryable",
+        )
+
+
+class PreflightPipeline(FakePipeline):
+    def __init__(self):
+        super().__init__()
+        self.vlm_client = FailedPreflightClient()
+
+
+class FakeFrameUploader:
+    def __init__(self):
+        self.calls: list[tuple[list[str], str]] = []
+
+    def upload_frames(self, paths, model):
+        self.calls.append((list(paths), model))
+        return [f"oss://temporary/frame-{index}.jpg" for index in range(len(paths))]
+
+
+class FailedFrameUploader(FakeFrameUploader):
+    def upload_frames(self, paths, model):
+        from salesbench.vlm.dashscope_oss import DashScopeUploadError
+
+        self.calls.append((list(paths), model))
+        raise DashScopeUploadError("temporary upload failed")
 
 
 class GoldBankRunnerTest(unittest.TestCase):
@@ -333,6 +384,122 @@ class GoldBankRunnerTest(unittest.TestCase):
                 run_gold_bank_records(
                     self.records(), changed, output_dir, FakePipeline(), run_id="run-001"
                 )
+
+    def test_runner_rejects_incomplete_frame_sampling_instead_of_reducing_input(self):
+        record = {
+            "video_id": "v2",
+            "video_path": "/tmp/video.mp4",
+            "has_video_asset": True,
+        }
+        config = {
+            **self.pilot_config(),
+            "video_ids": ["v2"],
+            "require_exact_frame_count": True,
+        }
+        fifteen = [
+            Frame("AAA", float(index), index, f"/tmp/f{index}.jpg")
+            for index in range(15)
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(
+            VisionPreflightError, "expected 16 sampled frames, got 15"
+        ):
+            run_gold_bank_records(
+                [record],
+                config,
+                Path(tmp),
+                FakePipeline(),
+                frame_sampler=lambda **_: fifteen,
+            )
+
+    def test_failed_full_frame_preflight_aborts_before_any_video_part_is_written(self):
+        record = {
+            "video_id": "v2",
+            "video_path": "/tmp/video.mp4",
+            "has_video_asset": True,
+        }
+        config = {
+            **self.pilot_config(),
+            "video_ids": ["v2"],
+            "vision_transport": "dashscope_temporary_oss",
+            "vision_preflight": True,
+            "vision_preflight_attempts": 2,
+            "vision_preflight_required_successes": 2,
+        }
+        frames = [
+            Frame("AAA", float(index), index, f"/tmp/f{index}.jpg")
+            for index in range(16)
+        ]
+        pipeline = PreflightPipeline()
+        uploader = FakeFrameUploader()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            with self.assertRaisesRegex(VisionPreflightError, "full-frame preflight"):
+                run_gold_bank_records(
+                    [record],
+                    config,
+                    output_dir,
+                    pipeline,
+                    frame_sampler=lambda **_: frames,
+                    frame_uploader=uploader,
+                )
+
+            self.assertFalse((output_dir / ".parts" / "v2" / "result.json").exists())
+            report = json.loads(
+                (output_dir / ".parts" / "vision_preflight.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(pipeline.vlm_client.calls, 2)
+        self.assertEqual(report["requested_frame_count"], 16)
+        self.assertEqual(report["success_count"], 0)
+        self.assertNotIn("oss://", json.dumps(report))
+
+    def test_upload_failure_is_written_as_redacted_preflight_diagnostic(self):
+        record = {
+            "video_id": "v2",
+            "video_path": "/tmp/video.mp4",
+            "has_video_asset": True,
+        }
+        config = {
+            **self.pilot_config(),
+            "video_ids": ["v2"],
+            "vision_transport": "dashscope_temporary_oss",
+            "vision_preflight": True,
+        }
+        frames = [
+            Frame("AAA", float(index), index, f"/tmp/f{index}.jpg")
+            for index in range(16)
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            with self.assertRaisesRegex(VisionPreflightError, "preparation failed"):
+                run_gold_bank_records(
+                    [record],
+                    config,
+                    output_dir,
+                    PreflightPipeline(),
+                    frame_sampler=lambda **_: frames,
+                    frame_uploader=FailedFrameUploader(),
+                )
+            report_text = (output_dir / ".parts" / "vision_preflight.json").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertIn('"phase": "frame_preparation"', report_text)
+        self.assertNotIn("temporary upload failed", report_text)
+
+    def test_part_fingerprint_changes_when_visual_transport_changes(self):
+        record = {"video_id": "v2"}
+        pipeline = FakePipeline()
+        base = self.pilot_config()
+        base["vision_transport"] = "base64"
+        urls = {**base, "vision_transport": "dashscope_temporary_oss"}
+
+        assert _pipeline_fingerprint(record, base, pipeline) != _pipeline_fingerprint(
+            record, urls, pipeline
+        )
 
 
 if __name__ == "__main__":

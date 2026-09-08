@@ -14,12 +14,18 @@
 但审查发现单帧结果被错误编译为“状态变化”，以及模拟品尝被误当作结果演示。`-004` 在
 Evidence/Cue 阶段拒绝模拟使用，并且只有真正的 before/after Cue 才能生成状态变化 BP。
 
+完整历史运行 `v10c2-smoke5-qwen-deepseek-20260907-004` 随后的重跑暴露了一个独立工程问题：
+16 张 Base64 JPEG 在部分 HTTPS 会话中于服务端返回
+token 之前发生 SSL EOF、broken pipe 或 remote protocol error。Qwen 支持多图/视频，早期同样
+16 帧的运行也曾成功；因此不能把该故障解释成模型不支持视频。`-005` 保持 16 帧不变，先将帧
+上传到 DashScope 临时 OSS，再使用带帧号和时间戳的 `oss://` URL 调用 Qwen。
+
 本轮固定身份：
 
 ```text
-run_id: v10c2-smoke5-qwen-deepseek-20260907-004
+run_id: v10c2-smoke5-qwen37-deepseek-20260908-005
 benchmark_release: salesbench-v10-candidate.2
-run_root: outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/
+run_root: outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/
 ```
 
 ## 1. 本轮质量路由
@@ -42,7 +48,7 @@ DIAGNOSTIC   -> API、解析或程序故障，写入 pipeline_diagnostics.jsonl
 | --- | --- |
 | Evidence schema | `evidence-dataset-schema-v4` |
 | Evidence/Commerce prompt | `evidence-prompt-v10.6` |
-| Evidence pipeline | `evidence-first-pipeline-v10.7` |
+| Evidence pipeline | `evidence-first-pipeline-v10.8` |
 | Evidence quality prompt | `quality-gate-prompt-v3` |
 | Question realizer | `question-realizer-prompt-v3` |
 | QA quality prompt | `qa-quality-prompt-v2` |
@@ -76,6 +82,12 @@ DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 - DeepSeek：文本商业线索、CM/SS/AE 候选、英文问题实现、中文审计翻译；
 - 正式评测时由 Qwen benchmark runner 回答视频问题，由 DeepSeek Judge 评分。
 
+本轮视觉模型固定为 `qwen3.7-plus`。每个视频仍采用完整 16 帧；改变的只是传输方式，不改变
+抽帧位置、Evidence 定义或题目难度。HTTP 推理请求自动携带
+`X-DashScope-OssResourceResolve: enable`。临时 OSS URL 只允许用于 smoke/开发，有效期约
+48 小时且与上传时的模型和账号绑定；正式 64 视频 release 必须迁移到长期 OSS，不能依赖临时
+存储，也不能把临时 URL 写入公开 Evidence 或 QA。
+
 QA 生成模型和质量复核模型是两个独立 client：DeepSeek 生成，Qwen 复核，避免生成器自评直接放行。
 
 ## 4. 不可变目录与指纹
@@ -83,7 +95,7 @@ QA 生成模型和质量复核模型是两个独立 client：DeepSeek 生成，Q
 本轮所有产物位于同一 run root：
 
 ```text
-outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/
+outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/
   run_manifest.json
   evidence/
   qa/
@@ -105,17 +117,24 @@ outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/
 
 ## 5. 生成五视频 Evidence
 
-固定 cohort：`configs/evidence_smoke_v10_candidate2_5videos.json`。
+固定 cohort：`configs/evidence_smoke_v10_candidate2_qwen37_5videos.json`。
 
 ```bash
 python salesbench.py build-evidence-dataset \
   --config configs/benchmark_v1.json \
-  --cohort-config configs/evidence_smoke_v10_candidate2_5videos.json \
-  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/evidence \
-  --run-id v10c2-smoke5-qwen-deepseek-20260907-004 \
+  --cohort-config configs/evidence_smoke_v10_candidate2_qwen37_5videos.json \
+  --output-dir outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/evidence \
+  --run-id v10c2-smoke5-qwen37-deepseek-20260908-005 \
   --benchmark-release salesbench-v10-candidate.2 \
-  --max-workers 2
+  --vision-transport dashscope_temporary_oss \
+  --vision-preflight \
+  --max-workers 1
 ```
+
+命令先抽取并核对第一个视频的 16 帧，将 16 帧上传后连续执行三次完整输入健康检查；三次均
+确认收到 16 个带标签图像块才进入 Evidence 生产。任一门禁不通过都会在写入视频 part 之前
+停止，并将不含 URL/密钥的诊断写到 `evidence/.parts/vision_preflight.json`。生产阶段的网络
+失败只进入 diagnostic 和网络重试，不再错误触发 Evidence 内容 repair。
 
 该命令从现有 processed dataset 读取指定五个视频，重新运行 Evidence、商业图和四任务 Annotation。它不重新下载视频，也不重建 C1-C6。C1-C6 只通过 Context Store 管理内部来源，公开 Evidence 仍只允许帧、OCR 和 ASR。
 
@@ -143,9 +162,9 @@ python salesbench.py build-evidence-dataset \
 
 ```bash
 python salesbench.py realize-qa \
-  --evidence-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/evidence \
+  --evidence-dir outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/evidence \
   --dataset-file video_evidence_dataset.jsonl \
-  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/qa/realizations \
+  --output-dir outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/qa/realizations \
   --allow-auto-candidates \
   --strict-semantic-verification \
   --max-workers 2
@@ -159,10 +178,10 @@ DeepSeek 只实现自然英文问题；Gold 来自 EvidenceDataset，不允许�
 
 ```bash
 python salesbench.py compile-vqa \
-  --evidence-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/evidence \
+  --evidence-dir outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/evidence \
   --dataset-file video_evidence_dataset.jsonl \
-  --realizations outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/qa/realizations/qa_realizations.jsonl \
-  --output-dir outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/qa/compiled \
+  --realizations outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/qa/realizations/qa_realizations.jsonl \
+  --output-dir outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/qa/compiled \
   --allow-auto-candidates \
   --allow-missing-tasks
 ```
@@ -183,15 +202,15 @@ Compiler v9 先失败关闭地检查指纹和引用，再按 Evidence 置信度�
 
 ```bash
 python salesbench.py build-audit-translations \
-  --manifest configs/v10_candidate2_smoke_delivery.json \
-  --output outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/translations/audit_translations.jsonl \
+  --manifest configs/v10_candidate2_qwen37_smoke_delivery.json \
+  --output outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/translations/audit_translations.jsonl \
   --batch-size 20
 
 python -m tools.audit_workbench.build \
-  --manifest configs/v10_candidate2_smoke_delivery.json \
-  --translations outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/translations/audit_translations.jsonl \
-  --output outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/audit/SalesBench_v10c2_Smoke_Audit.html \
-  --fragment outputs/runs/v10c2-smoke5-qwen-deepseek-20260907-004/audit/SalesBench_v10c2_Smoke_Audit_fragment.html \
+  --manifest configs/v10_candidate2_qwen37_smoke_delivery.json \
+  --translations outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/translations/audit_translations.jsonl \
+  --output outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/audit/SalesBench_v10c2_Smoke_Audit.html \
+  --fragment outputs/runs/v10c2-smoke5-qwen37-deepseek-20260908-005/audit/SalesBench_v10c2_Smoke_Audit_fragment.html \
   --group smoke \
   --skip-organize
 ```

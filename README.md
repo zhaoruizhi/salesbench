@@ -110,7 +110,7 @@ python salesbench.py compile-vqa \
 python salesbench.py build-audit-translations \
   --manifest configs/pilot64_qwen_deepseek_v10_delivery.json \
   --output outputs/audit/translations/v10_smoke_qwen_deepseek/audit_translations.jsonl \
-  --model qwen3-vl-plus
+  --model qwen3.7-plus
 ```
 
 `vqa_gold_private_zh.jsonl` 是中文精简查阅版，只保留必要 ID、任务字段、`question_zh`、`answer_zh`、`evidence_zh`、`commerce_cues_zh`、`commercial_relations_zh` 和翻译状态；英文 canonical 内容仍只在 `vqa_gold_private.jsonl`。中文文件只供人工审计，不能作为公开 benchmark 输入或 canonical Gold。

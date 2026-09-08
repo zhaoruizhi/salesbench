@@ -53,6 +53,9 @@ def classify_transport_error(exc: Exception) -> str:
         if status is None and isinstance(current, urllib.error.HTTPError):
             status = current.code
         if isinstance(status, int):
+            response_body = str(getattr(current, "response_body", "")).lower()
+            if status == 403 and "policy" in response_body and "expir" in response_body:
+                return "retryable"
             if status in {408, 409, 425, 429} or status >= 500:
                 return "retryable"
             if 400 <= status < 500:
@@ -67,6 +70,22 @@ def classify_transport_error(exc: Exception) -> str:
                 ConnectionResetError,
                 urllib.error.URLError,
             ),
+        ):
+            return "retryable"
+        class_name = type(current).__name__.lower()
+        message = str(current).lower()
+        if any(
+            marker in class_name
+            for marker in ("timeout", "connection", "protocol", "network", "ssl")
+        ) or any(
+            marker in message
+            for marker in (
+                "broken pipe",
+                "connection reset",
+                "ssl eof",
+                "unexpected eof",
+                "server disconnected",
+            )
         ):
             return "retryable"
     return "unknown"
@@ -160,6 +179,7 @@ class DashScopeTemporaryOSSUploader:
         if retry_max < 1:
             raise ValueError("retry_max must be at least 1")
         self.api_key = api_key
+        self._account_cache_key = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
         self.cache_root = Path(cache_root)
         self.upload_api_url = upload_api_url.rstrip("?")
         self.retry_max = retry_max
@@ -191,7 +211,12 @@ class DashScopeTemporaryOSSUploader:
         return urls
 
     def _cache_path(self, model: str, digest: str) -> Path:
-        return self.cache_root / _safe_model_segment(model) / f"{digest}.json"
+        return (
+            self.cache_root
+            / self._account_cache_key
+            / _safe_model_segment(model)
+            / f"{digest}.json"
+        )
 
     def _cached_url(self, model: str, digest: str) -> str | None:
         path = self._cache_path(model, digest)

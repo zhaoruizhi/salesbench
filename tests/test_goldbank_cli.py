@@ -27,6 +27,8 @@ class GoldBankCLITest(unittest.TestCase):
         self.assertTrue(args.resume)
         self.assertIsNone(args.run_id)
         self.assertEqual(args.benchmark_release, "salesbench-v10-candidate.2")
+        self.assertIsNone(args.vision_transport)
+        self.assertIsNone(args.vision_preflight)
 
     def test_apply_gold_reviews_command_parses(self):
         args = build_parser().parse_args(
@@ -129,6 +131,36 @@ class GoldBankCLITest(unittest.TestCase):
         self.assertEqual(kwargs["text_model"], "deepseek-text")
         self.assertEqual(kwargs["run_id"], "run-001")
         self.assertEqual(kwargs["benchmark_release"], "salesbench-v10-candidate.2")
+
+    @patch.dict(
+        "os.environ",
+        {
+            "QWEN_API_KEY": "qwen-key",
+            "DEEPSEEK_API_KEY": "deepseek-key",
+        },
+        clear=True,
+    )
+    @patch("salesbench.goldbank.runner.build_gold_bank_dataset")
+    @patch("salesbench.cli.ensure_output_dirs")
+    @patch("salesbench.cli.load_config")
+    def test_evidence_command_propagates_transport_and_preflight_overrides(
+        self, load_config, _ensure_output_dirs, build_dataset
+    ):
+        load_config.return_value = SimpleNamespace(repo_root=Path("/repo"))
+        build_dataset.return_value = {"ok": True}
+        args = build_parser().parse_args(
+            [
+                "build-evidence-dataset",
+                "--vision-transport",
+                "dashscope_temporary_oss",
+                "--vision-preflight",
+            ]
+        )
+
+        self.assertEqual(build_evidence_dataset_command(args), 0)
+        kwargs = build_dataset.call_args.kwargs
+        self.assertEqual(kwargs["vision_transport"], "dashscope_temporary_oss")
+        self.assertTrue(kwargs["vision_preflight"])
 
     @patch.dict(
         "os.environ",

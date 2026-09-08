@@ -131,3 +131,26 @@ def test_default_headers_are_sent_by_http_fallback() -> None:
 
     assert result.success
     assert captured["headers"]["X-dashscope-ossresourceresolve"] == "enable"
+
+
+def test_non_retryable_provider_400_is_not_retried() -> None:
+    class BadRequestError(RuntimeError):
+        status_code = 400
+
+    with patch("openai.OpenAI") as factory, patch("time.sleep") as sleep:
+        factory.return_value.chat.completions.create.side_effect = BadRequestError(
+            "invalid request"
+        )
+        client = VLMClient(
+            api_key="test-key",
+            model="qwen3.7-plus",
+            retry_max=5,
+            rate_limit_rpm=0,
+        )
+
+        result = client.call_text_only("system", "user")
+
+    assert not result.success
+    assert result.error_kind == "non_retryable"
+    assert factory.return_value.chat.completions.create.call_count == 1
+    sleep.assert_not_called()

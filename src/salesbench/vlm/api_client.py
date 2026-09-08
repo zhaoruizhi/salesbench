@@ -8,6 +8,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
+from .dashscope_oss import classify_transport_error
+
 
 @dataclass
 class APICallResult:
@@ -19,6 +21,7 @@ class APICallResult:
     cost_usd: float
     success: bool
     error: str | None = None
+    error_kind: str | None = None
 
 
 # Pricing per 1M tokens (as of 2025-01)
@@ -156,6 +159,7 @@ class VLMClient:
                 kwargs["extra_body"] = thinking_body
 
         last_error = None
+        last_error_kind = None
         for attempt in range(self.retry_max):
             self._rate_limit_wait()
             start_time = time.time()
@@ -189,10 +193,13 @@ class VLMClient:
                 )
             except Exception as exc:
                 last_error = _exception_chain(exc)
+                last_error_kind = classify_transport_error(exc)
                 latency = time.time() - start_time
-                if attempt < self.retry_max - 1:
+                if last_error_kind == "retryable" and attempt < self.retry_max - 1:
                     wait = self.retry_backoff_s * (2 ** attempt)
                     time.sleep(wait)
+                    continue
+                break
 
         return APICallResult(
             raw_response="",
@@ -203,6 +210,7 @@ class VLMClient:
             cost_usd=0.0,
             success=False,
             error=last_error,
+            error_kind=last_error_kind,
         )
 
     def _post_chat_completions(self, payload: dict) -> dict:

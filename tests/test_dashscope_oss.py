@@ -106,6 +106,38 @@ def test_expired_cached_url_is_uploaded_again() -> None:
     assert call_count == 4
 
 
+def test_temporary_url_cache_is_scoped_to_the_api_account() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        path = _frames(root, 1)[0]
+        calls = 0
+
+        def request(method, url, headers, body, timeout):
+            nonlocal calls
+            calls += 1
+            if method == "GET":
+                return 200, json.dumps(_policy()).encode("utf-8")
+            return 200, b""
+
+        first = DashScopeTemporaryOSSUploader(
+            api_key="account-a-key",
+            cache_root=root / "cache",
+            retry_max=1,
+            requester=request,
+        )
+        second = DashScopeTemporaryOSSUploader(
+            api_key="account-b-key",
+            cache_root=root / "cache",
+            retry_max=1,
+            requester=request,
+        )
+
+        first.upload_frames([path], "qwen3.7-plus")
+        second.upload_frames([path], "qwen3.7-plus")
+
+    assert calls == 4
+
+
 def test_retryable_ssl_error_refreshes_policy_and_retries_without_leaking_credentials() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -180,3 +212,14 @@ def test_non_retryable_authentication_error_fails_once_with_redacted_message() -
 )
 def test_transport_error_classification(error: Exception, expected: str) -> None:
     assert classify_transport_error(error) == expected
+
+
+def test_expired_upload_policy_403_is_retryable_without_exposing_response_body() -> None:
+    error = HTTPStatusFailure(
+        403,
+        "upload",
+        "AccessDenied: Invalid according to Policy: Policy expired.",
+    )
+
+    assert classify_transport_error(error) == "retryable"
+    assert "Policy expired" not in str(error)
